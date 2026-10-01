@@ -1,0 +1,29 @@
+[package]
+name = "soksak-sidecar-vt-core"
+version = "0.0.1"
+edition = "2021"
+description = "Common VT layer: protocol, session lifetime, screen types, Engine trait."
+build = "build.rs"
+
+[lib]
+path = "src/vt-core.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+tokio = { version = "1", features = ["io-util", "rt", "time", "net", "process", "sync", "macros"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+base64 = "0.21"
+nix = { version = "0.27", features = ["process", "net", "fs", "signal"] }
+libc = "0.2"
+async-trait = "0.1"
+portable-pty = "0.8"
+unicode-segmentation = "1.12"
+unicode-width = "0.2"
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+tempfile = "3"

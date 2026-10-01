@@ -1,0 +1,50 @@
+# soksak 터미널의 zsh 셸 통합. 사이드카가 ZDOTDIR 를 이 파일의 디렉터리로 지정하고 zsh 를 시작한다.
+# 원래 ZDOTDIR 를 되돌리고 사용자의 .zshenv 를 읽은 뒤, 대화형 셸에 OSC 133 표시를 보내는 훅을 설치한다.
+# zsh 는 나머지 시작 파일(.zprofile, .zshrc, .zlogin)을 되돌린 ZDOTDIR 에서 읽는다.
+
+if [[ -n "${SOKSAK_ZSH_ZDOTDIR+X}" ]]; then
+    'builtin' 'export' ZDOTDIR="$SOKSAK_ZSH_ZDOTDIR"
+    'builtin' 'unset' 'SOKSAK_ZSH_ZDOTDIR'
+else
+    'builtin' 'unset' 'ZDOTDIR'
+fi
+
+{
+    # ZDOTDIR 가 없으면 zsh 처럼 HOME 을 쓴다. 읽을 수 없는 파일은 zsh 처럼 건너뛴다.
+    'builtin' 'typeset' _soksak_file="${ZDOTDIR-$HOME}/.zshenv"
+    [[ ! -r "$_soksak_file" ]] || 'builtin' 'source' '--' "$_soksak_file"
+} always {
+    'builtin' 'unset' '_soksak_file'
+    if [[ -o 'interactive' ]]; then
+        # 작업 디렉터리(OSC 7). 예약되지 않은 문자와 / 밖의 바이트를 퍼센트 인코딩한다.
+        _soksak_directory() {
+            'builtin' 'emulate' -L zsh
+            'builtin' 'local' LC_ALL=C encoded= char hex
+            for char in ${(s::)PWD}; do
+                case $char in
+                    [A-Za-z0-9._~/-]) encoded+=$char ;;
+                    *) 'builtin' 'printf' -v hex '%%%02X' "'$char"; encoded+=$hex ;;
+                esac
+            done
+            'builtin' 'print' -n "\e]7;file://${HOST}${encoded}\a"
+        }
+        # 프롬프트 전: 앞 명령이 있었으면 그 종료 상태(D), 작업 디렉터리, 그리고 프롬프트 시작(A).
+        _soksak_precmd() {
+            'builtin' 'local' ret=$?
+            if (( ${+_soksak_running} )); then
+                'builtin' 'print' -n "\e]133;D;${ret}\a"
+                'builtin' 'unset' '_soksak_running'
+            fi
+            _soksak_directory
+            'builtin' 'print' -n '\e]133;A\a'
+        }
+        # 명령 실행 전: 명령 시작(C).
+        _soksak_preexec() {
+            _soksak_running=1
+            'builtin' 'print' -n '\e]133;C\a'
+        }
+        'builtin' 'autoload' -Uz add-zsh-hook
+        add-zsh-hook precmd _soksak_precmd
+        add-zsh-hook preexec _soksak_preexec
+    fi
+}

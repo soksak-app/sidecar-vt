@@ -1,0 +1,18 @@
+[package]
+name = "soksak-sidecar-vt-alacritty"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "soksak-vt-alacritty"
+path = "src/main.rs"
+
+[dependencies]
+alacritty_terminal = "0.26"
+soksak-sidecar-vt-core = { path = "../vt-core" }
+tokio = { version = "1", features = ["io-util", "rt-multi-thread", "time", "net", "process", "sync", "macros", "io-std"] }
+
+[dev-dependencies]
+libc = "0.2"
+tokio = { version = "1", features = ["full"] }
