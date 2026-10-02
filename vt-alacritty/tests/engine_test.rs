@@ -1523,6 +1523,66 @@ fn prompt_rows_that_the_reflow_moved_into_the_scrollback_are_cleared() {
 }
 
 #[test]
+fn a_resize_clears_every_row_from_the_prompt_start_when_the_prompt_ends_its_own_line() {
+    // 폭 10에서 두 행 프롬프트("PROMPT-LINE", 줄바꿈, "P>")와 입력 30자는 여섯 행이다. 커서는 프롬프트 첫 행보다
+    // 다섯 행 아래에 있고, 셸은 그만큼 올라가 프롬프트를 다시 그린다.
+    let mut engine = AlacrittyEngine::new();
+    engine.resize(10, 8);
+    engine.feed(b"o1\r\no2\r\n\x1b]133;A\x07PROMPT-LINE\r\nP>abcdefghijklmnopqrstuvwxyz0123");
+    engine.resize(30, 8);
+    let cursor = engine.cursor();
+    assert_eq!(
+        (cursor.row, cursor.col),
+        (7, 0),
+        "the cursor must lie five rows below the prompt start"
+    );
+    assert_eq!(
+        all_text(&mut engine),
+        "o1o2",
+        "the prompt rows must be cleared"
+    );
+}
+
+#[test]
+fn a_widening_resize_counts_the_rows_of_a_prompt_that_ended_at_the_margin() {
+    // 폭 10에서 20자 프롬프트는 두 행을 채우고, 셸은 줄바꿈 뒤에 입력 15자를 두 행에 쓴다. 커서는 프롬프트
+    // 첫 행보다 세 행 아래에 있다. 폭 30에서 프롬프트가 한 행이 되어도 셸은 세 행 올라간다.
+    let mut engine = AlacrittyEngine::new();
+    engine.resize(10, 8);
+    engine.feed(b"o1\r\no2\r\n\x1b]133;A\x07PPPPPPPPPPPPPPPPPP> \r\nabcdefghijklmno");
+    engine.resize(30, 8);
+    let cursor = engine.cursor();
+    assert_eq!(
+        (cursor.row, cursor.col),
+        (5, 0),
+        "the cursor must lie three rows below the prompt start"
+    );
+    assert_eq!(
+        all_text(&mut engine),
+        "o1o2",
+        "the output above the prompt must remain"
+    );
+}
+
+#[test]
+fn a_prompt_redrawn_after_a_screen_clear_starts_at_the_top_row() {
+    // 화면 지우기(ESC[H ESC[2J) 뒤에 셸은 OSC 133;A 없이 프롬프트를 맨 위 행에 다시 그린다. 폭 10에서 커서는
+    // 그 행보다 다섯 행 아래에 있다.
+    let mut engine = AlacrittyEngine::new();
+    engine.resize(10, 8);
+    engine.feed(b"o1\r\no2\r\n\x1b]133;A\x07PROMPT-LINE\r\nP>");
+    engine.feed(b"\x1b[H\x1b[2JPROMPT-LINE\r\nP>abcdefghijklmnopqrstuvwxyz0123");
+    engine.resize(30, 8);
+    let cursor = engine.cursor();
+    assert_eq!(
+        (cursor.row, cursor.col),
+        (5, 0),
+        "the prompt starts at the top row"
+    );
+    assert_eq!(all_text(&mut engine), "", "the prompt rows must be cleared");
+}
+
+#[test]
 fn a_resize_keeps_the_screen_without_a_redrawing_prompt_state() {
     for (name, mark) in [
         ("no mark", b"".as_slice()),

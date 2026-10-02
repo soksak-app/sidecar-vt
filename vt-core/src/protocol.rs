@@ -1682,6 +1682,7 @@ async fn open_if_configured(
             // 기다리면 다음 configure 가 세션을 연다(V5-96-14-6-4-8).
             Err(_) => return true,
         };
+    crate::engine_trace::record(&surface_id, || format!("resize {cols} {rows}"));
     engine.resize(cols, rows);
     if let Err(error) = set_engine_metrics(engine, state) {
         let response = json!({"surface": surface_id, "body": {"error": "invalid renderer metrics", "reason": error}});
@@ -1906,6 +1907,7 @@ async fn surface_task(
                                 (screen.cols, screen.rows)
                             }
                         };
+                        crate::engine_trace::record(&surface_id, || format!("resize {cols} {rows}"));
                         engine.resize(cols, rows);
                         if let Err(error) = set_engine_metrics(&mut engine, &new_state) {
                             let response = json!({"surface": surface_id, "body": {"error": "invalid renderer metrics", "reason": error}});
@@ -2445,6 +2447,7 @@ async fn surface_task(
                                 }
                             };
                             state.metrics = metrics;
+                            crate::engine_trace::record(&surface_id, || format!("resize {cols} {rows}"));
                             engine.resize(cols, rows);
                             if let Err(error) = set_engine_metrics(&mut engine, state) {
                                 let response = json!({"surface": surface_id, "body": {"error": "invalid renderer metrics", "reason": error}});
@@ -2666,6 +2669,7 @@ async fn surface_task(
                                         (screen.cols, screen.rows)
                                     }
                                 };
+                                crate::engine_trace::record(&surface_id, || format!("resize {cols} {rows}"));
                                 engine.resize(cols, rows);
                                 if let Err(error) = set_engine_metrics(&mut engine, &new_state) {
                                     let response = json!({"surface": surface_id, "body": {"error": "invalid renderer metrics", "reason": error}});
@@ -2710,8 +2714,10 @@ async fn surface_task(
                                 cursor_activity = Instant::now();
                                 last_cursor_frame = None;
                                 if truncated {
+                                    crate::engine_trace::record(&surface_id, || "reset".to_string());
                                     engine.reset();
                                 }
+                                crate::engine_trace::record(&surface_id, || format!("feed {}", base64_encode(&data)));
                                 engine.feed(&data);
                                 if !send_engine_events(&surface_id, session_id.as_deref(), &mut engine, &session_port, &output_tx, !headless, &mut image_state, &mut multipart).await { return; }
                                 if headless || hold_while_presenting(&mut image_state) { continue; }

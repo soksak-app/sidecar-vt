@@ -80,7 +80,7 @@ if [[ -n $_soksak_install ]]; then
             _soksak_running=
         fi
         _soksak_directory
-        builtin printf '\e]133;A\a'
+        builtin printf '\e]133;A;redraw=last\a'
         _soksak_at_prompt=1
     }
 

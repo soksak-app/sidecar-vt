@@ -283,13 +283,14 @@ fn parse_vendor_osc(selector: &[u8], payload: &[u8]) -> Result<Option<EngineEven
     }
 }
 
-/// OSC 133 `redraw` 매개변수: 크기 변경 뒤 셸이 프롬프트를 다시 그리는지. `0` 은 다시 그리지 않고, `1` 과
-/// `last` 는 다시 그린다. zsh 와 readline 은 모두 이전 폭에서의 커서 행 수만큼 올라가 다시 그리므로 두 값을
-/// 같게 처리한다.
-fn parse_redraw(value: &str) -> Result<bool, String> {
+/// OSC 133 `redraw` 매개변수: 크기 변경 뒤 셸이 다시 그리는 영역. `0` 은 다시 그리지 않는다. `1` 은 프롬프트
+/// 전체를 다시 그리므로(zsh) 프롬프트 첫 행까지 올라가고, `last` 는 프롬프트의 마지막 줄만 다시 그리므로
+/// (readline) 커서가 있는 논리적 행의 첫 행까지 올라간다.
+fn parse_redraw(value: &str) -> Result<Redraw, String> {
     match value {
-        "0" => Ok(false),
-        "1" | "last" => Ok(true),
+        "0" => Ok(Redraw::Never),
+        "1" => Ok(Redraw::Prompt),
+        "last" => Ok(Redraw::LastLine),
         value => Err(format!("OSC 133 redraw value is unsupported: {value}")),
     }
 }
@@ -298,8 +299,18 @@ fn parse_redraw(value: &str) -> Result<bool, String> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellState {
     Output,
-    /// 프롬프트나 입력 중이다. 값은 셸이 크기 변경 뒤 다시 그리는지다.
-    Prompt(bool),
+    /// 프롬프트나 입력 중이다. 값은 셸이 크기 변경 뒤 다시 그리는 영역이다.
+    Prompt(Redraw),
+}
+
+/// 크기 변경 뒤 셸이 다시 그리는 영역(OSC 133 `redraw`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Redraw {
+    Never,
+    /// 프롬프트 첫 행부터 다시 그린다.
+    Prompt,
+    /// 커서가 있는 논리적 행의 첫 행부터 다시 그린다.
+    LastLine,
 }
 
 /// 엔진 대신 직접 지우는 ED 시퀀스.
@@ -307,13 +318,14 @@ enum ShellState {
 enum Erase {
     All,
     Above,
+    History,
 }
 
 /// 입력 조각 안에서 OSC 133 표시가 끝나는 위치와 그 표시.
 struct ShellMark {
     end: usize,
     marker: ShellMarker,
-    redraw: Option<bool>,
+    redraw: Option<Redraw>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -536,6 +548,12 @@ pub struct AlacrittyEngine {
     /// 선택을 시작한 칸. 끄는 방향에 따라 이 칸과 포인터 칸을 모두 포함하도록 선택의 경계 쪽을 정한다.
     selection_anchor: Option<(Point, Side)>,
     shell: ShellState,
+    /// 프롬프트 첫 행의 절대 행 번호(dropped + 기록 행 수 + 화면 행). 프롬프트 상태에서만 있다.
+    prompt_start: Option<i64>,
+    /// 기록 한도를 넘어 버려진 행의 수. 프롬프트 상태에서 센다.
+    dropped: i64,
+    /// 기록 행 수의 한도.
+    history_limit: usize,
     /// OSC 17 과 19 가 정한 선택 영역의 배경과 글자 색. 없으면 선택 칸을 반전해 그린다.
     highlight_background: Option<Rgb>,
     highlight_foreground: Option<Rgb>,
@@ -549,6 +567,7 @@ impl AlacrittyEngine {
         let events = EventQueue::new();
         let mut config = Config::default();
         config.osc52 = Osc52::CopyPaste;
+        let history_limit = config.scrolling_history;
         let term = Term::new(config, &TermSize::new(80, 24), EventSink(events.clone()));
         Self {
             term,
@@ -564,6 +583,9 @@ impl AlacrittyEngine {
             pending_sequence: Vec::new(),
             selection_anchor: None,
             shell: ShellState::Output,
+            prompt_start: None,
+            dropped: 0,
+            history_limit,
             highlight_background: None,
             highlight_foreground: None,
             special_colors: [None; 5],
@@ -580,6 +602,7 @@ impl AlacrittyEngine {
             (b"\x1b[7 q", Some(b"\x1b[0 q"), None),
             (b"\x1b[2J", None, Some(Erase::All)),
             (b"\x1b[1J", None, Some(Erase::Above)),
+            (b"\x1b[3J", None, Some(Erase::History)),
         ];
         let mut input = std::mem::take(&mut self.pending_sequence);
         input.extend_from_slice(bytes);
@@ -619,7 +642,18 @@ impl AlacrittyEngine {
         let columns = self.term.grid().columns();
         let grid = self.term.grid_mut();
         match erase {
-            Erase::All => grid.reset_region(..),
+            Erase::All => {
+                grid.reset_region(..);
+                // 화면을 지운 뒤 셸은 OSC 133;A 없이 프롬프트를 맨 위 행에서 다시 그린다.
+                if self.prompt_start.is_some() {
+                    self.prompt_start = Some(self.dropped + grid.history_size() as i64);
+                }
+            }
+            Erase::History => {
+                // 지운 기록 행은 버려진 행으로 세어 화면 행의 절대 번호를 그대로 둔다.
+                self.dropped += grid.history_size() as i64;
+                grid.clear_history();
+            }
             Erase::Above => {
                 if cursor.line.0 > 0 {
                     grid.reset_region(..cursor.line);
@@ -907,7 +941,7 @@ impl AlacrittyEngine {
         })
     }
 
-    fn apply_shell_mark(&mut self, marker: ShellMarker, redraw: Option<bool>) {
+    fn apply_shell_mark(&mut self, marker: ShellMarker, redraw: Option<Redraw>) {
         self.shell = match marker {
             ShellMarker::PromptStart => {
                 // 프롬프트는 새 행에서 시작한다. 앞의 출력이 개행 없이 끝났으면 다음 행으로 옮긴다.
@@ -915,15 +949,19 @@ impl AlacrittyEngine {
                 if cursor.point.column.0 != 0 || cursor.input_needs_wrap {
                     self.processor.advance(&mut self.term, b"\r\n");
                 }
+                self.prompt_start = Some(self.absolute(self.term.grid().cursor.point.line.0));
                 // 기본값: redraw 인자가 없는 A 표시는 redraw=1 이다(docs/spec/terminal-runtime.md).
-                ShellState::Prompt(redraw.unwrap_or(true))
+                ShellState::Prompt(redraw.unwrap_or(Redraw::Prompt))
             }
             ShellMarker::PromptEnd => match (self.shell, redraw) {
                 (_, Some(redraw)) => ShellState::Prompt(redraw),
                 (ShellState::Prompt(current), None) => ShellState::Prompt(current),
-                (ShellState::Output, None) => ShellState::Prompt(true),
+                (ShellState::Output, None) => ShellState::Prompt(Redraw::Prompt),
             },
-            ShellMarker::CommandStart | ShellMarker::CommandFinished => ShellState::Output,
+            ShellMarker::CommandStart | ShellMarker::CommandFinished => {
+                self.prompt_start = None;
+                ShellState::Output
+            }
         };
     }
 
@@ -943,11 +981,10 @@ impl AlacrittyEngine {
         start
     }
 
-    /// 크기 변경 뒤 셸이 프롬프트를 다시 그리기 전에, 커서가 있는 논리적 행의 첫 행부터 화면 끝까지 지우고,
+    /// 크기 변경 뒤 셸이 다시 그리기 전에, 셸이 다시 그릴 영역의 첫 행(start)부터 화면 끝까지 지우고,
     /// 커서를 그 첫 행에서 offset 만큼 아래 행의 0열로 옮긴다. 셸은 이전 폭에서의 커서 행 수(offset)만큼
-    /// 올라가 프롬프트를 다시 출력한다. 그 행이 화면 아래를 넘으면 넘는 만큼 화면을 올린다.
-    fn clear_prompt_for_redraw(&mut self, offset: i32) {
-        let mut start = self.cursor_logical_line_start();
+    /// 올라가 다시 출력한다. 그 행이 화면 아래를 넘으면 넘는 만큼 화면을 올린다.
+    fn clear_prompt_for_redraw(&mut self, mut start: i32, offset: i32) {
         let bottom = self.term.grid().screen_lines() as i32 - 1;
         let template = GridCell::default();
         let grid = self.term.grid_mut();
@@ -963,6 +1000,88 @@ impl AlacrittyEngine {
             start -= overflow;
         }
         self.term.goto((start + offset).clamp(0, bottom), 0);
+    }
+
+    /// 화면 행(기록은 음수)의 절대 번호.
+    fn absolute(&self, line: i32) -> i64 {
+        self.dropped + self.term.grid().history_size() as i64 + i64::from(line)
+    }
+
+    /// 입력을 엔진에 넣는다. 프롬프트 상태에서는 기록 한도를 잠시 넓혀 이 입력이 올린 행을 모두 기록에 둔 뒤,
+    /// 한도를 넘은 행을 버리고 그 수를 센다. 그래서 프롬프트 첫 행의 절대 번호가 스크롤 뒤에도 맞다. 한 바이트는
+    /// 화면 행 수보다 많이 올리지 못한다.
+    fn advance(&mut self, bytes: &[u8]) {
+        if self.prompt_start.is_none() {
+            self.processor.advance(&mut self.term, bytes);
+            return;
+        }
+        let rows = self.term.grid().screen_lines();
+        self.term
+            .grid_mut()
+            .update_history(self.history_limit + bytes.len() * rows);
+        self.processor.advance(&mut self.term, bytes);
+        self.limit_history();
+    }
+
+    /// 기록을 한도로 줄이고 버린 행을 센다.
+    fn limit_history(&mut self) {
+        let excess = self
+            .term
+            .grid()
+            .history_size()
+            .saturating_sub(self.history_limit);
+        self.term.grid_mut().update_history(self.history_limit);
+        self.dropped += excess as i64;
+    }
+
+    /// 프롬프트 첫 행의 화면 행. 기록 밖으로 버려졌거나 커서보다 아래면 셸이 다시 그릴 영역을 알 수 없으므로 오류다.
+    fn prompt_row(&self) -> Result<i32, String> {
+        let start = self.prompt_start.ok_or("no prompt start is recorded")?;
+        let grid = self.term.grid();
+        let row = start - self.dropped - grid.history_size() as i64;
+        let top = -(grid.history_size() as i64);
+        let cursor = i64::from(grid.cursor.point.line.0);
+        if row < top || row > cursor {
+            return Err(format!(
+                "the prompt start row {row} lies outside the history and cursor rows {top}..={cursor}"
+            ));
+        }
+        Ok(row as i32)
+    }
+
+    /// row 부터 커서가 있는 논리적 행 앞까지 끝나는 논리적 행의 수.
+    fn logical_lines_before_cursor(&self, row: i32) -> usize {
+        let grid = self.term.grid();
+        let last_column = Column(grid.columns() - 1);
+        (row..self.cursor_logical_line_start())
+            .filter(|line| {
+                !grid[Line(*line)][last_column]
+                    .flags
+                    .contains(Flags::WRAPLINE)
+            })
+            .count()
+    }
+
+    /// 커서가 있는 논리적 행에서 count 개 위의 논리적 행의 첫 행.
+    fn logical_line_start_above_cursor(&self, count: usize) -> i32 {
+        let grid = self.term.grid();
+        let last_column = Column(grid.columns() - 1);
+        let top = -(grid.history_size() as i32);
+        let mut start = self.cursor_logical_line_start();
+        for _ in 0..count {
+            if start <= top {
+                break;
+            }
+            start -= 1;
+            while start > top
+                && grid[Line(start - 1)][last_column]
+                    .flags
+                    .contains(Flags::WRAPLINE)
+            {
+                start -= 1;
+            }
+        }
+        start
     }
 
     fn audit_csi(&mut self, bytes: &[u8]) {
@@ -1045,14 +1164,14 @@ impl AlacrittyEngine {
         steps.sort_by_key(|(at, _)| *at);
         let mut from = 0;
         for (at, step) in steps {
-            self.processor.advance(&mut self.term, &bytes[from..at]);
+            self.advance(&bytes[from..at]);
             from = at;
             match step {
                 Step::Mark(mark) => self.apply_shell_mark(mark.marker, mark.redraw),
                 Step::Erase(erase) => self.erase(erase),
             }
         }
-        self.processor.advance(&mut self.term, &bytes[from..]);
+        self.advance(&bytes[from..]);
     }
 
     fn feed_with_inline_images(&mut self, bytes: &[u8]) {
@@ -1482,14 +1601,59 @@ impl Engine for AlacrittyEngine {
             // 같은 크기에는 PTY 가 SIGWINCH 를 보내지 않으므로 셸도 다시 그리지 않는다.
             return;
         }
-        let redraw = self.shell == ShellState::Prompt(true)
-            && !self.term.mode().contains(TermMode::ALT_SCREEN);
-        // 셸이 올라갈 행 수: 이전 폭에서 커서가 논리적 행의 첫 행보다 아래에 있던 행 수.
-        let offset = self.term.grid().cursor.point.line.0 - self.cursor_logical_line_start();
+        let primary = !self.term.mode().contains(TermMode::ALT_SCREEN);
+        let cursor = self.term.grid().cursor.point.line.0;
+        // 프롬프트 첫 행은 논리적 행의 첫 행이다. 재배치는 논리적 행을 유지하므로, 커서의 논리적 행에서 몇 개 위의
+        // 논리적 행인지로 재배치 뒤 위치를 다시 찾는다.
+        let prompt = match self.prompt_row() {
+            Ok(row) => Some((row, self.logical_lines_before_cursor(row))),
+            Err(error) => {
+                if self.prompt_start.is_some() {
+                    self.events
+                        .events
+                        .lock()
+                        .expect("engine event queue poisoned")
+                        .push_back(QueuedEvent::Neutral(EngineEvent::Error(format!(
+                            "terminal resize: {error}"
+                        ))));
+                }
+                None
+            }
+        };
+        // 셸이 올라갈 행 수: 이전 폭에서 커서가 다시 그릴 영역의 첫 행보다 아래에 있던 행 수.
+        let region = match self.shell {
+            ShellState::Prompt(Redraw::Prompt) if primary => {
+                prompt.map(|(row, lines)| (cursor - row, lines))
+            }
+            ShellState::Prompt(Redraw::LastLine) if primary => {
+                Some((cursor - self.cursor_logical_line_start(), 0))
+            }
+            _ => None,
+        };
+        if self.prompt_start.is_some() {
+            let rows_now = self.term.grid().screen_lines();
+            self.term
+                .grid_mut()
+                .update_history(self.history_limit + rows_now.max(rows as usize));
+        }
         self.term
             .resize(TermSize::new(cols as usize, rows as usize));
-        if redraw {
-            self.clear_prompt_for_redraw(offset);
+        if self.prompt_start.is_some() {
+            self.limit_history();
+        }
+        if let Some((_, lines)) = prompt {
+            let start = self.logical_line_start_above_cursor(lines);
+            self.prompt_start = Some(self.absolute(start));
+        }
+        if let Some((offset, lines)) = region {
+            let start = self.logical_line_start_above_cursor(lines);
+            self.clear_prompt_for_redraw(start, offset);
+            if self.prompt_start.is_some() {
+                // 셸은 지운 영역의 첫 행에서 다시 그린다.
+                let row = self.term.grid().cursor.point.line.0 - offset;
+                self.prompt_start =
+                    Some(self.absolute(row.max(-(self.term.grid().history_size() as i32))));
+            }
         }
     }
 

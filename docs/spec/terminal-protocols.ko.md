@@ -71,6 +71,7 @@ unsupported 행은 성공한 무동작 결과가 아니라 명시된 범위 결�
 - OSC 8은 `id=` parameter를 파싱해 typed hyperlink open/close event를 낸다. 지원하지 않는 parameter나 중복 parameter는 거부하며 빈 URI는 현재 link를 닫는다.
 - OSC 9는 notification event를 낸다. 빈 notification은 거부하며 payload를 실행하지 않는다. 터미널 페이지는 각 알림을 `tab.notify`로 넘기며, 이는 보이지 않는 탭에 탭 알림과 시스템 알림을 둔다(플러그인 (soksak core `docs/spec/plugins.ko.md#탭-알림`)).
 - OSC 133은 네 가지 typed shell marker(`prompt.start`, `prompt.end`, `command.start`, `command.finished`)와 문자열 parameter를 내고, 터미널 런타임 (soksak core `docs/spec/terminal-runtime.ko.md`)이 크기 변경에 쓰는 엔진 셸 상태를 정한다. 알 수 없는 marker와 `0`, `1`, `last`가 아닌 `redraw` 값은 거부한다.
+- 진단 build(`--features diagnostics`)를 `SOKSAK_VT_TRACE_DIR`와 함께 시작하면 표면의 모든 engine 입력을 `<dir>/<surface>.trace`에 한 줄씩 덧붙인다: `resize <cols> <rows>`, `reset`, `feed <base64>`. Engine test는 이 trace를 재생해 화면을 재현한다. Release build에는 trace 코드가 없다.
 - OSC 52는 계속 policy-gated clipboard 소유권을 사용한다. 조회 token은 한 번만 사용할 수 있고 거부하면 소유권을 지우며 BEL/ST 분할 입력을 검사한다.
 - OSC 1337은 제한된 image 전송으로 유지한다. 잘못된 payload는 명시적으로 거부하고 multipart 상태는 표면을 넘지 않으며, 해당 표면이 소유하지 않은 이름의 삭제는 거부한다. 그림은 같은 출력 조각의 뒤 출력이 커서를 옮겨도 그 시퀀스가 나타난 자리의 커서와 스크롤 위치에 놓이며, 페이지의 `image.inline`과 `image.inline.deleted` 이벤트는 그 변경을 그린 래스터와 함께 보낸다. 그리기가 실패하면 그리기 오류 뒤에 보낸다.
 

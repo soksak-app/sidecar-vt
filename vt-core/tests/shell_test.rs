@@ -207,8 +207,10 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
     }
     let (session, _) = opened.expect("open a bash session");
     let mut output = String::new();
-    let prompted =
-        collect_until(&mut rx, &mut output, |text| text.contains("\x1b]133;A\x07")).await;
+    let prompted = collect_until(&mut rx, &mut output, |text| {
+        text.contains("\x1b]133;A;redraw=last\x07")
+    })
+    .await;
     assert!(prompted, "bash did not report a prompt start: {output:?}");
     // 첫 프롬프트의 사용자 PROMPT_COMMAND 항목은 명령이 아니다.
     assert!(
@@ -226,7 +228,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
         "\x1b]133;C\x07",
         "STATE=-bash|11|unset|0\r\n",
         "\x1b]133;D;0\x07",
-        "\x1b]133;A\x07",
+        "\x1b]133;A;redraw=last\x07",
     ];
     let reported = collect_until(&mut rx, &mut output, |text| in_order(text, &expected)).await;
     assert!(
@@ -238,7 +240,11 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
     let failed = collect_until(&mut rx, &mut output, |text| {
         in_order(
             text,
-            &["\x1b]133;C\x07", "\x1b]133;D;1\x07", "\x1b]133;A\x07"],
+            &[
+                "\x1b]133;C\x07",
+                "\x1b]133;D;1\x07",
+                "\x1b]133;A;redraw=last\x07",
+            ],
         )
     })
     .await;
@@ -253,14 +259,20 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
         .write(&session, b"printf 'LAST=%s\\n' \"$_\"\n")
         .unwrap();
     let kept = collect_until(&mut rx, &mut output, |text| {
-        in_order(text, &["LAST=last-argument\r\n", "\x1b]133;A\x07"])
+        in_order(
+            text,
+            &["LAST=last-argument\r\n", "\x1b]133;A;redraw=last\x07"],
+        )
     })
     .await;
     assert!(kept, "the trap changed $_: {output:?}");
     output.clear();
     // 빈 입력 행은 명령이 아니다.
     service.write(&session, b"\n").unwrap();
-    let empty = collect_until(&mut rx, &mut output, |text| text.contains("\x1b]133;A\x07")).await;
+    let empty = collect_until(&mut rx, &mut output, |text| {
+        text.contains("\x1b]133;A;redraw=last\x07")
+    })
+    .await;
     let _ = service.close(&session);
     let _ = std::fs::remove_dir_all(&home);
     assert!(
@@ -329,7 +341,7 @@ async fn a_resize_during_bash_startup_does_not_report_a_command_at_the_first_pro
     service.resize(&session, 80, 24).unwrap();
     let mut output = String::new();
     let prompted = collect_until(&mut rx, &mut output, |text| {
-        in_order(text, &["\x1b]133;A\x07", "T> "])
+        in_order(text, &["\x1b]133;A;redraw=last\x07", "T> "])
     })
     .await;
     let _ = service.close(&session);

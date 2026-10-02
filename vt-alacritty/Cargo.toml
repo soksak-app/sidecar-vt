@@ -8,6 +8,10 @@ publish = false
 name = "soksak-vt-alacritty"
 path = "src/main.rs"
 
+[features]
+# 진단 build 의 engine 입력 기록을 vt-core 에서 켠다.
+diagnostics = ["soksak-sidecar-vt-core/diagnostics"]
+
 [dependencies]
 alacritty_terminal = "0.26"
 soksak-sidecar-vt-core = { path = "../vt-core" }

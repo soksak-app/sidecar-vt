@@ -8,6 +8,10 @@ build = "build.rs"
 [lib]
 path = "src/vt-core.rs"
 
+[features]
+# 진단 build 의 engine 입력 기록(engine_trace.rs).
+diagnostics = []
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
