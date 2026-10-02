@@ -1,6 +1,6 @@
 [package]
 name = "soksak-sidecar-vt-core"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 description = "Common VT layer: protocol, session lifetime, screen types, Engine trait."
 build = "build.rs"
