@@ -380,8 +380,9 @@ pub enum ClipboardSelection {
     Selection,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CursorShape {
+    #[default]
     Block,
     Underline,
     Beam,
@@ -389,39 +390,23 @@ pub enum CursorShape {
     Hidden,
 }
 
-impl Default for CursorShape {
-    fn default() -> Self {
-        Self::Block
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CursorBlinkPolicy {
     Never,
+    #[default]
     Off,
     On,
     Always,
 }
 
-impl Default for CursorBlinkPolicy {
-    fn default() -> Self {
-        Self::Off
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum UnfocusedCursor {
+    #[default]
     Hollow,
     Solid,
     Underline,
     Beam,
     Unchanged,
-}
-
-impl Default for UnfocusedCursor {
-    fn default() -> Self {
-        Self::Hollow
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -703,7 +688,8 @@ enum SurfaceCommand {
         focused: bool,
     },
     Theme {
-        theme: crate::palette::TerminalTheme,
+        // 테마는 다른 명령보다 훨씬 크므로 명령 크기를 키우지 않도록 따로 둔다.
+        theme: Box<crate::palette::TerminalTheme>,
     },
     Font {
         font: std::sync::Arc<crate::platform::TerminalFont>,
@@ -768,15 +754,7 @@ enum SurfaceCommand {
     PtyPending,
 }
 
-#[derive(Debug, Clone)]
-struct ImageConfiguration {
-    name: String,
-    generation: u64,
-    raster: u64,
-    width: u32,
-    height: u32,
-    scale: f32,
-}
+use crate::platform::ImageConfiguration;
 
 /// 입력 키 정보
 #[derive(Debug, Clone, Deserialize)]
@@ -911,7 +889,7 @@ fn set_engine_metrics(engine: &mut Box<dyn Engine>, state: &ImageState) -> Resul
 fn calculate_terminal_size(
     width: u32,
     height: u32,
-    metrics: &crate::platform::platform::Metrics,
+    metrics: &crate::platform::Metrics,
 ) -> Result<(u16, u16), String> {
     if width == 0 || height == 0 {
         return Err("width and height must be positive".to_string());
@@ -991,7 +969,7 @@ fn encode_keys(keys: &[InputKey], modes: &Modes) -> Result<Vec<u8>, String> {
             "Char" => {
                 // "Char" 특수 처리
                 if text.is_empty() {
-                    return Err(format!("unknown key: Char with empty text"));
+                    return Err("unknown key: Char with empty text".to_string());
                 }
                 let ch = text.chars().next().unwrap();
                 let encoded_bytes = if modifiers & 4 != 0 {
@@ -1364,16 +1342,29 @@ fn apply_inline_image_command(
     }
 }
 
+/// 표면 actor 가 응답, 세션, 성능 기록에 쓰는 대상. actor 가 사는 동안 바뀌지 않는다.
+#[derive(Clone, Copy)]
+struct SurfacePorts<'a> {
+    surface_id: &'a str,
+    session_port: &'a Arc<dyn SessionPort>,
+    output_tx: &'a OutputSink,
+    performance: &'a crate::performance::PerformanceTrace,
+}
+
 async fn send_engine_events(
-    surface_id: &str,
+    ports: SurfacePorts<'_>,
     session_id: Option<&str>,
     engine: &mut Box<dyn Engine>,
-    session_port: &Arc<dyn SessionPort>,
-    output_tx: &OutputSink,
     emit_surface_events: bool,
     image_state: &mut Option<ImageState>,
     multipart: &mut Option<MultipartAssembly>,
 ) -> bool {
+    let SurfacePorts {
+        surface_id,
+        session_port,
+        output_tx,
+        ..
+    } = ports;
     for event in engine.drain_events() {
         match event {
             EngineEvent::InlineImage { command, anchor } => {
@@ -1651,17 +1642,20 @@ async fn open_headless(
 }
 
 async fn open_if_configured(
-    surface_id: &str,
+    ports: SurfacePorts<'_>,
     requested: bool,
     requested_image: &Option<String>,
     shell: &ShellRequest,
     session_id: &mut Option<String>,
     engine: &mut Box<dyn Engine>,
     image_state: &mut Option<ImageState>,
-    session_port: &Arc<dyn SessionPort>,
-    output_tx: &OutputSink,
-    performance: &crate::performance::PerformanceTrace,
 ) -> bool {
+    let SurfacePorts {
+        surface_id,
+        session_port,
+        output_tx,
+        performance,
+    } = ports;
     if !requested || session_id.is_some() {
         return true;
     }
@@ -1682,7 +1676,7 @@ async fn open_if_configured(
             // 기다리면 다음 configure 가 세션을 연다(V5-96-14-6-4-8).
             Err(_) => return true,
         };
-    crate::engine_trace::record(&surface_id, || format!("resize {cols} {rows}"));
+    crate::engine_trace::record(surface_id, || format!("resize {cols} {rows}"));
     engine.resize(cols, rows);
     if let Err(error) = set_engine_metrics(engine, state) {
         let response = json!({"surface": surface_id, "body": {"error": "invalid renderer metrics", "reason": error}});
@@ -1695,7 +1689,7 @@ async fn open_if_configured(
                 return false;
             }
             let screen = engine.screen();
-            present_screen(surface_id, &screen, state, output_tx, "open", &performance).await
+            present_screen(surface_id, &screen, state, output_tx, "open", performance).await
         }
         Err(error) => {
             let response = json!({"surface": surface_id, "body": {"error": format!("Failed to open: {error}")}});
@@ -1839,8 +1833,8 @@ async fn surface_task(
                         requested_shell = request;
                         headless = requested_image.is_none();
                         if headless && !open_headless(&requested_shell, &mut session_id, &mut engine, &session_port, &output_tx).await { return; }
-                        if !open_if_configured(&surface_id, open_requested, &requested_image, &requested_shell, &mut session_id,
-                            &mut engine, &mut image_state, &session_port, &output_tx, &performance).await {
+                        if !open_if_configured(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, performance: &performance }, open_requested, &requested_image, &requested_shell, &mut session_id,
+                            &mut engine, &mut image_state).await {
                             return;
                         }
                     }
@@ -1871,14 +1865,13 @@ async fn surface_task(
                                 continue;
                             }
                             if state.pending_draw {
-                                let replace = pending_configuration.as_ref().map_or(true, |pending|
+                                let replace = pending_configuration.as_ref().is_none_or(|pending|
                                     (configuration.generation, configuration.raster) > (pending.generation, pending.raster));
                                 if replace { pending_configuration = Some(configuration); }
                                 continue;
                             }
                         }
-                        let new_state = match ImageState::new(configuration.name.clone(), configuration.generation,
-                            configuration.raster, configuration.width, configuration.height, configuration.scale, &terminal_font, terminal_font_size) {
+                        let new_state = match ImageState::new(&configuration, &terminal_font, terminal_font_size) {
                             Ok(state) => state,
                             Err(reason) => {
                                 let response = json!({
@@ -1928,8 +1921,8 @@ async fn surface_task(
                             if !present_screen(&surface_id, &screen, image_state.as_mut().unwrap(), &output_tx, "resize", &performance).await {
                                 return;
                             }
-                        } else if !open_if_configured(&surface_id, open_requested, &requested_image, &requested_shell, &mut session_id,
-                            &mut engine, &mut image_state, &session_port, &output_tx, &performance).await {
+                        } else if !open_if_configured(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, performance: &performance }, open_requested, &requested_image, &requested_shell, &mut session_id,
+                            &mut engine, &mut image_state).await {
                             return;
                         }
                     }
@@ -1953,7 +1946,7 @@ async fn surface_task(
                                         "surface": surface_id,
                                         "body": {"ack": true}
                                     });
-                                    if let Err(_) = output_tx.send(response.to_string()).await {
+                                    if output_tx.send(response.to_string()).await.is_err() {
                                         return;
                                     }
                                 }
@@ -1962,7 +1955,7 @@ async fn surface_task(
                                         "surface": surface_id,
                                         "body": {"error": format!("Write failed: {}", e)}
                                     });
-                                    if let Err(_) = output_tx.send(response.to_string()).await {
+                                    if output_tx.send(response.to_string()).await.is_err() {
                                         return;
                                     }
                                 }
@@ -1972,7 +1965,7 @@ async fn surface_task(
                                 "surface": surface_id,
                                 "body": {"error": "Session not open"}
                             });
-                            if let Err(_) = output_tx.send(response.to_string()).await {
+                            if output_tx.send(response.to_string()).await.is_err() {
                                 return;
                             }
                         }
@@ -2315,7 +2308,7 @@ async fn surface_task(
                                                     "surface": surface_id,
                                                     "body": {"ack": true}
                                                 });
-                                                if let Err(_) = output_tx.send(response.to_string()).await {
+                                                if output_tx.send(response.to_string()).await.is_err() {
                                                     return;
                                                 }
                                             }
@@ -2324,7 +2317,7 @@ async fn surface_task(
                                                     "surface": surface_id,
                                                     "body": {"error": format!("Write failed: {}", e)}
                                                 });
-                                                if let Err(_) = output_tx.send(response.to_string()).await {
+                                                if output_tx.send(response.to_string()).await.is_err() {
                                                     return;
                                                 }
                                             }
@@ -2334,7 +2327,7 @@ async fn surface_task(
                                             "surface": surface_id,
                                             "body": {"ack": true}
                                         });
-                                        if let Err(_) = output_tx.send(response.to_string()).await {
+                                        if output_tx.send(response.to_string()).await.is_err() {
                                             return;
                                         }
                                     }
@@ -2344,7 +2337,7 @@ async fn surface_task(
                                         "surface": surface_id,
                                         "body": {"error": e}
                                     });
-                                    if let Err(_) = output_tx.send(response.to_string()).await {
+                                    if output_tx.send(response.to_string()).await.is_err() {
                                         return;
                                     }
                                 }
@@ -2354,7 +2347,7 @@ async fn surface_task(
                                 "surface": surface_id,
                                 "body": {"error": "Session not open"}
                             });
-                            if let Err(_) = output_tx.send(response.to_string()).await {
+                            if output_tx.send(response.to_string()).await.is_err() {
                                 return;
                             }
                         }
@@ -2404,6 +2397,7 @@ async fn surface_task(
                         if output_tx.send(response.to_string()).await.is_err() { return; }
                     }
                     SurfaceCommand::Theme { theme } => {
+                        let theme = *theme;
                         current_theme = theme;
                         engine.set_theme(theme);
                         if let Some(state) = image_state.as_mut() {
@@ -2532,7 +2526,7 @@ async fn surface_task(
                         if let Err(error) = engine.resolve_clipboard(request_id, &text) {
                             let response = json!({"surface": surface_id, "body": {"error": error}});
                             if output_tx.send(response.to_string()).await.is_err() { return; }
-                        } else if !send_engine_events(&surface_id, session_id.as_deref(), &mut engine, &session_port, &output_tx, true, &mut image_state, &mut multipart).await {
+                        } else if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, performance: &performance }, session_id.as_deref(), &mut engine, true, &mut image_state, &mut multipart).await {
                             return;
                         }
                     }
@@ -2551,7 +2545,7 @@ async fn surface_task(
                     SurfaceCommand::ScreenRead => {
                         let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
                         let response = screen_event(&surface_id, &screen);
-                        if let Err(_) = output_tx.send(response.to_string()).await {
+                        if output_tx.send(response.to_string()).await.is_err() {
                             return;
                         }
                     }
@@ -2618,7 +2612,7 @@ async fn surface_task(
                     SurfaceCommand::ImageResponse { body } => {
                         let image_obj = body.get("image").and_then(|v| v.as_object());
                         let consumed = image_obj.and_then(|o| o.get("consumed")).and_then(|v| v.as_object());
-                        let is_error = image_obj.map_or(false, |o| o.get("error").is_some());
+                        let is_error = image_obj.is_some_and(|o| o.get("error").is_some());
                         // consumed 는 안쪽 객체에, 오류는 바깥에 이름과 순번을 실어 보낸다.
                         let name = image_obj
                             .and_then(|o| o.get("name"))
@@ -2647,8 +2641,7 @@ async fn surface_task(
                             }
                             image_state.as_mut().unwrap().pending_draw = false;
                             if let Some(configuration) = pending_configuration.take() {
-                                let new_state = match ImageState::new(configuration.name.clone(), configuration.generation,
-                                    configuration.raster, configuration.width, configuration.height, configuration.scale, &terminal_font, terminal_font_size) {
+                                let new_state = match ImageState::new(&configuration, &terminal_font, terminal_font_size) {
                                     Ok(state) => state,
                                     Err(reason) => {
                                         let response = json!({"surface": surface_id,
@@ -2719,7 +2712,7 @@ async fn surface_task(
                                 }
                                 crate::engine_trace::record(&surface_id, || format!("feed {}", base64_encode(&data)));
                                 engine.feed(&data);
-                                if !send_engine_events(&surface_id, session_id.as_deref(), &mut engine, &session_port, &output_tx, !headless, &mut image_state, &mut multipart).await { return; }
+                                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, performance: &performance }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart).await { return; }
                                 if headless || hold_while_presenting(&mut image_state) { continue; }
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
 
@@ -2734,7 +2727,7 @@ async fn surface_task(
 
                                 if headless || image_state.is_some() { continue; }
                                 let response = screen_event(&surface_id, &screen);
-                                if let Err(_) = output_tx.send(response.to_string()).await {
+                                if output_tx.send(response.to_string()).await.is_err() {
                                     return;
                                 }
                             }
@@ -2747,7 +2740,7 @@ async fn surface_task(
                                     "surface": surface_id,
                                     "body": {"event": "exit"}
                                 });
-                                if let Err(_) = output_tx.send(response.to_string()).await {
+                                if output_tx.send(response.to_string()).await.is_err() {
                                     // output channel이 닫혔으므로 그대로 종료한다
                                 }
                                 break;
@@ -2802,14 +2795,16 @@ where
     W: AsyncWrite + Unpin,
 {
     serve_with_options(
-        engine_factory,
         reader,
         writer,
-        session_port_factory,
-        None,
-        None,
-        String::new(),
-        performance,
+        ServeOptions {
+            engine_factory,
+            session_port_factory,
+            owner_close: None,
+            registry: None,
+            owner: String::new(),
+            performance,
+        },
     )
     .await
 }
@@ -2826,16 +2821,27 @@ where
     W: AsyncWrite + Unpin,
 {
     serve_with_options(
-        engine_factory,
         reader,
         writer,
-        session_port_factory,
-        owner_close,
-        None,
-        String::new(),
-        crate::performance::PerformanceTrace::disabled(),
+        ServeOptions {
+            engine_factory,
+            session_port_factory,
+            owner_close,
+            registry: None,
+            owner: String::new(),
+            performance: crate::performance::PerformanceTrace::disabled(),
+        },
     )
     .await
+}
+
+/// 영속 연결의 소유자. 연결이 끝나도 그 소유자의 표면은 registry 에 남는다.
+pub struct PersistentOwner {
+    /// 소유자가 닫기를 요청하면 부르는 함수.
+    pub close: Arc<dyn Fn() -> Result<(), String> + Send + Sync>,
+    pub registry: Arc<PersistentRegistry>,
+    pub owner: String,
+    pub performance: crate::performance::PerformanceTrace,
 }
 
 pub async fn serve_with_registry<R, W>(
@@ -2843,37 +2849,41 @@ pub async fn serve_with_registry<R, W>(
     reader: R,
     writer: W,
     session_port_factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync>,
-    owner_close: Arc<dyn Fn() -> Result<(), String> + Send + Sync>,
-    registry: Arc<PersistentRegistry>,
-    owner: String,
-    performance: crate::performance::PerformanceTrace,
+    owner: PersistentOwner,
 ) -> std::io::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
     serve_with_options(
-        engine_factory,
         reader,
         writer,
-        session_port_factory,
-        Some(owner_close),
-        Some(registry),
-        owner,
-        performance,
+        ServeOptions {
+            engine_factory,
+            session_port_factory,
+            owner_close: Some(owner.close),
+            registry: Some(owner.registry),
+            owner: owner.owner,
+            performance: owner.performance,
+        },
     )
     .await
 }
 
-async fn serve_with_options<R, W>(
+/// 연결 하나의 입력 처리에 쓰는 공장과 소유자. registry 가 없으면 연결이 끝날 때 표면도 끝난다.
+struct ServeOptions {
     engine_factory: Arc<dyn Fn() -> Box<dyn Engine> + Send + Sync>,
-    reader: R,
-    writer: W,
     session_port_factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync>,
     owner_close: Option<Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     registry: Option<Arc<PersistentRegistry>>,
     owner: String,
     performance: crate::performance::PerformanceTrace,
+}
+
+async fn serve_with_options<R, W>(
+    reader: R,
+    writer: W,
+    options: ServeOptions,
 ) -> std::io::Result<()>
 where
     R: AsyncRead + Unpin,
@@ -2881,22 +2891,13 @@ where
 {
     let buf_reader = BufReader::new(reader);
     let (output_sender, output_rx) = mpsc::channel::<String>(100);
-    let output_tx = if registry.is_some() {
+    let output_tx = if options.registry.is_some() {
         OutputSink::detachable(output_sender)
     } else {
         OutputSink::direct(output_sender)
     };
 
-    let input_task = run_input_loop(
-        buf_reader,
-        engine_factory,
-        session_port_factory,
-        output_tx,
-        owner_close,
-        registry,
-        owner,
-        performance,
-    );
+    let input_task = run_input_loop(buf_reader, output_tx, options);
     let output_task = run_output_loop(writer, output_rx);
 
     tokio::try_join!(input_task, output_task)?;
@@ -2905,17 +2906,20 @@ where
 
 async fn run_input_loop<R>(
     mut buf_reader: BufReader<R>,
-    engine_factory: Arc<dyn Fn() -> Box<dyn Engine> + Send + Sync>,
-    session_port_factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync>,
     output_tx: OutputSink,
-    owner_close: Option<Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
-    registry: Option<Arc<PersistentRegistry>>,
-    owner: String,
-    performance: crate::performance::PerformanceTrace,
+    options: ServeOptions,
 ) -> std::io::Result<()>
 where
     R: AsyncRead + Unpin,
 {
+    let ServeOptions {
+        engine_factory,
+        session_port_factory,
+        owner_close,
+        registry,
+        owner,
+        performance,
+    } = options;
     let mut surface_txs: HashMap<String, mpsc::Sender<SurfaceCommand>> = HashMap::new();
     let mut surface_epochs: HashMap<String, u64> = HashMap::new();
     let mut tasks = tokio::task::JoinSet::new();
@@ -2928,7 +2932,7 @@ where
 
         if n == 0 {
             if registry.is_none() {
-                for (_, tx) in surface_txs.iter() {
+                for tx in surface_txs.values() {
                     if tx.send(SurfaceCommand::SessionDetach).await.is_err() {
                         // actor가 이미 종료되었다. 그 monitor가 actor error를 내보냈다.
                         continue;
@@ -3059,7 +3063,7 @@ where
                         continue;
                     }
                     let response = json!({"surface": surface_id, "body": {}});
-                    if let Err(_) = output_tx.send(response.to_string()).await {
+                    if output_tx.send(response.to_string()).await.is_err() {
                         // output channel이 닫혔으므로 serve를 끝낸다
                         break;
                     }
@@ -3343,7 +3347,7 @@ where
                                         "surface": surface_id,
                                         "body": {"error": "invalidParams", "reason": "input requires bytes or keys field"}
                                     });
-                                    if let Err(_) = output_tx.send(response.to_string()).await {
+                                    if output_tx.send(response.to_string()).await.is_err() {
                                         break;
                                     }
                                 } else {
@@ -3353,8 +3357,10 @@ where
                                     {
                                         match base64_decode(bytes_b64) {
                                             Ok(bytes) => {
-                                                if let Err(_) =
-                                                    tx.send(SurfaceCommand::Input { bytes }).await
+                                                if tx
+                                                    .send(SurfaceCommand::Input { bytes })
+                                                    .await
+                                                    .is_err()
                                                 {
                                                     break;
                                                 }
@@ -3364,8 +3370,10 @@ where
                                                     "surface": surface_id,
                                                     "body": {"error": format!("Base64 error: {}", e)}
                                                 });
-                                                if let Err(_) =
-                                                    output_tx.send(response.to_string()).await
+                                                if output_tx
+                                                    .send(response.to_string())
+                                                    .await
+                                                    .is_err()
                                                 {
                                                     break;
                                                 }
@@ -3377,7 +3385,7 @@ where
                                             "surface": surface_id,
                                             "body": {"error": "invalidParams", "reason": "bytes must be a string"}
                                         });
-                                        if let Err(_) = output_tx.send(response.to_string()).await {
+                                        if output_tx.send(response.to_string()).await.is_err() {
                                             break;
                                         }
                                     }
@@ -3390,9 +3398,10 @@ where
                                             keys_arr.clone(),
                                         )) {
                                             Ok(keys) => {
-                                                if let Err(_) = tx
+                                                if tx
                                                     .send(SurfaceCommand::InputKeys { keys })
                                                     .await
+                                                    .is_err()
                                                 {
                                                     break;
                                                 }
@@ -3402,8 +3411,10 @@ where
                                                     "surface": surface_id,
                                                     "body": {"error": format!("Keys parse error: {}", e)}
                                                 });
-                                                if let Err(_) =
-                                                    output_tx.send(response.to_string()).await
+                                                if output_tx
+                                                    .send(response.to_string())
+                                                    .await
+                                                    .is_err()
                                                 {
                                                     break;
                                                 }
@@ -3415,7 +3426,7 @@ where
                                             "surface": surface_id,
                                             "body": {"error": "invalidParams", "reason": "keys must be an array"}
                                         });
-                                        if let Err(_) = output_tx.send(response.to_string()).await {
+                                        if output_tx.send(response.to_string()).await.is_err() {
                                             break;
                                         }
                                     }
@@ -3432,7 +3443,13 @@ where
                                     text("selection"),
                                 ) {
                                     Ok(theme) => {
-                                        if tx.send(SurfaceCommand::Theme { theme }).await.is_err() {
+                                        if tx
+                                            .send(SurfaceCommand::Theme {
+                                                theme: Box::new(theme),
+                                            })
+                                            .await
+                                            .is_err()
+                                        {
                                             break;
                                         }
                                     }
@@ -3674,7 +3691,7 @@ where
                                 }
                             }
                             "screen.read" => {
-                                if let Err(_) = tx.send(SurfaceCommand::ScreenRead).await {
+                                if tx.send(SurfaceCommand::ScreenRead).await.is_err() {
                                     break;
                                 }
                             }
@@ -3783,7 +3800,7 @@ where
                                     "surface": surface_id,
                                     "body": {"error": format!("Unknown operation: {}", operation)}
                                 });
-                                if let Err(_) = output_tx.send(response.to_string()).await {
+                                if output_tx.send(response.to_string()).await.is_err() {
                                     break;
                                 }
                             }
@@ -3843,7 +3860,7 @@ where
                             "surface": surface_id,
                             "body": {"error": "unknown operation"}
                         });
-                        if let Err(_) = output_tx.send(response.to_string()).await {
+                        if output_tx.send(response.to_string()).await.is_err() {
                             break;
                         }
                     }
@@ -3854,7 +3871,7 @@ where
                     "surface": "",
                     "body": {"error": format!("Parse error: {}", e)}
                 });
-                if let Err(_) = output_tx.send(response.to_string()).await {
+                if output_tx.send(response.to_string()).await.is_err() {
                     // output channel이 닫혔으므로 serve를 끝낸다
                     break;
                 }
@@ -3867,7 +3884,7 @@ where
     // 그곳에서 그것들을 닫는다. persistent가 아닌 transport에는 복구 owner가 없으므로
     // 그 surface를 지금 닫아야 한다.
     if registry.is_none() {
-        for (_, tx) in surface_txs.iter() {
+        for tx in surface_txs.values() {
             tx.send(SurfaceCommand::SessionClose)
                 .await
                 .map_err(|error| {

@@ -78,6 +78,12 @@ pub struct PtyService {
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
 }
 
+impl Default for PtyService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PtyService {
     pub fn new() -> Self {
         Self {
@@ -94,7 +100,9 @@ impl PtyService {
         rows: u16,
         events: tokio::sync::mpsc::UnboundedSender<DaemonEvent>,
     ) -> Result<(String, String), String> {
-        self.open_owned("", program, args, cwd, cols, rows, events)
+        let mut command = CommandBuilder::new(program);
+        command.args(args);
+        self.spawn_owned("", command, cwd, cols, rows, events)
     }
 
     /// 이미 확인한 셸 경로 shell 을 로그인 셸로 시작한다(argv[0] 은 `-` 와 셸 이름, SHELL 은 셸 경로).
@@ -110,21 +118,6 @@ impl PtyService {
         let mut command = CommandBuilder::new_default_prog();
         command.env("SHELL", shell);
         crate::shell_integration::apply(shell, &mut command)?;
-        self.spawn_owned(owner, command, cwd, cols, rows, events)
-    }
-
-    pub fn open_owned(
-        &self,
-        owner: &str,
-        program: &str,
-        args: &[String],
-        cwd: Option<&str>,
-        cols: u16,
-        rows: u16,
-        events: tokio::sync::mpsc::UnboundedSender<DaemonEvent>,
-    ) -> Result<(String, String), String> {
-        let mut command = CommandBuilder::new(program);
-        command.args(args);
         self.spawn_owned(owner, command, cwd, cols, rows, events)
     }
 

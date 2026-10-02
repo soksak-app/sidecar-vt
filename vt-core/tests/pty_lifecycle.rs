@@ -1,22 +1,22 @@
 use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
-use std::sync::{Mutex, OnceLock};
 
 use soksak_sidecar_vt_core::pty::PtyService;
 use soksak_sidecar_vt_core::DaemonEvent;
 use tokio::time::{timeout, Duration};
 
-fn lifecycle_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+/// 실제 PTY 를 쓰는 test 를 하나씩 실행한다. test 마다 runtime 이 다르므로 await 를 넘어 잡는 async 잠금이다.
+static LIFECYCLE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn lifecycle_test_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    LIFECYCLE_LOCK.lock().await
 }
 
 fn native_pty_test_lock() -> std::fs::File {
     let path = std::env::temp_dir().join("soksak-vt-core-pty-tests.lock");
     let file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(path)
@@ -28,7 +28,7 @@ fn native_pty_test_lock() -> std::fs::File {
 
 #[tokio::test]
 async fn real_sessions_are_independent_and_close_removes_session() {
-    let _test_lock = lifecycle_test_lock();
+    let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
     let service = PtyService::new();
     let (tx_a, mut rx_a) = tokio::sync::mpsc::unbounded_channel();
@@ -83,7 +83,7 @@ async fn real_sessions_are_independent_and_close_removes_session() {
 
 #[tokio::test]
 async fn repeated_short_lived_sessions_close_without_process_group_races() {
-    let _test_lock = lifecycle_test_lock();
+    let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
     let started = std::time::Instant::now();
     let service = PtyService::new();
@@ -112,7 +112,7 @@ async fn repeated_short_lived_sessions_close_without_process_group_races() {
 
 #[tokio::test]
 async fn three_real_sessions_reconnect_with_same_pid_and_retained_output() {
-    let _test_lock = lifecycle_test_lock();
+    let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
     let service = PtyService::new();
     let mut sessions = Vec::new();
@@ -173,7 +173,7 @@ async fn three_real_sessions_reconnect_with_same_pid_and_retained_output() {
 // 완성되기 전 바이트가 줄 조립 버퍼에 남아 큐에 반영되지 않는다.
 #[tokio::test]
 async fn pty_measurement_counts_master_written_bytes_a_non_reading_child_has_not_read() {
-    let _test_lock = lifecycle_test_lock();
+    let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
     let service = PtyService::new();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -233,7 +233,7 @@ async fn pty_measurement_counts_master_written_bytes_a_non_reading_child_has_not
 // 읽는 자식은 큐를 비운다. 유한 시간 안에 0 이 되지 않으면 실패한다.
 #[tokio::test]
 async fn pty_measurement_drains_to_zero_as_the_child_reads() {
-    let _test_lock = lifecycle_test_lock();
+    let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
     let service = PtyService::new();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -290,7 +290,7 @@ async fn pty_measurement_drains_to_zero_as_the_child_reads() {
 // 없는 세션과 닫은 세션의 측정은 오류이다. 0 이 아니라 명시적 실패로 구분한다.
 #[tokio::test]
 async fn pty_measurement_rejects_unknown_and_closed_sessions() {
-    let _test_lock = lifecycle_test_lock();
+    let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
     let service = PtyService::new();
     assert!(
@@ -320,7 +320,7 @@ async fn pty_measurement_rejects_unknown_and_closed_sessions() {
 // stty -opost 로 출력 후처리를 끊어 reader 가 읽은 바이트가 자식이 쓴 바이트와 정확히 일치한다.
 #[tokio::test]
 async fn written_output_counts_exact_child_output_bytes() {
-    let _test_lock = lifecycle_test_lock();
+    let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
     let service = PtyService::new();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -382,7 +382,7 @@ async fn written_output_counts_exact_child_output_bytes() {
 // 돌아온 바이트는 echo 나 가공이 아니라 cat 이 읽은 그대로다.
 #[tokio::test]
 async fn child_reads_exact_bytes_written_through_the_production_path() {
-    let _test_lock = lifecycle_test_lock();
+    let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
     let service = PtyService::new();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -443,7 +443,7 @@ async fn child_reads_exact_bytes_written_through_the_production_path() {
 #[test]
 fn a_process_group_of_only_zombies_is_already_terminated() {
     use std::os::unix::process::CommandExt;
-    let _test_lock = lifecycle_test_lock();
+    let _test_lock = LIFECYCLE_LOCK.blocking_lock();
     let _native_test_lock = native_pty_test_lock();
     let mut child = std::process::Command::new("/bin/sh")
         .args(["-c", "exit 0"])
@@ -484,7 +484,7 @@ fn a_process_group_of_only_zombies_is_already_terminated() {
 fn process_group_members_report_running_and_ended_processes() {
     use soksak_sidecar_vt_core::platform::darwin::process_group::{members, Member};
     use std::os::unix::process::CommandExt;
-    let _test_lock = lifecycle_test_lock();
+    let _test_lock = LIFECYCLE_LOCK.blocking_lock();
     let _native_test_lock = native_pty_test_lock();
     let mut child = std::process::Command::new("/bin/sleep")
         .arg("30")
@@ -533,7 +533,7 @@ fn a_process_group_whose_members_are_exiting_is_already_terminated() {
     use soksak_sidecar_vt_core::platform::darwin::process_group::members;
     use std::os::fd::FromRawFd;
     use std::os::unix::process::CommandExt;
-    let _test_lock = lifecycle_test_lock();
+    let _test_lock = LIFECYCLE_LOCK.blocking_lock();
     let _native_test_lock = native_pty_test_lock();
     let (mut master, mut slave) = (0, 0);
     let opened = unsafe {

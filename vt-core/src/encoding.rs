@@ -344,11 +344,11 @@ pub fn encode_key(key: Key, modifiers: Modifiers, modes: &Modes) -> Result<Vec<u
 pub fn encode_ctrl_char(ch: char) -> Result<Vec<u8>, EncodeError> {
     match ch {
         'a'..='z' => {
-            let code = (ch as u8 - b'a' + 1) as u8;
+            let code = ch as u8 - b'a' + 1;
             Ok(vec![code])
         }
         'A'..='Z' => {
-            let code = (ch as u8 - b'A' + 1) as u8;
+            let code = ch as u8 - b'A' + 1;
             Ok(vec![code])
         }
         '[' => Ok(vec![0x1b]),  // Ctrl+[
@@ -381,12 +381,6 @@ fn compute_modifier_param(modifiers: Modifiers) -> u8 {
     modifiers + 1
 }
 
-/// 붙여넣기 텍스트를 인코딩한다.
-///
-/// # 처리
-/// - `bracketed_paste` 모드가 켜져 있으면 `ESC [ 200 ~` 로 시작해 `ESC [ 201 ~` 로 끝남.
-/// - 텍스트 내의 `ESC [ 201 ~` 시퀀스는 감싸기를 빠져나가지 못하도록 거부함.
-/// - 텍스트의 UTF-8 바이트와 개행을 그대로 보존함.
 /// 마우스 보고 하나를 현재 인코딩으로 만든다. SGR(1006), UTF-8(1005), 기본 인코딩 순으로 모드를 따른다.
 ///
 /// 버튼 값은 왼쪽 0, 버튼 없음 3, 휠 64/65 이고, 움직임은 32, alt 는 8, ctrl 은 16 을 더한다. SGR 은 뗌을 `m` 으로
@@ -465,6 +459,12 @@ pub fn encode_wheel(modes: &Modes, older: bool, col: u16, row: u16) -> Result<Ve
     )
 }
 
+/// 붙여넣기 텍스트를 인코딩한다.
+///
+/// # 처리
+/// - `bracketed_paste` 모드가 켜져 있으면 `ESC [ 200 ~` 로 시작해 `ESC [ 201 ~` 로 끝남.
+/// - 텍스트 내의 `ESC [ 201 ~` 시퀀스는 감싸기를 빠져나가지 못하도록 거부함.
+/// - 텍스트의 UTF-8 바이트와 개행을 그대로 보존함.
 pub fn encode_paste(text: &str, modes: &Modes) -> Result<Vec<u8>, String> {
     if modes.bracketed_paste && text.contains("\x1b[201~") {
         return Err("paste text contains the bracketed-paste terminator".to_string());
@@ -498,7 +498,7 @@ pub fn encode_paste(text: &str, modes: &Modes) -> Result<Vec<u8>, String> {
 /// assert_eq!(composer.confirm(), Some("한".as_bytes().to_vec()));
 /// assert!(!composer.is_composing());
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CompositionState {
     buffer: String,
 }
@@ -506,9 +506,7 @@ pub struct CompositionState {
 impl CompositionState {
     /// 새로운 조합 상태 생성.
     pub fn new() -> Self {
-        Self {
-            buffer: String::new(),
-        }
+        Self::default()
     }
 
     /// 조합 중인 문자를 추가한다.

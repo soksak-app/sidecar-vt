@@ -102,6 +102,7 @@ pub(crate) fn native_pty_test_lock() -> NativePtyTestLock {
         let path = std::env::temp_dir().join("soksak-vt-core-pty-tests.lock");
         let file = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(path)

@@ -120,7 +120,7 @@ pub fn cursor_blink_visible(
         return true;
     }
     let interval = interval_ms.max(1);
-    (elapsed_ms / interval) % 2 == 0
+    (elapsed_ms / interval).is_multiple_of(2)
 }
 
 pub fn effective_cursor_shape(
@@ -457,10 +457,12 @@ fn apply_preedit(
         }
         let width = u8::try_from(width)
             .map_err(|_| "preedit grapheme display width exceeds Cell width".to_string())?;
-        let mut cell = crate::protocol::Cell::default();
-        cell.ch = Some(grapheme.to_string());
-        cell.width = width;
-        cell.underline = true;
+        let mut cell = crate::protocol::Cell {
+            ch: Some(grapheme.to_string()),
+            width,
+            underline: true,
+            ..Default::default()
+        };
         if selected_contains(preedit.selected_range, utf16_col, utf16_end) {
             cell.bg = Some("#808080".to_string());
         }

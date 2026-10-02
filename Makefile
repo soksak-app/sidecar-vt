@@ -6,11 +6,13 @@ PROFILE ?= debug
 CARGO_PROFILE = $(if $(filter release,$(PROFILE)),--release,)
 SOK ?= sok
 
-# 단위 test 와 진단 build 의 engine trace test 뒤에 build 한 service 로 연결 복구를 검사하고(scripts/verify-vt-recovery.mjs), protocol inventory 를 engine 과
-# 대조한다(scripts/check-terminal-protocol-inventory.mjs).
+# 단위 test, 진단 build 의 engine trace test, clippy(경고 없음) 뒤에 build 한 service 로 연결 복구를
+# 검사하고(scripts/verify-vt-recovery.mjs), protocol inventory 를 engine 과 대조한다
+# (scripts/check-terminal-protocol-inventory.mjs).
 test: build
 	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test --workspace
 	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -p soksak-sidecar-vt-core --features diagnostics --test engine_trace_test
+	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo clippy --workspace --all-targets --features diagnostics -- -D warnings
 	node --test tests/
 
 # sidecar.json 이 가리키는 vt-alacritty/build/soksak-vt-alacritty 를 쓴다.

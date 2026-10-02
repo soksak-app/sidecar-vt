@@ -1,6 +1,6 @@
 //! in-process terminal service를 위한 persistent protocol-1 transport이다.
 
-use crate::protocol::{serve_with_registry, LocalSessionPort, PersistentRegistry};
+use crate::protocol::{serve_with_registry, LocalSessionPort, PersistentOwner, PersistentRegistry};
 use nix::errno::Errno;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
@@ -84,6 +84,7 @@ fn service_lock(service_dir: &Path) -> Result<File, String> {
     let path = service_dir.join("service.lock");
     let file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .mode(0o600)
@@ -194,10 +195,10 @@ pub async fn serve_persistent(
     engine_factory: Arc<dyn Fn() -> Box<dyn crate::protocol::Engine> + Send + Sync>,
 ) -> Result<(), String> {
     crate::platform::darwin::frame::load_default_font()?;
-    let _lock = match service_lock(&service_dir) {
+    let _lock = match service_lock(service_dir) {
         Ok(file) => Lock(file),
         Err(error) if error == "already-running" => {
-            let endpoint = read_endpoint(&service_dir)?;
+            let endpoint = read_endpoint(service_dir)?;
             let mut line = serde_json::to_vec(
                 &serde_json::json!({"error":"already-running","endpoint":endpoint}),
             )
@@ -223,7 +224,7 @@ pub async fn serve_persistent(
         socket: socket.to_string_lossy().into_owned(),
         token,
     };
-    write_endpoint(&service_dir, &endpoint)?;
+    write_endpoint(service_dir, &endpoint)?;
     let mut ready =
         serde_json::to_vec(&endpoint).map_err(|e| format!("encode ready endpoint: {e}"))?;
     ready.push(b'\n');
@@ -254,40 +255,39 @@ pub async fn serve_persistent(
                 // 다음 연결에 반영된다(docs/spec/performance-trace.md).
                 let trace_dir = service_dir.to_path_buf();
                 clients.spawn(async move {
-            match authenticate(stream, &token).await {
-                Ok((reader, writer, client)) => {
-                    crate::performance::PerformanceTrace::from_service_dir(&trace_dir)
-                        .line("client_connect", serde_json::json!({"owner": client}));
-                    let owner = client.clone();
-                    let factory_service = Arc::clone(&service);
-                    let factory = Arc::new(move || {
-                        Arc::new(LocalSessionPort::new_with_owner(
-                            Arc::clone(&factory_service),
-                            owner.clone(),
-                        )) as Arc<dyn crate::protocol::SessionPort>
-                    });
-                    let close_service = Arc::clone(&service);
-                    let close_client = client.clone();
-                    let close_owner = Arc::new(move || close_service.close_owner(&close_client));
-                    // 연결마다 새로 읽은 트레이스를 표면 작업까지 내려보낸다(V5-104).
-                    let connection_trace =
-                        crate::performance::PerformanceTrace::from_service_dir(&trace_dir);
-                    if let Err(error) = serve_with_registry(
-                        engine_factory,
-                        reader,
-                        writer,
-                        factory,
-                        close_owner,
+            if let Ok((reader, writer, client)) = authenticate(stream, &token).await {
+                crate::performance::PerformanceTrace::from_service_dir(&trace_dir)
+                    .line("client_connect", serde_json::json!({"owner": client}));
+                let owner = client.clone();
+                let factory_service = Arc::clone(&service);
+                let factory = Arc::new(move || {
+                    Arc::new(LocalSessionPort::new_with_owner(
+                        Arc::clone(&factory_service),
+                        owner.clone(),
+                    )) as Arc<dyn crate::protocol::SessionPort>
+                });
+                let close_service = Arc::clone(&service);
+                let close_client = client.clone();
+                let close_owner = Arc::new(move || close_service.close_owner(&close_client));
+                // 연결마다 새로 읽은 트레이스를 표면 작업까지 내려보낸다(V5-104).
+                let connection_trace =
+                    crate::performance::PerformanceTrace::from_service_dir(&trace_dir);
+                if let Err(error) = serve_with_registry(
+                    engine_factory,
+                    reader,
+                    writer,
+                    factory,
+                    PersistentOwner {
+                        close: close_owner,
                         registry,
-                        client,
-                        connection_trace,
-                    )
-                    .await
-                    {
-                        eprintln!("sidecar client session failed: {error}");
-                    }
+                        owner: client,
+                        performance: connection_trace,
+                    },
+                )
+                .await
+                {
+                    eprintln!("sidecar client session failed: {error}");
                 }
-                Err(_) => {}
             }
                 });
             }

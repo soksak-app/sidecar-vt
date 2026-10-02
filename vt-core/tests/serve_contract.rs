@@ -1008,8 +1008,7 @@ async fn test_selection_in_the_region_padding_selects_to_the_last_edge() {
     let state = output
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .filter(|message| message["body"]["event"] == "state")
-        .last()
+        .rfind(|message| message["body"]["event"] == "state")
         .expect("a state event");
     let cols = state["body"]["cols"].as_u64().unwrap() as u16;
     let rows = state["body"]["rows"].as_u64().unwrap() as u16;
@@ -1831,13 +1830,14 @@ async fn test_k3_char_key_encoding() {
 
     let _ = serve(engine_factory, reader, &mut writer, session_port_factory).await;
 
-    let calls_lock = calls.lock().unwrap();
-    assert_eq!(calls_lock.writes.len(), 2);
-    assert_eq!(calls_lock.writes[0].1, vec![0x03], "ctrl+c should be 0x03");
-    assert_eq!(calls_lock.writes[1].1, vec![0x15], "ctrl+u should be 0x15");
+    {
+        let calls_lock = calls.lock().unwrap();
+        assert_eq!(calls_lock.writes.len(), 2);
+        assert_eq!(calls_lock.writes[0].1, vec![0x03], "ctrl+c should be 0x03");
+        assert_eq!(calls_lock.writes[1].1, vec![0x15], "ctrl+u should be 0x15");
 
-    // Test UTF-8 encoding (한)
-    drop(calls_lock);
+        // Test UTF-8 encoding (한)
+    }
 
     let calls2 = Arc::new(Mutex::new(Calls::default()));
     let fake_session_id2 = "test-session-2".to_string();
@@ -2451,14 +2451,14 @@ async fn test_configure_with_invalid_width_type() {
     assert_eq!(reason, "invalid image configure");
 
     // 핵심은 daemon이 호출되지 않았어야 한다는 것이다
-    let calls_lock = calls.lock().unwrap();
-    assert_eq!(
-        calls_lock.opens.len(),
-        0,
-        "daemon open should not be called for an invalid raster"
-    );
-
-    drop(calls_lock);
+    {
+        let calls_lock = calls.lock().unwrap();
+        assert_eq!(
+            calls_lock.opens.len(),
+            0,
+            "daemon open should not be called for an invalid raster"
+        );
+    }
     drop(to_serve);
     task.await.unwrap().unwrap();
 }
@@ -2708,14 +2708,14 @@ async fn test_replacement_raster_with_missing_height_is_rejected() {
     assert_eq!(error_json["body"]["reason"], "invalid image configure");
 
     // daemon resize가 호출되지 않았는지 검증한다
-    let calls_lock = calls.lock().unwrap();
-    assert_eq!(
-        calls_lock.resizes.len(),
-        0,
-        "daemon resize should not be called for an incomplete raster"
-    );
-
-    drop(calls_lock);
+    {
+        let calls_lock = calls.lock().unwrap();
+        assert_eq!(
+            calls_lock.resizes.len(),
+            0,
+            "daemon resize should not be called for an incomplete raster"
+        );
+    }
     drop(to_serve);
     task.await.unwrap().unwrap();
 }
@@ -2921,13 +2921,14 @@ async fn test_zero_sized_configuration_is_rejected() {
     assert_eq!(error_json["body"]["reason"], "invalid image configure");
 
     // daemon이 호출되지 않았는지 검증한다
-    let calls_lock = calls.lock().unwrap();
-    assert_eq!(
-        calls_lock.opens.len(),
-        0,
-        "daemon open should not be called for invalid params"
-    );
-    drop(calls_lock);
+    {
+        let calls_lock = calls.lock().unwrap();
+        assert_eq!(
+            calls_lock.opens.len(),
+            0,
+            "daemon open should not be called for invalid params"
+        );
+    }
 
     // 원래 open request는 유효한 host raster가 도착할 때까지 대기 상태로 남는다.
     to_serve.write_all(br#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":2,"width":800,"height":384,"scale":1.0}}}}
@@ -2947,14 +2948,14 @@ async fn test_zero_sized_configuration_is_rejected() {
         "valid open should produce state event"
     );
 
-    let calls_lock = calls.lock().unwrap();
-    assert_eq!(
-        calls_lock.opens.len(),
-        1,
-        "daemon open should be called for valid params"
-    );
-
-    drop(calls_lock);
+    {
+        let calls_lock = calls.lock().unwrap();
+        assert_eq!(
+            calls_lock.opens.len(),
+            1,
+            "daemon open should be called for valid params"
+        );
+    }
     drop(to_serve);
     task.await.unwrap().unwrap();
 }
@@ -3010,13 +3011,14 @@ async fn test_replacement_raster_with_zero_size_is_rejected() {
     );
 
     // daemon resize가 호출되지 않았는지 검증한다
-    let calls_lock = calls.lock().unwrap();
-    assert_eq!(
-        calls_lock.resizes.len(),
-        0,
-        "daemon resize should not be called for an invalid raster"
-    );
-    drop(calls_lock);
+    {
+        let calls_lock = calls.lock().unwrap();
+        assert_eq!(
+            calls_lock.resizes.len(),
+            0,
+            "daemon resize should not be called for an invalid raster"
+        );
+    }
 
     // task가 아직 살아 있는지 검증하도록 screen.read를 보낸다
     to_serve
@@ -3094,14 +3096,14 @@ async fn test_too_small_raster_holds_the_open() {
         "the sub-cell raster must be held silently and the valid raster must open the session"
     );
 
-    let calls_lock = calls.lock().unwrap();
-    assert_eq!(
-        calls_lock.opens.len(),
-        1,
-        "the valid raster opens exactly one session"
-    );
-
-    drop(calls_lock);
+    {
+        let calls_lock = calls.lock().unwrap();
+        assert_eq!(
+            calls_lock.opens.len(),
+            1,
+            "the valid raster opens exactly one session"
+        );
+    }
     drop(to_serve);
     task.await.unwrap().unwrap();
 }
@@ -3206,22 +3208,22 @@ async fn test_sub_cell_replacement_holds_the_grid() {
         "the frame is drawn for the sub-cell raster, so the presentation barrier completes"
     );
 
-    let calls_lock = calls.lock().unwrap();
-    assert_eq!(
-        calls_lock.resizes.len(),
-        1,
-        "the sub-cell replacement resizes the PTY once, to the unchanged grid"
-    );
-    assert_eq!(
-        (
-            calls_lock.resizes[0].1 as u64,
-            calls_lock.resizes[0].2 as u64
-        ),
-        (opened_cols, opened_rows),
-        "the PTY keeps the held grid dimensions"
-    );
-
-    drop(calls_lock);
+    {
+        let calls_lock = calls.lock().unwrap();
+        assert_eq!(
+            calls_lock.resizes.len(),
+            1,
+            "the sub-cell replacement resizes the PTY once, to the unchanged grid"
+        );
+        assert_eq!(
+            (
+                calls_lock.resizes[0].1 as u64,
+                calls_lock.resizes[0].2 as u64
+            ),
+            (opened_cols, opened_rows),
+            "the PTY keeps the held grid dimensions"
+        );
+    }
     drop(to_serve);
     task.await.unwrap().unwrap();
 }
@@ -3389,25 +3391,24 @@ async fn test_panicking_surface_reports_error() {
     // error event를 기다린다
     let mut found_error = false;
     for _ in 0..10 {
-        match tokio::time::timeout(std::time::Duration::from_millis(500), lines.next_line()).await {
-            Ok(Ok(Some(line))) => {
-                let json: serde_json::Value =
-                    serde_json::from_str(&line).expect("failed to parse JSON");
+        if let Ok(Ok(Some(line))) =
+            tokio::time::timeout(std::time::Duration::from_millis(500), lines.next_line()).await
+        {
+            let json: serde_json::Value =
+                serde_json::from_str(&line).expect("failed to parse JSON");
 
-                if let Some(event) = json.get("body").and_then(|b| b.get("event")) {
-                    if event == "error" {
-                        found_error = true;
-                        if let Some(reason) = json.get("body").and_then(|b| b.get("reason")) {
-                            assert!(
-                                reason.as_str().unwrap().contains("surface task ended"),
-                                "error reason should mention surface task ended"
-                            );
-                        }
-                        break;
+            if let Some(event) = json.get("body").and_then(|b| b.get("event")) {
+                if event == "error" {
+                    found_error = true;
+                    if let Some(reason) = json.get("body").and_then(|b| b.get("reason")) {
+                        assert!(
+                            reason.as_str().unwrap().contains("surface task ended"),
+                            "error reason should mention surface task ended"
+                        );
                     }
+                    break;
                 }
             }
-            _ => {}
         }
     }
 

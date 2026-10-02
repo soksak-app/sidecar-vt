@@ -295,6 +295,9 @@ fn parse_redraw(value: &str) -> Result<Redraw, String> {
     }
 }
 
+/// 클립보드 글을 OSC 52 응답으로 만드는 함수. 클립보드 읽기 요청 번호마다 둔다.
+type ClipboardFormatter = Arc<dyn Fn(&str) -> String + Sync + Send + 'static>;
+
 /// OSC 133 표시가 정한 셸 상태. 크기 변경 때 프롬프트 행을 지울지 정한다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellState {
@@ -537,7 +540,7 @@ pub struct AlacrittyEngine {
     term: Term<EventSink>,
     processor: Processor,
     events: Arc<EventQueue>,
-    pending_clipboard: HashMap<u64, Arc<dyn Fn(&str) -> String + Sync + Send + 'static>>,
+    pending_clipboard: HashMap<u64, ClipboardFormatter>,
     next_clipboard_request: u64,
     cell_metrics: Option<(u16, u16)>,
     theme: TerminalTheme,
@@ -562,11 +565,19 @@ pub struct AlacrittyEngine {
     special_enabled: [bool; 5],
 }
 
+impl Default for AlacrittyEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AlacrittyEngine {
     pub fn new() -> Self {
         let events = EventQueue::new();
-        let mut config = Config::default();
-        config.osc52 = Osc52::CopyPaste;
+        let config = Config {
+            osc52: Osc52::CopyPaste,
+            ..Default::default()
+        };
         let history_limit = config.scrolling_history;
         let term = Term::new(config, &TermSize::new(80, 24), EventSink(events.clone()));
         Self {
@@ -598,7 +609,9 @@ impl AlacrittyEngine {
     /// - ED 2 와 ED 1 은 엔진에 넣지 않고 위치를 돌려주어 그 자리에서 직접 지운다. 엔진은 ED 2 에서 보이는 줄을
     ///   기록으로 올려 clear 뒤에도 기록이 남고, ED 1 에서 커서가 둘째 줄이면 첫 줄을 지우지 않는다.
     fn normalize_sequences(&mut self, bytes: &[u8]) -> (Vec<u8>, Vec<(usize, Erase)>) {
-        const REWRITES: &[(&[u8], Option<&[u8]>, Option<Erase>)] = &[
+        // 찾을 시퀀스, 대신 넣을 시퀀스, 그 자리에서 직접 지우는 범위.
+        type Rewrite = (&'static [u8], Option<&'static [u8]>, Option<Erase>);
+        const REWRITES: &[Rewrite] = &[
             (b"\x1b[7 q", Some(b"\x1b[0 q"), None),
             (b"\x1b[2J", None, Some(Erase::All)),
             (b"\x1b[1J", None, Some(Erase::Above)),
@@ -1729,7 +1742,7 @@ impl Engine for AlacrittyEngine {
         for indexed in renderable.display_iter {
             let row = usize::try_from(indexed.point.line.0 + offset)
                 .expect("display row must be non-negative");
-            let col = usize::from(indexed.point.column.0);
+            let col = indexed.point.column.0;
             if row >= lines.len() || col >= usize::from(cols) {
                 panic!("display point outside terminal dimensions");
             }

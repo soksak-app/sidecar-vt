@@ -187,13 +187,15 @@ async fn previous_client_eof_preserves_new_attachment_output() {
     let (client, reader) = tokio::io::duplex(64);
     let input = run_input_loop(
         BufReader::new(reader),
-        Arc::new(|| Box::new(FakeEngine::new())),
-        Arc::new(|| Arc::new(FakeSessionPort::new())),
         output.clone(),
-        None,
-        Some(PersistentRegistry::new()),
-        "test-owner".to_string(),
-        crate::performance::PerformanceTrace::disabled(),
+        ServeOptions {
+            engine_factory: Arc::new(|| Box::new(FakeEngine::new())),
+            session_port_factory: Arc::new(|| Arc::new(FakeSessionPort::new())),
+            owner_close: None,
+            registry: Some(PersistentRegistry::new()),
+            owner: "test-owner".to_string(),
+            performance: crate::performance::PerformanceTrace::disabled(),
+        },
     );
     tokio::pin!(input);
     // 이전 연결을 읽기 대기까지 진행한 뒤 새 부착과 EOF 순서를 제어한다.
@@ -527,13 +529,15 @@ async fn a_surface_reopened_after_its_closed_notice_is_not_a_stale_attachment() 
     );
     run_input_loop(
         BufReader::new(input.as_bytes()),
-        Arc::new(|| Box::new(FakeEngine::new())),
-        Arc::new(|| Arc::new(FakeSessionPort::new())),
         output,
-        None,
-        Some(PersistentRegistry::new()),
-        "test-owner".to_string(),
-        crate::performance::PerformanceTrace::disabled(),
+        ServeOptions {
+            engine_factory: Arc::new(|| Box::new(FakeEngine::new())),
+            session_port_factory: Arc::new(|| Arc::new(FakeSessionPort::new())),
+            owner_close: None,
+            registry: Some(PersistentRegistry::new()),
+            owner: "test-owner".to_string(),
+            performance: crate::performance::PerformanceTrace::disabled(),
+        },
     )
     .await
     .expect("input loop failed");
