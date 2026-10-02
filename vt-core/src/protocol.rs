@@ -3030,7 +3030,14 @@ where
                     let registry_key =
                         local_surface_key(&surface_txs, env.root.as_deref(), &surface_id);
                     let close_result = if let Some(registry) = registry.as_ref() {
-                        registry.close_surface(&registry_key, &owner).await
+                        // 닫은 표면의 송신기와 부착 판도 이 연결에서 지운다. 남기면 같은 표면을 다시 열 때
+                        // 지운 등록부 항목의 판과 비교되어 낡은 부착으로 거부된다.
+                        let closed = registry.close_surface(&registry_key, &owner).await;
+                        if closed.is_ok() {
+                            surface_txs.remove(&registry_key);
+                            surface_epochs.remove(&registry_key);
+                        }
+                        closed
                     } else if let Some(tx) = surface_txs.remove(&registry_key) {
                         tx.send(SurfaceCommand::SessionClose)
                             .await

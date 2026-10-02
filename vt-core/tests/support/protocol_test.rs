@@ -513,3 +513,38 @@ async fn persistent_surface_close_does_not_wait_forever_for_actor_exit() {
         .expect("surface close blocked the persistent input loop")
         .expect("surface close could not queue actor cleanup");
 }
+
+#[tokio::test]
+async fn a_surface_reopened_after_its_closed_notice_is_not_a_stale_attachment() {
+    // 창이 닫혀 closed 알림을 받은 표면을 같은 연결에서 다시 열면 낡은 부착이 아니라 새 표면이다.
+    let (sender, mut receiver) = mpsc::channel(64);
+    let output = OutputSink::direct(sender);
+    let open = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}"#;
+    let input = format!(
+        "{open}\n{}\n{open}\n{}\n",
+        r#"{"surface":"s1","root":"/tmp","closed":true}"#,
+        r#"{"surface":"s1","root":"/tmp","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}"#,
+    );
+    run_input_loop(
+        BufReader::new(input.as_bytes()),
+        Arc::new(|| Box::new(FakeEngine::new())),
+        Arc::new(|| Arc::new(FakeSessionPort::new())),
+        output,
+        None,
+        Some(PersistentRegistry::new()),
+        "test-owner".to_string(),
+        crate::performance::PerformanceTrace::disabled(),
+    )
+    .await
+    .expect("input loop failed");
+    let mut replies = Vec::new();
+    while let Ok(line) = receiver.try_recv() {
+        replies.push(line);
+    }
+    assert!(
+        replies
+            .iter()
+            .all(|line| !line.contains("stale attachment")),
+        "the reopened surface was rejected: {replies:?}"
+    );
+}
