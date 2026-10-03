@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
+use tokio::signal::unix::{signal, SignalKind};
 use tokio::task::JoinSet;
 use tokio::time::{timeout, Duration};
 use uuid::Uuid;
@@ -124,6 +125,41 @@ fn read_endpoint(service_dir: &Path) -> Result<Endpoint, String> {
     serde_json::from_slice(&bytes).map_err(|error| format!("decode {}: {error}", path.display()))
 }
 
+/// 잠금을 얻었으면 이전 service 는 끝났다. 강제 종료나 충돌로 정리하지 못하고 끝난 이전 service 의 socket 디렉터리를
+/// 지운다. 이 service 가 만드는 /tmp/spv-* 디렉터리만 지우며, 지우지 못하면 그 까닭을 보고한다.
+fn remove_previous_socket(service_dir: &Path) {
+    if !service_dir.join("endpoint.json").exists() {
+        return;
+    }
+    let endpoint = match read_endpoint(service_dir) {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            eprintln!("previous service endpoint: {error}");
+            return;
+        }
+    };
+    let socket = PathBuf::from(&endpoint.socket);
+    let owned = socket.parent().filter(|directory| {
+        directory.parent() == Some(Path::new("/tmp"))
+            && directory
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("spv-"))
+    });
+    let Some(directory) = owned else {
+        eprintln!(
+            "previous service socket {} is not in a service socket directory",
+            endpoint.socket
+        );
+        return;
+    };
+    if let Err(error) = fs::remove_dir_all(directory) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("previous service socket cleanup failed: {error}");
+        }
+    }
+}
+
 fn socket_path() -> Result<(PathBuf, PathBuf), String> {
     // 절대 socket 경로를 macOS의 104-byte Unix socket 한도 미만으로 유지한다.
     let directory = PathBuf::from("/tmp").join(format!("spv-{}", Uuid::new_v4()));
@@ -211,6 +247,7 @@ pub async fn serve_persistent(
         }
         Err(error) => return Err(error),
     };
+    remove_previous_socket(service_dir);
     let (socket_dir, socket) = socket_path()?;
     let listener = UnixListener::bind(&socket).map_err(|e| format!("bind service socket: {e}"))?;
     let _cleanup = ServiceCleanup {
@@ -242,8 +279,15 @@ pub async fn serve_persistent(
     let registry = PersistentRegistry::new();
     let mut clients = JoinSet::new();
     let mut had_client = false;
+    // 종료 요청을 받으면 루프를 끝내 endpoint 와 socket 디렉터리를 정리한다. 세션의 셸은 PTY 가 닫히면 끝난다.
+    let mut terminate =
+        signal(SignalKind::terminate()).map_err(|e| format!("terminate signal: {e}"))?;
+    let mut interrupt =
+        signal(SignalKind::interrupt()).map_err(|e| format!("interrupt signal: {e}"))?;
     loop {
         tokio::select! {
+            _ = terminate.recv() => return Ok(()),
+            _ = interrupt.recv() => return Ok(()),
             accepted = listener.accept() => {
                 let (stream, _) = accepted.map_err(|e| format!("accept service client: {e}"))?;
                 had_client = true;

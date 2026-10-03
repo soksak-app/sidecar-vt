@@ -15,7 +15,7 @@ diagnostics = []
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-tokio = { version = "1", features = ["io-util", "rt", "time", "net", "process", "sync", "macros"] }
+tokio = { version = "1", features = ["io-util", "rt", "time", "net", "process", "sync", "macros", "signal"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 base64 = "0.21"
 nix = { version = "0.27", features = ["process", "net", "fs", "signal"] }

@@ -699,6 +699,7 @@ version = "0.0.2"
 dependencies = [
  "alacritty_terminal",
  "libc",
+ "serde_json",
  "soksak-sidecar-vt-core",
  "tokio",
 ]
