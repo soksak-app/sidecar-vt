@@ -261,6 +261,12 @@ pub async fn serve_persistent(
         socket: socket.to_string_lossy().into_owned(),
         token,
     };
+    // 종료 요청을 받으면 루프를 끝내 endpoint 와 socket 디렉터리를 정리한다. 세션의 셸은 PTY 가 닫히면 끝난다. 처리기는
+    // 준비를 알리기 전에 둔다. 준비를 본 쪽이 곧바로 보낸 종료 요청이 기본 동작으로 process 를 끝내면 정리가 실행되지 않는다.
+    let mut terminate =
+        signal(SignalKind::terminate()).map_err(|e| format!("terminate signal: {e}"))?;
+    let mut interrupt =
+        signal(SignalKind::interrupt()).map_err(|e| format!("interrupt signal: {e}"))?;
     write_endpoint(service_dir, &endpoint)?;
     let mut ready =
         serde_json::to_vec(&endpoint).map_err(|e| format!("encode ready endpoint: {e}"))?;
@@ -279,11 +285,6 @@ pub async fn serve_persistent(
     let registry = PersistentRegistry::new();
     let mut clients = JoinSet::new();
     let mut had_client = false;
-    // 종료 요청을 받으면 루프를 끝내 endpoint 와 socket 디렉터리를 정리한다. 세션의 셸은 PTY 가 닫히면 끝난다.
-    let mut terminate =
-        signal(SignalKind::terminate()).map_err(|e| format!("terminate signal: {e}"))?;
-    let mut interrupt =
-        signal(SignalKind::interrupt()).map_err(|e| format!("interrupt signal: {e}"))?;
     loop {
         tokio::select! {
             _ = terminate.recv() => return Ok(()),
