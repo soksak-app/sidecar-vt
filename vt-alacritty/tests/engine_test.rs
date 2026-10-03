@@ -1437,15 +1437,16 @@ fn all_text(engine: &mut AlacrittyEngine) -> String {
 
 #[test]
 fn a_resize_in_the_prompt_state_clears_the_cursor_logical_line_to_the_bottom() {
+    // 폭 10에서 출력 세 행과 프롬프트 네 행은 일곱 행이다. 화면 여섯 행에 들어맞지 않는 o1 만 기록으로 간다.
     let mut engine = wrapped_prompt(b"\x1b]133;A\x07");
     engine.resize(10, 6);
     let screen = engine.screen();
     assert_eq!(
-        row_text(&screen, 0),
-        "o3",
+        (row_text(&screen, 0), row_text(&screen, 1)),
+        ("o2".to_string(), "o3".to_string()),
         "the output above the prompt must remain"
     );
-    for row in 1..6 {
+    for row in 2..6 {
         assert_eq!(
             row_text(&screen, row),
             "",
@@ -1455,7 +1456,7 @@ fn a_resize_in_the_prompt_state_clears_the_cursor_logical_line_to_the_bottom() {
     let cursor = engine.cursor();
     assert_eq!(
         (cursor.row, cursor.col),
-        (2, 0),
+        (3, 0),
         "the cursor must lie one row below the first prompt row, as at the previous width"
     );
     assert!(engine
@@ -1471,8 +1472,11 @@ fn redraw_last_places_the_cursor_as_redraw_1_does() {
     let mut engine = wrapped_prompt(b"\x1b]133;A;redraw=last;cl=line\x07");
     engine.resize(10, 6);
     let screen = engine.screen();
-    assert_eq!(row_text(&screen, 0), "o3");
-    for row in 1..6 {
+    assert_eq!(
+        (row_text(&screen, 0), row_text(&screen, 1)),
+        ("o2".to_string(), "o3".to_string())
+    );
+    for row in 2..6 {
         assert_eq!(
             row_text(&screen, row),
             "",
@@ -1480,7 +1484,7 @@ fn redraw_last_places_the_cursor_as_redraw_1_does() {
         );
     }
     let cursor = engine.cursor();
-    assert_eq!((cursor.row, cursor.col), (2, 0));
+    assert_eq!((cursor.row, cursor.col), (3, 0));
 }
 
 #[test]
@@ -1925,4 +1929,66 @@ fn an_inline_image_is_anchored_at_the_cursor_where_its_sequence_appears() {
         .collect();
     assert_eq!(anchors.len(), 1, "{anchors:?}");
     assert_eq!((anchors[0].col, anchors[0].row), (2, 5));
+}
+
+#[test]
+fn a_narrowing_reflow_keeps_the_rows_in_view_while_empty_rows_lie_below_the_cursor() {
+    let mut engine = AlacrittyEngine::new();
+    engine.resize(10, 6);
+    engine.feed(b"abcdefgh\r\nij");
+    engine.resize(5, 6);
+    let screen = engine.screen();
+    assert_eq!(
+        engine.scrollback(),
+        (0, 0),
+        "the reflow must not move rows into the history while empty rows lie below the cursor"
+    );
+    assert_eq!(
+        (0..3).map(|row| row_text(&screen, row)).collect::<Vec<_>>(),
+        ["abcde", "fgh", "ij"]
+    );
+    let cursor = engine.cursor();
+    assert_eq!((cursor.row, cursor.col), (2, 2));
+}
+
+#[test]
+fn a_narrowing_reflow_moves_rows_into_the_history_when_the_screen_is_full() {
+    let mut engine = AlacrittyEngine::new();
+    engine.resize(10, 2);
+    engine.feed(b"abcdefgh\r\nij");
+    engine.resize(5, 2);
+    let screen = engine.screen();
+    assert_eq!(engine.scrollback(), (0, 1));
+    assert_eq!(
+        (0..2).map(|row| row_text(&screen, row)).collect::<Vec<_>>(),
+        ["fgh", "ij"]
+    );
+}
+
+#[test]
+fn a_prompt_redrawn_after_a_narrowing_resize_has_no_empty_row_above_it_when_rows_grow() {
+    // zsh 는 크기 변경 뒤 마지막으로 그린 폭에서의 행 수만큼 올라가 프롬프트를 다시 그린다. 이 프롬프트는 한 행이었다.
+    let prompt = b"~/backup/soksak-test-wails % ";
+    let mut engine = AlacrittyEngine::new();
+    engine.resize(30, 6);
+    engine.feed(b"\x1b]133;A\x07");
+    engine.feed(prompt);
+    engine.resize(28, 6);
+    engine.feed(prompt);
+    // 폭 28에서 프롬프트는 두 행이었으므로 zsh 는 한 행 올라가 다시 그린다.
+    engine.resize(28, 8);
+    engine.feed(b"\x1b[A\r");
+    engine.feed(prompt);
+    let screen = engine.screen();
+    assert_eq!(
+        (0..3).map(|row| row_text(&screen, row)).collect::<Vec<_>>(),
+        // row_text 는 글자가 있는 칸만 이으므로 공백 칸은 빠진다.
+        ["~/backup/soksak-test-wails%", "", ""],
+        "a row increase must not show a cleared prompt row above the redrawn prompt"
+    );
+    assert_eq!(engine.scrollback(), (0, 0));
+    assert!(engine
+        .drain_events()
+        .iter()
+        .all(|event| !matches!(event, EngineEvent::Error(_))));
 }

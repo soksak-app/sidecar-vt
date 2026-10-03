@@ -1037,6 +1037,41 @@ impl AlacrittyEngine {
     }
 
     /// 기록을 한도로 줄이고 버린 행을 센다.
+    /// 격자 크기를 바꾼다. 엔진은 화면을 저장소의 마지막 행들로 보므로, 폭을 좁히는 재배치로 늘어난 행은 커서 아래 빈
+    /// 행이 있어도 위의 행을 기록으로 민다. 기본 화면에서는 행 수를 그대로 둔 채 폭을 먼저 바꾸고, 기록으로 간 행을 커서 아래
+    /// 빈 행 수만큼 화면으로 되돌린다(docs/spec/terminal-runtime.md). 빈 행은 커서보다 아래이므로 행 수를 그만큼 줄이면
+    /// 화면은 움직이지 않고 그 행만 빠지며, 다시 늘리면 엔진이 기록의 행을 위로 되돌린다.
+    fn resize_grid(&mut self, primary: bool, cols: usize, rows: usize) {
+        let lines = self.term.grid().screen_lines();
+        if primary && cols < self.term.grid().columns() {
+            // 기록 상한에 걸린 행이 버려지면 옮겨진 행 수를 셀 수 없으므로, 셀 동안만 상한을 화면 행 수만큼 늘린다.
+            let history = self.term.grid().history_size();
+            self.term
+                .grid_mut()
+                .update_history(self.history_limit.max(history) + lines);
+            self.term.resize(TermSize::new(cols, lines));
+            let moved = self.term.grid().history_size() - history;
+            let back = moved.min(self.empty_rows_below_cursor());
+            if back > 0 {
+                self.term.resize(TermSize::new(cols, lines - back));
+                self.term.resize(TermSize::new(cols, lines));
+            }
+            self.limit_history();
+        }
+        self.term.resize(TermSize::new(cols, rows));
+    }
+
+    /// 커서 행 아래에서 화면 맨 아래까지 이어지는 빈 행 수.
+    fn empty_rows_below_cursor(&self) -> usize {
+        let grid = self.term.grid();
+        let cursor = grid.cursor.point.line.0;
+        let bottom = grid.screen_lines() as i32 - 1;
+        (cursor + 1..=bottom)
+            .rev()
+            .take_while(|row| grid[Line(*row)].is_clear())
+            .count()
+    }
+
     fn limit_history(&mut self) {
         let excess = self
             .term
@@ -1649,8 +1684,7 @@ impl Engine for AlacrittyEngine {
                 .grid_mut()
                 .update_history(self.history_limit + rows_now.max(rows as usize));
         }
-        self.term
-            .resize(TermSize::new(cols as usize, rows as usize));
+        self.resize_grid(primary, cols as usize, rows as usize);
         if self.prompt_start.is_some() {
             self.limit_history();
         }
