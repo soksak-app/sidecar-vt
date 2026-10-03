@@ -13,27 +13,32 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// 서비스 디렉터리의 플래그 파일을 읽어 만든 트레이스.
+/// 서비스 디렉터리의 플래그 파일을 읽어 만든 트레이스. 켜진 트레이스는 플래그 파일의 경로를 함께 가진다.
 #[derive(Clone)]
 pub struct PerformanceTrace {
     target: Option<PathBuf>,
+    flag: PathBuf,
 }
 
 impl PerformanceTrace {
     /// 서비스 디렉터리에서 플래그를 다시 읽는다. 세션을 열 때마다 새로 만들어
     /// 설정 변경이 다음 세션에 반영되게 한다.
     pub fn from_service_dir(service_dir: &Path) -> Self {
-        let target = std::fs::read_to_string(service_dir.join("performance"))
+        let flag = service_dir.join("performance");
+        let target = std::fs::read_to_string(&flag)
             .ok()
             .map(|text| text.trim().to_string())
             .filter(|line| line.starts_with('/'))
             .map(PathBuf::from);
-        Self { target }
+        Self { target, flag }
     }
 
     /// 꺼진 트레이스. 검사 하네스의 serve 경로가 쓴다.
     pub fn disabled() -> Self {
-        Self { target: None }
+        Self {
+            target: None,
+            flag: PathBuf::new(),
+        }
     }
 
     /// 트레이스가 켜져 있는가.
@@ -41,11 +46,16 @@ impl PerformanceTrace {
         self.target.is_some()
     }
 
-    /// 한 이벤트 줄을 덧붙인다. 꺼져 있으면 아무 일도 하지 않는다.
+    /// 한 이벤트 줄을 덧붙인다. 꺼져 있으면 아무 일도 하지 않는다. 켜진 트레이스도 host 가 플래그를 지웠으면 쓰지
+    /// 않는다. 연결을 받을 때 읽은 상태는 그 연결이 끝날 때까지 남으므로, 꺼진 스위치가 이벤트를 쓰지 않으려면 쓰기
+    /// 직전에 플래그를 확인해야 한다(docs/spec/performance-trace.md).
     pub fn line(&self, event: &str, fields: Value) {
         let Some(target) = self.target.as_ref() else {
             return;
         };
+        if !self.flag.exists() {
+            return;
+        }
         let mut record = Map::new();
         record.insert("ts".into(), json!(now_iso8601_ms()));
         record.insert("pid".into(), json!(std::process::id()));

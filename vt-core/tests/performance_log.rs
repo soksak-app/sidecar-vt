@@ -250,3 +250,22 @@ async fn a_served_surface_records_its_frames_with_reasons() {
     );
     let _ = std::fs::remove_dir_all(&service);
 }
+
+#[test]
+fn trace_stops_writing_once_the_flag_is_removed() {
+    // 연결을 받을 때 켜진 기록기도 host 가 플래그를 지우면 더 쓰지 않는다(docs/spec/performance-trace.md).
+    let service = temp_dir("removed");
+    let log = service.join("performance.ndjson");
+    fs::write(service.join("performance"), format!("{}\n", log.display())).unwrap();
+    let trace = PerformanceTrace::from_service_dir(&service);
+    trace.line("frame", serde_json::json!({"reason": "output"}));
+    let before = fs::read_to_string(&log).expect("the flagged target receives the first line");
+    fs::remove_file(service.join("performance")).unwrap();
+    trace.line("frame", serde_json::json!({"reason": "cursor"}));
+    assert_eq!(
+        fs::read_to_string(&log).unwrap(),
+        before,
+        "a removed flag did not stop the trace"
+    );
+    let _ = fs::remove_dir_all(&service);
+}
