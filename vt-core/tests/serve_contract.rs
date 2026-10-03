@@ -1169,6 +1169,18 @@ async fn test_a8_closed_surface_closes_session() {
         calls_lock.detaches.is_empty(),
         "detach should not be called for closed:true flag"
     );
+    // 닫기를 마치면 core 사이드카 명세의 closed 답을 보낸다.
+    let output = String::from_utf8(writer).unwrap();
+    let answer = serde_json::json!({"surface": "s1", "closed": true});
+    assert!(
+        output
+            .lines()
+            .any(|line| serde_json::from_str::<serde_json::Value>(line)
+                .ok()
+                .as_ref()
+                == Some(&answer)),
+        "the close answer is missing: {output}"
+    );
 }
 
 #[tokio::test]

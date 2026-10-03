@@ -3055,14 +3055,16 @@ where
                     } else {
                         Ok(())
                     };
+                    // 모든 closed 에 답한다. 실패하면 그 까닭을 함께 보낸다(core 의 docs/spec/sidecars.md#messages).
                     if let Err(error) = close_result {
-                        let response = json!({"surface": surface_id, "body": {"error": error}});
+                        let response =
+                            json!({"surface": surface_id, "closed": true, "error": error});
                         if output_tx.send(response.to_string()).await.is_err() {
                             break;
                         }
                         continue;
                     }
-                    let response = json!({"surface": surface_id, "body": {}});
+                    let response = json!({"surface": surface_id, "closed": true});
                     if output_tx.send(response.to_string()).await.is_err() {
                         // output channel이 닫혔으므로 serve를 끝낸다
                         break;
