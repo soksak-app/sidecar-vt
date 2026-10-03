@@ -2889,7 +2889,7 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let buf_reader = BufReader::new(reader);
+    let buf_reader = BufReader::new(PolledReader::new(reader, options.performance.clone()));
     let (output_sender, output_rx) = mpsc::channel::<String>(100);
     let output_tx = if options.registry.is_some() {
         OutputSink::detachable(output_sender)
@@ -2897,8 +2897,9 @@ where
         OutputSink::direct(output_sender)
     };
 
+    let output_trace = options.performance.clone();
     let input_task = run_input_loop(buf_reader, output_tx, options);
-    let output_task = run_output_loop(writer, output_rx);
+    let output_task = run_output_loop(writer, output_rx, output_trace);
 
     tokio::try_join!(input_task, output_task)?;
     Ok(())
@@ -2920,6 +2921,9 @@ where
         owner,
         performance,
     } = options;
+    // 연결 순번. 같은 소유자의 연결을 trace 에서 구별한다.
+    static CONNECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let connection = CONNECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let mut surface_txs: HashMap<String, mpsc::Sender<SurfaceCommand>> = HashMap::new();
     let mut surface_epochs: HashMap<String, u64> = HashMap::new();
     let mut tasks = tokio::task::JoinSet::new();
@@ -2928,7 +2932,9 @@ where
 
     loop {
         line.clear();
+        let waiting = std::time::Instant::now();
         let n = buf_reader.read_line(&mut line).await?;
+        let idle = waiting.elapsed();
 
         if n == 0 {
             if registry.is_none() {
@@ -2949,7 +2955,24 @@ where
             continue;
         }
 
-        if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        // 이 요청의 처리 기록. 표면 작업으로 넘기는 일까지 포함해, 이번 반복을 떠날 때(다음 요청을 읽기 전) 남긴다.
+        let parsed = serde_json::from_str::<Value>(trimmed).ok();
+        let _request = RequestTrace {
+            performance: &performance,
+            started: std::time::Instant::now(),
+            idle,
+            owner: owner.clone(),
+            connection,
+            operation: parsed
+                .as_ref()
+                .map_or_else(|| "unparsed".to_string(), request_operation),
+            surface: parsed
+                .as_ref()
+                .and_then(|value| value.get("surface"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        };
+        if let Some(value) = parsed {
             if value.get("operation").and_then(Value::as_str) == Some("close-owner") {
                 let Some(request) = value.get("request").and_then(Value::as_str) else {
                     let reply = json!({"error": "invalidParams", "reason": "the owner request has no request id"});
@@ -3903,19 +3926,151 @@ where
     Ok(())
 }
 
+/// 연결의 읽기 쪽. 읽기가 1 초 이상 기다린 뒤 데이터를 받으면, 그 사이 읽기를 시도한 횟수와 마지막 시도 뒤의 시간을
+/// `read_wait` 로 남긴다. 시도가 한 번뿐이면 데이터가 온 뒤 작업이 깨어나지 않은 것이고, 여러 번이면 깨어났지만 읽을
+/// 것이 없다고 들은 것이다.
+struct PolledReader<R> {
+    inner: R,
+    performance: crate::performance::PerformanceTrace,
+    waiting_since: Option<std::time::Instant>,
+    last_poll: std::time::Instant,
+    pending_polls: u64,
+}
+
+impl<R> PolledReader<R> {
+    fn new(inner: R, performance: crate::performance::PerformanceTrace) -> Self {
+        Self {
+            inner,
+            performance,
+            waiting_since: None,
+            last_poll: std::time::Instant::now(),
+            pending_polls: 0,
+        }
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for PolledReader<R> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let now = std::time::Instant::now();
+        let since_last_poll = now.duration_since(self.last_poll);
+        self.last_poll = now;
+        let result = std::pin::Pin::new(&mut self.inner).poll_read(cx, buf);
+        match &result {
+            std::task::Poll::Pending => {
+                if self.waiting_since.is_none() {
+                    self.waiting_since = Some(now);
+                }
+                self.pending_polls += 1;
+            }
+            std::task::Poll::Ready(_) => {
+                if let Some(started) = self.waiting_since.take() {
+                    let waited = now.duration_since(started);
+                    if waited >= std::time::Duration::from_secs(1) {
+                        self.performance.line(
+                            "read_wait",
+                            serde_json::json!({
+                                "waited_us": waited.as_micros() as u64,
+                                "pending_polls": self.pending_polls,
+                                "since_last_poll_us": since_last_poll.as_micros() as u64,
+                                "bytes": buf.filled().len(),
+                            }),
+                        );
+                    }
+                }
+                self.pending_polls = 0;
+            }
+        }
+        result
+    }
+}
+
+/// 출력 한 줄을 쓰는 데 이만큼 이상 걸리면 상대가 읽지 않아 막힌 것으로 기록한다.
+const OUTPUT_BLOCKED: std::time::Duration = std::time::Duration::from_millis(10);
+
 async fn run_output_loop<W>(
     mut writer: W,
     mut output_rx: mpsc::Receiver<String>,
+    performance: crate::performance::PerformanceTrace,
 ) -> std::io::Result<()>
 where
     W: AsyncWrite + Unpin,
 {
     while let Some(output) = output_rx.recv().await {
+        let started = std::time::Instant::now();
         writer.write_all(output.as_bytes()).await?;
         writer.write_all(b"\n").await?;
         writer.flush().await?;
+        let elapsed = started.elapsed();
+        // 출력이 막힌 계기: 상대가 읽지 않으면 이 쓰기가 기다리고, 출력 채널이 차면 표면 작업과 입력 루프가 멈춘다.
+        if elapsed >= OUTPUT_BLOCKED {
+            performance.line(
+                "output_blocked",
+                serde_json::json!({"us": elapsed.as_micros() as u64, "bytes": output.len()}),
+            );
+        }
     }
     Ok(())
+}
+
+/// 요청 하나의 처리 기록. 입력 루프가 요청을 읽은 때부터 다음 요청을 읽기 전까지의 시간을 남긴다.
+struct RequestTrace<'a> {
+    performance: &'a crate::performance::PerformanceTrace,
+    started: std::time::Instant,
+    /// 이 요청이 도착하기 전 입력 루프가 읽기를 기다린 시간.
+    idle: std::time::Duration,
+    /// 요청을 보낸 연결의 소유자.
+    owner: String,
+    /// 이 서비스가 받은 연결의 순번.
+    connection: u64,
+    operation: String,
+    surface: Option<String>,
+}
+
+impl Drop for RequestTrace<'_> {
+    fn drop(&mut self) {
+        if !self.performance.enabled() {
+            return;
+        }
+        self.performance.line(
+            "request",
+            serde_json::json!({
+                "operation": self.operation,
+                "surface": self.surface,
+                "owner": self.owner,
+                "connection": self.connection,
+                "idle_us": self.idle.as_micros() as u64,
+                "us": self.started.elapsed().as_micros() as u64,
+            }),
+        );
+    }
+}
+
+/// 요청의 작업 이름: operation, closed, body 의 operation, 또는 body 의 첫 키와 그 값의 첫 키(예: image.configure).
+pub fn request_operation(value: &Value) -> String {
+    if let Some(operation) = value.get("operation").and_then(Value::as_str) {
+        return operation.to_string();
+    }
+    if value.get("closed") == Some(&Value::Bool(true)) {
+        return "closed".to_string();
+    }
+    let body = value.get("body").and_then(Value::as_object);
+    if let Some(operation) = body
+        .and_then(|body| body.get("operation"))
+        .and_then(Value::as_str)
+    {
+        return operation.to_string();
+    }
+    let Some((key, inner)) = body.and_then(|body| body.iter().next()) else {
+        return "unknown".to_string();
+    };
+    match inner.as_object().and_then(|object| object.keys().next()) {
+        Some(sub) => format!("{key}.{sub}"),
+        None => key.clone(),
+    }
 }
 
 pub fn base64_decode(s: &str) -> Result<Vec<u8>, String> {

@@ -269,3 +269,33 @@ fn trace_stops_writing_once_the_flag_is_removed() {
     );
     let _ = fs::remove_dir_all(&service);
 }
+
+// 요청 처리 기록의 작업 이름은 요청 종류를 밝힌다: 연결 operation, closed, body 의 operation, 또는 body 의 키와 그 하위 키.
+#[test]
+fn request_operation_names_the_kind_of_request() {
+    use soksak_sidecar_vt_core::protocol::request_operation;
+    let name = |value: serde_json::Value| request_operation(&value);
+    assert_eq!(
+        name(serde_json::json!({"operation": "retain", "request": "1"})),
+        "retain"
+    );
+    assert_eq!(
+        name(serde_json::json!({"surface": "s", "closed": true})),
+        "closed"
+    );
+    assert_eq!(
+        name(
+            serde_json::json!({"surface": "s", "body": {"operation": "open", "shell": "/bin/zsh"}})
+        ),
+        "open"
+    );
+    assert_eq!(
+        name(serde_json::json!({"surface": "s", "body": {"image": {"configure": {}}}})),
+        "image.configure"
+    );
+    assert_eq!(
+        name(serde_json::json!({"surface": "s", "body": {"bytes": "AA=="}})),
+        "bytes"
+    );
+    assert_eq!(name(serde_json::json!({"surface": "s"})), "unknown");
+}

@@ -552,3 +552,79 @@ async fn a_surface_reopened_after_its_closed_notice_is_not_a_stale_attachment() 
         "the reopened surface was rejected: {replies:?}"
     );
 }
+
+async fn retained(
+    replies: &mut tokio::io::Lines<tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>>,
+    request: &str,
+) -> String {
+    loop {
+        let reply = replies
+            .next_line()
+            .await
+            .unwrap()
+            .expect("the connection closed");
+        if reply.contains("\"retained\"") && reply.contains(&format!("\"request\":\"{request}\"")) {
+            break reply;
+        }
+    }
+}
+
+// 영속 연결에서 retain 이 실제 PTY 세션의 표면 작업을 닫은 뒤에도 입력 루프는 다음 요청을 받는 즉시 처리해야 한다.
+// 검사 애플리케이션에서 retain 직후 host 가 쓴 줄이 소켓 수신 대기열에 10 초 머문 일이 있었다(G1.4-90-4-2).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_after_retain_closes_pty_sessions_is_handled_at_once() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let line = |text: &str| {
+        let mut bytes = text.as_bytes().to_vec();
+        bytes.push(b'\n');
+        bytes
+    };
+    for round in 0..10 {
+        let (client, service) = tokio::net::UnixStream::pair().unwrap();
+        let (service_read, service_write) = service.into_split();
+        let pty = Arc::new(crate::pty::PtyService::new());
+        let serving = tokio::spawn(serve_with_registry(
+            Arc::new(|| Box::new(FakeEngine::new()) as Box<dyn Engine>),
+            BufReader::new(service_read),
+            service_write,
+            Arc::new(move || {
+                Arc::new(LocalSessionPort::new(Arc::clone(&pty))) as Arc<dyn SessionPort>
+            }),
+            PersistentOwner {
+                close: Arc::new(|| Ok(())),
+                registry: PersistentRegistry::new(),
+                owner: "test-owner".to_string(),
+                performance: crate::performance::PerformanceTrace::disabled(),
+            },
+        ));
+        let (client_read, mut client_write) = client.into_split();
+        let mut replies = tokio::io::BufReader::new(client_read).lines();
+        for surface in ["s1", "s2"] {
+            client_write
+                .write_all(&line(&format!(r#"{{"surface":"{surface}","root":"/tmp","body":{{"operation":"open","shell":"/bin/sh"}}}}"#)))
+                .await
+                .unwrap();
+        }
+        let retain = |request: &str| {
+            line(&format!(
+                r#"{{"operation":"retain","request":"{request}","surfaces":[]}}"#
+            ))
+        };
+        // 표면 작업은 명령을 받은 순서대로 처리하므로, retain 의 닫기 명령은 open 이 PTY 세션을 연 뒤에 처리된다.
+        client_write.write_all(&retain("1")).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), retained(&mut replies, "1"))
+            .await
+            .expect("the first retain was not answered");
+        client_write.write_all(&retain("2")).await.unwrap();
+        let started = std::time::Instant::now();
+        let second =
+            tokio::time::timeout(Duration::from_secs(2), retained(&mut replies, "2")).await;
+        assert!(
+            second.is_ok(),
+            "round {round}: the request after retain was not handled within 2 s ({:?})",
+            started.elapsed()
+        );
+        drop(client_write);
+        let _ = tokio::time::timeout(Duration::from_secs(5), serving).await;
+    }
+}
