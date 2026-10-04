@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+file://~/Projects/soksak/sidecars/vt",
+    "url": "git+https://github.com/soksak-app/sidecar-vt.git",
     "directory": "vt-alacritty"
   },
   "type": "module",

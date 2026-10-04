@@ -2,6 +2,8 @@
 name = "soksak-sidecar-vt-core"
 version = "0.0.2"
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/soksak-app/sidecar-vt"
 description = "Common VT layer: protocol, session lifetime, screen types, Engine trait."
 build = "build.rs"
 
