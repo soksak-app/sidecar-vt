@@ -31,3 +31,22 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+      # registry 에 새 version 을 더하는 pull request 를 연다(core docs/spec/registry.md#releases-of-soksak-components).
+      # REGISTRY_TOKEN 은 soksak-app/registry 에 pull request 를 열 수 있는 token 이고, 그 소유자가 작성자다.
+      - uses: actions/checkout@v4
+        with:
+          repository: soksak-app/registry
+          path: registry
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: registry/.node-version
+      - name: Add the version to the registry entry
+        run: node registry/scripts/add-version.mjs sidecar --registry registry --package vt-alacritty --asset "darwin-arm64=dist/soksak-sidecar-vt-alacritty-${GITHUB_REF_NAME#v}-darwin-arm64.tar.gz"
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.REGISTRY_TOKEN }}
+          path: registry
+          branch: sidecar-vt-${{ github.ref_name }}
+          title: Add @soksak/sidecar-vt-alacritty ${{ github.ref_name }}
+          commit-message: Add @soksak/sidecar-vt-alacritty ${{ github.ref_name }}
+          add-paths: sidecars
