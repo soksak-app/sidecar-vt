@@ -89,10 +89,40 @@ pub struct PersistentRegistry {
 
 const SURFACE_ACTOR_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
-async fn await_surface_actor(actor: tokio::task::JoinHandle<()>) -> Result<(), String> {
-    match tokio::time::timeout(SURFACE_ACTOR_CLOSE_TIMEOUT, actor).await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(error)) => Err(format!("surface actor join failed: {error}")),
+/// 표면 작업에 닫기를 보내고, 작업이 session 을 닫은 결과와 작업의 끝(actor 가 있으면)을 기다린다. closed 답과
+/// 정리 답은 이 결과 뒤에 보내므로, 답을 받은 host 는 그 표면의 PTY 자식이 이미 회수되었다고 본다
+/// (core 의 docs/spec/sidecars.md#messages).
+async fn close_surface_actor(
+    tx: &mpsc::Sender<SurfaceCommand>,
+    actor: Option<tokio::task::JoinHandle<()>>,
+    operation: &str,
+) -> Result<(), String> {
+    let (result, answer) = tokio::sync::oneshot::channel();
+    let sent = tx.send(SurfaceCommand::SessionClose { result }).await;
+    let closing = async {
+        let closed = match sent {
+            Ok(()) => match answer.await {
+                Ok(closed) => closed,
+                Err(_) => Err(format!(
+                    "surface actor ended before it answered {operation}"
+                )),
+            },
+            Err(_) => Err(format!("surface actor closed before {operation}")),
+        };
+        let joined = match actor {
+            Some(actor) => actor
+                .await
+                .map_err(|error| format!("surface actor join failed: {error}")),
+            None => Ok(()),
+        };
+        match (closed, joined) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(closed), Err(joined)) => Err(format!("{closed}; {joined}")),
+        }
+    };
+    match tokio::time::timeout(SURFACE_ACTOR_CLOSE_TIMEOUT, closing).await {
+        Ok(result) => result,
         Err(_) => Err(format!(
             "surface actor close exceeded {:?}",
             SURFACE_ACTOR_CLOSE_TIMEOUT
@@ -107,10 +137,7 @@ async fn close_surface_entries(
     let count = entries.len();
     let mut errors = Vec::new();
     for (key, entry) in entries {
-        if entry.tx.send(SurfaceCommand::SessionClose).await.is_err() {
-            errors.push(format!("{key}: surface actor closed before {operation}"));
-        }
-        if let Err(error) = await_surface_actor(entry.actor).await {
+        if let Err(error) = close_surface_actor(&entry.tx, Some(entry.actor), operation).await {
             errors.push(format!("{key}: {error}"));
         }
     }
@@ -149,18 +176,7 @@ impl PersistentRegistry {
             }
             entries.remove(key).expect("registry entry disappeared")
         };
-        entry
-            .tx
-            .send(SurfaceCommand::SessionClose)
-            .await
-            .map_err(|_| "surface actor closed before close".to_string())?;
-        let key = key.to_string();
-        tokio::spawn(async move {
-            if let Err(error) = await_surface_actor(entry.actor).await {
-                eprintln!("persistent surface actor close failed for {key}: {error}");
-            }
-        });
-        Ok(())
+        close_surface_actor(&entry.tx, Some(entry.actor), "close").await
     }
 
     async fn close_owner(&self, owner: &str) -> Result<(), String> {
@@ -244,12 +260,9 @@ impl PersistentRegistry {
     ) -> Result<u64, String> {
         let mut entries = self.entries.lock().await;
         if entries.contains_key(&key) {
-            tx.send(SurfaceCommand::SessionClose)
+            close_surface_actor(&tx, Some(actor), "duplicate close")
                 .await
                 .map_err(|error| format!("close duplicate surface: {error}"))?;
-            await_surface_actor(actor)
-                .await
-                .map_err(|error| format!("join duplicate surface actor: {error}"))?;
             return Err("session surface already exists".to_string());
         }
         let epoch = self
@@ -664,7 +677,7 @@ struct Envelope {
 }
 
 /// 표면 작업으로 보낼 명령
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 enum SurfaceCommand {
     Open {
         image: Option<String>,
@@ -702,7 +715,10 @@ enum SurfaceCommand {
         policy: CursorPolicy,
     },
     ScreenRead,
-    SessionClose,
+    /// session 을 닫고 그 결과를 result 로 답한 뒤 작업을 끝낸다.
+    SessionClose {
+        result: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
     SessionDetach,
     ImageResponse {
         body: Value,
@@ -1740,9 +1756,7 @@ async fn close_connection_surface(
         }
         closed
     } else if let Some(tx) = surface_txs.remove(registry_key) {
-        tx.send(SurfaceCommand::SessionClose)
-            .await
-            .map_err(|_| "surface actor closed before close".to_string())
+        close_surface_actor(&tx, None, "close").await
     } else {
         Ok(())
     }
@@ -2612,19 +2626,18 @@ async fn surface_task(
                             if !present_screen(&surface_id, &screen, state, &output_tx, "image", &performance).await { return; }
                         }
                     }
-                    SurfaceCommand::SessionClose => {
-                        let close_error = if let Some(ref sid) = session_id {
-                            session_port.close(sid).await.err()
-                        } else {
-                            None
+                    SurfaceCommand::SessionClose { result } => {
+                        let closed = match session_id.as_deref() {
+                            Some(sid) => session_port
+                                .close(sid)
+                                .await
+                                .map_err(|error| format!("Close failed: {error}")),
+                            None => Ok(()),
                         };
-                        let body = close_error
-                            .map(|error| json!({"error": format!("Close failed: {error}")}))
-                            // 기본값: 닫기에 오류가 없으면 빈 본문으로 답한다.
-                            .unwrap_or_else(|| json!({}));
-                        let response = json!({"surface": surface_id, "body": body});
-                        if output_tx.send(response.to_string()).await.is_err() {
-                            return;
+                        // 닫기를 보낸 쪽이 기다리기를 그만두었으면 그 쪽이 시간 초과를 이미 보고했다. 닫기 오류는
+                        // 받을 곳이 없으므로 service log 에 남긴다.
+                        if let Err(Err(error)) = result.send(closed) {
+                            eprintln!("surface {surface_id}: {error}");
                         }
                         break;
                     }
@@ -2962,6 +2975,8 @@ where
     let mut tasks = tokio::task::JoinSet::new();
     let mut line = String::new();
     let connection_sender = output_tx.sender().await;
+    // 입력이 끝났을 때 이미 끝난 표면 작업. serve 의 끝에서 오류로 알린다.
+    let mut ended_surfaces = Vec::new();
 
     loop {
         line.clear();
@@ -2971,10 +2986,10 @@ where
 
         if n == 0 {
             if registry.is_none() {
-                for tx in surface_txs.values() {
+                // persistent 가 아닌 연결의 표면 작업은 session 에서 떨어지고 끝난다.
+                for (key, tx) in &surface_txs {
                     if tx.send(SurfaceCommand::SessionDetach).await.is_err() {
-                        // actor가 이미 종료되었다. 그 monitor가 actor error를 내보냈다.
-                        continue;
+                        ended_surfaces.push(key.clone());
                     }
                 }
             } else {
@@ -3836,12 +3851,14 @@ where
                                     &owner,
                                 )
                                 .await;
-                                if let Err(error) = close_result {
-                                    let response =
-                                        json!({"surface": surface_id, "body": {"error": error}});
-                                    if output_tx.send(response.to_string()).await.is_err() {
-                                        break;
-                                    }
+                                // 닫기를 마친 뒤 빈 본문으로, 실패하면 그 까닭으로 답한다.
+                                let body = match close_result {
+                                    Ok(()) => json!({}),
+                                    Err(error) => json!({"error": error}),
+                                };
+                                let response = json!({"surface": surface_id, "body": body});
+                                if output_tx.send(response.to_string()).await.is_err() {
+                                    break;
                                 }
                             }
                             _ => {
@@ -3928,25 +3945,17 @@ where
         }
     }
 
-    // persistent transport는 예기치 않은 client 연결 끊김 동안 surface actor와 PTY session을
-    // 유지한다. 정상적인 application 종료는 명시적인 close-owner operation을 보내고
-    // 그곳에서 그것들을 닫는다. persistent가 아닌 transport에는 복구 owner가 없으므로
-    // 그 surface를 지금 닫아야 한다.
-    if registry.is_none() {
-        for tx in surface_txs.values() {
-            tx.send(SurfaceCommand::SessionClose)
-                .await
-                .map_err(|error| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::BrokenPipe,
-                        format!("close surface during serve shutdown: {error}"),
-                    )
-                })?;
-        }
-    }
-
     // 모든 monitor task가 완료될 때까지 기다린다
     while tasks.join_next().await.is_some() {}
+    if !ended_surfaces.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            format!(
+                "surface actor ended before serve shutdown: {}",
+                ended_surfaces.join(", ")
+            ),
+        ));
+    }
     Ok(())
 }
 

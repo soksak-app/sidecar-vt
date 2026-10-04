@@ -251,13 +251,24 @@ async fn a_persistent_sink_detaches_when_its_client_output_closed_and_a_direct_s
     );
 }
 
+/// 시험 표면 작업의 닫기 처리. 닫기 명령이면 성공으로 답하고 참을 돌려준다.
+fn answer_close(command: SurfaceCommand) -> bool {
+    match command {
+        SurfaceCommand::SessionClose { result } => {
+            result.send(Ok(())).expect("the close waits for its answer");
+            true
+        }
+        _ => false,
+    }
+}
+
 #[tokio::test]
 async fn persistent_registry_rejects_stale_owner_and_awaits_actor_close() {
     let registry = PersistentRegistry::new();
     let (tx, mut rx) = mpsc::channel(4);
     let actor = tokio::spawn(async move {
         while let Some(command) = rx.recv().await {
-            if matches!(command, SurfaceCommand::SessionClose) {
+            if answer_close(command) {
                 break;
             }
         }
@@ -295,7 +306,7 @@ fn closing_actor() -> (mpsc::Sender<SurfaceCommand>, tokio::task::JoinHandle<()>
     let (tx, mut rx) = mpsc::channel(1);
     let actor = tokio::spawn(async move {
         while let Some(command) = rx.recv().await {
-            if matches!(command, SurfaceCommand::SessionClose) {
+            if answer_close(command) {
                 break;
             }
         }
@@ -342,7 +353,7 @@ async fn assert_cleanup_closes_remaining_actors(retain: bool) {
         let seen = Arc::clone(&closed);
         let actor = tokio::spawn(async move {
             while let Some(command) = rx.recv().await {
-                if matches!(command, SurfaceCommand::SessionClose) {
+                if answer_close(command) {
                     seen.fetch_add(1, Ordering::SeqCst);
                     break;
                 }
@@ -442,7 +453,7 @@ async fn persistent_registry_close_owner_keeps_other_client_sessions() {
     let (a_tx, mut a_rx) = mpsc::channel(1);
     let a_actor = tokio::spawn(async move {
         while let Some(command) = a_rx.recv().await {
-            if matches!(command, SurfaceCommand::SessionClose) {
+            if answer_close(command) {
                 break;
             }
         }
@@ -450,7 +461,7 @@ async fn persistent_registry_close_owner_keeps_other_client_sessions() {
     let (b_tx, mut b_rx) = mpsc::channel(1);
     let b_actor = tokio::spawn(async move {
         while let Some(command) = b_rx.recv().await {
-            if matches!(command, SurfaceCommand::SessionClose) {
+            if answer_close(command) {
                 break;
             }
         }
@@ -485,8 +496,10 @@ async fn persistent_registry_close_owner_keeps_other_client_sessions() {
     assert!(!registry.contains("root\0b").await);
 }
 
-#[tokio::test]
-async fn persistent_surface_close_does_not_wait_forever_for_actor_exit() {
+// 닫기에 답하지 않는 표면 작업은 입력 loop 를 끝없이 막지 않고, 닫기 상한이 지나면 오류로 보고된다. closed 답은 닫기가
+// 끝난 뒤에 보내므로(S20) 닫기는 작업을 기다리며, 이 시험은 그 기다림에 상한이 있음을 확인한다.
+#[tokio::test(start_paused = true)]
+async fn persistent_surface_close_reports_an_actor_that_does_not_answer() {
     let registry = PersistentRegistry::new();
     let (tx, mut rx) = mpsc::channel(1);
     let actor = tokio::spawn(async move {
@@ -506,14 +519,12 @@ async fn persistent_surface_close_does_not_wait_forever_for_actor_exit() {
         },
     );
 
-    let result = tokio::time::timeout(
-        Duration::from_millis(200),
-        registry.close_surface("root\0surface", "client"),
-    )
-    .await;
-    result
-        .expect("surface close blocked the persistent input loop")
-        .expect("surface close could not queue actor cleanup");
+    let error = registry
+        .close_surface("root\0surface", "client")
+        .await
+        .expect_err("an actor that does not answer the close must be reported");
+    assert_eq!(error, "surface actor close exceeded 2s");
+    assert!(!registry.contains("root\0surface").await);
 }
 
 #[tokio::test]
@@ -665,4 +676,68 @@ async fn a_surface_reopened_after_its_close_request_is_not_a_stale_attachment() 
             .all(|line| !line.contains("stale attachment")),
         "the reopened surface was rejected: {replies:?}"
     );
+}
+
+/// 표면 하나를 열고 closed 봉투를 보낸 뒤, closed 답이 올 때 그 표면의 session 이 이미 닫혔는지 확인한다.
+/// 현재 thread runtime 에서 입력 loop 를 이 작업 안에서 돌리므로, loop 가 답을 쓰기 전에 표면 작업이 실행되는 길은
+/// loop 가 그 작업의 닫기를 기다리는 것뿐이다(S20, core F61).
+async fn assert_closed_answer_follows_the_session_close(registry: Option<Arc<PersistentRegistry>>) {
+    use tokio::io::AsyncWriteExt;
+    let port = Arc::new(FakeSessionPort::new());
+    let calls = Arc::clone(&port.calls);
+    let (sender, mut receiver) = mpsc::channel(64);
+    let (mut client, reader) = tokio::io::duplex(4096);
+    let input = run_input_loop(
+        BufReader::new(reader),
+        OutputSink::direct(sender),
+        ServeOptions {
+            engine_factory: Arc::new(|| Box::new(FakeEngine::new())),
+            session_port_factory: Arc::new(move || Arc::clone(&port) as Arc<dyn SessionPort>),
+            owner_close: None,
+            registry,
+            owner: "test-owner".to_string(),
+            performance: crate::performance::PerformanceTrace::disabled(),
+        },
+    );
+    tokio::pin!(input);
+    client
+        .write_all(
+            concat!(
+                r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}"#,
+                "\n",
+                r#"{"surface":"s1","root":"/tmp","closed":true}"#,
+                "\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("write the requests");
+    let answer = loop {
+        tokio::select! {
+            biased;
+            result = &mut input => panic!("the input loop ended before the close answer: {result:?}"),
+            line = receiver.recv() => {
+                let line = line.expect("the output closed before the close answer");
+                if line.contains(r#""closed":true"#) {
+                    break line;
+                }
+            }
+        }
+    };
+    let closes = calls.lock().await.closes.clone();
+    assert_eq!(
+        closes,
+        vec!["session-0".to_string()],
+        "the close answer {answer} came before the session was closed"
+    );
+}
+
+#[tokio::test]
+async fn a_persistent_close_answer_follows_the_session_close() {
+    assert_closed_answer_follows_the_session_close(Some(PersistentRegistry::new())).await;
+}
+
+#[tokio::test]
+async fn a_close_answer_without_a_registry_follows_the_session_close() {
+    assert_closed_answer_follows_the_session_close(None).await;
 }

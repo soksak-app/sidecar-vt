@@ -327,19 +327,18 @@ impl PtyService {
         session.master.lock().unwrap().take();
         let kill_result = {
             let process_group_result = kill_process_group(session.process_group);
+            // 자식을 회수한 뒤에 돌아온다. 회수 thread 가 child lock 을 먼저 쥐었으면 그 wait 가 끝난 뒤 이 lock 을
+            // 얻고 try_wait 는 기록된 종료 상태를 돌려준다. close 가 먼저 쥐었으면 여기서 끝내고 회수한다. 이 lock 을
+            // 쥔 동안 자식은 회수되지 않으므로 그 pid 는 다른 프로세스를 가리키지 않는다.
             let mut child = session.child.lock().unwrap();
             let child_result = match child.try_wait() {
                 Ok(Some(_status)) => Ok(()),
-                Ok(None) => match child.kill() {
-                    Ok(()) => Ok(()),
-                    Err(kill_error) => match child.try_wait() {
-                        Ok(Some(_status)) => Ok(()),
-                        Ok(None) => Err(format!("close PTY: {kill_error}")),
-                        Err(wait_error) => {
-                            Err(format!("close PTY: {kill_error}; wait PTY: {wait_error}"))
-                        }
-                    },
-                },
+                Ok(None) => kill_child(child.as_ref()).and_then(|()| {
+                    child
+                        .wait()
+                        .map(|_status| ())
+                        .map_err(|error| format!("wait PTY: {error}"))
+                }),
                 Err(wait_error) => Err(format!("check PTY child: {wait_error}")),
             };
             match (process_group_result, child_result) {
@@ -446,20 +445,32 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
     }
 }
 
+/// session 의 자식에 SIGKILL 을 보낸다. 부르는 쪽은 child lock 을 쥐고 자식이 아직 회수되지 않았음을 확인했다.
+fn kill_child(child: &(dyn Child + Send)) -> Result<(), String> {
+    let pid = child
+        .process_id()
+        .ok_or_else(|| "PTY child has no process id".to_string())?;
+    let pid = i32::try_from(pid).map_err(|_| format!("PTY child process id {pid} is invalid"))?;
+    match nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid),
+        nix::sys::signal::Signal::SIGKILL,
+    ) {
+        // ESRCH: 자식이 이미 끝나 회수를 기다린다. 뒤의 wait 가 회수한다.
+        Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
+        Err(error) => Err(format!("kill PTY child {pid}: {error}")),
+    }
+}
+
 fn reap_child(session: Arc<Session>) {
+    // close 가 먼저 자식을 회수했으면 wait 는 기록된 종료 상태를 돌려주므로, 오류는 회수 실패다.
     if let Err(error) = session.child.lock().unwrap().wait() {
-        // 이 thread가 child lock을 얻기 전에 명시적인 close가 try_wait로 child를
-        // 회수했을 수 있다. 그것은 의도된 close 결과이며,
-        // child 회수 실패가 아니다.
-        if !*session.closed.lock().unwrap() {
-            broadcast(
-                &session,
-                DaemonEvent::Error {
-                    session_id: session.id.clone(),
-                    error: format!("wait PTY: {error}"),
-                },
-            );
-        }
+        broadcast(
+            &session,
+            DaemonEvent::Error {
+                session_id: session.id.clone(),
+                error: format!("wait PTY: {error}"),
+            },
+        );
     }
     broadcast(
         &session,
@@ -571,6 +582,99 @@ mod tests {
         );
         // close 가 돌아온 뒤 exit event 가 남아 있어야 한다.
         while !matches!(next_event(&mut rx).await, DaemonEvent::Exit { .. }) {}
+    }
+
+    /// 종료를 늦게 알리는 자식. 첫 try_wait 는 아직 끝나지 않았다고 답하고, kill 은 SIGKILL 만 보내고 회수하지 않는다.
+    /// 실제 자식의 kill 은 SIGHUP 을 보내고 200 ms 동안 종료를 확인한 뒤 SIGKILL 을 보내고 돌아오므로, 그 동안 종료가
+    /// 보이지 않은 경우를 재현한다. reaped 는 자식을 회수한 순간에 참이 된다.
+    #[derive(Debug)]
+    struct LateExitChild {
+        inner: std::process::Child,
+        checked: bool,
+        reaped: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl portable_pty::ChildKiller for LateExitChild {
+        fn kill(&mut self) -> std::io::Result<()> {
+            self.inner.kill()
+        }
+
+        fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+            panic!("PtyService does not clone the killer of a session child")
+        }
+    }
+
+    impl Child for LateExitChild {
+        fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
+            if !self.checked {
+                self.checked = true;
+                return Ok(None);
+            }
+            let status = self.inner.try_wait()?;
+            if status.is_some() {
+                self.reaped.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            Ok(status.map(Into::into))
+        }
+
+        fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
+            let status = self.inner.wait()?;
+            self.reaped.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(status.into())
+        }
+
+        fn process_id(&self) -> Option<u32> {
+            Some(self.inner.id())
+        }
+    }
+
+    // close 가 회수 thread 보다 먼저 child lock 을 쥐고, 그때 자식이 아직 끝나지 않았어도 close 는 자식을 회수한 뒤에
+    // 돌아온다. 회수 thread 가 없는 session 이 이 순서를 고정한다(S20, core F61).
+    #[test]
+    fn close_reaps_a_child_whose_exit_is_not_yet_visible() {
+        use std::os::unix::process::CommandExt;
+        let inner = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .expect("spawn the session child");
+        let group = inner.id() as i32;
+        let reaped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let service = PtyService::new();
+        let session = Arc::new(Session {
+            id: "late-exit".to_string(),
+            owner: String::new(),
+            master: Mutex::new(None),
+            process_group: Some(group),
+            writer: Mutex::new(None),
+            child: Mutex::new(Box::new(LateExitChild {
+                inner,
+                checked: false,
+                reaped: Arc::clone(&reaped),
+            })),
+            next_sequence: Mutex::new(0),
+            written_output: Mutex::new(0),
+            output: Mutex::new(VecDeque::new()),
+            attachments: Mutex::new(HashMap::new()),
+            closed: Mutex::new(false),
+            reader: Mutex::new(None),
+            reaper: Mutex::new(None),
+        });
+        service
+            .sessions
+            .lock()
+            .unwrap()
+            .insert(session.id.clone(), Arc::clone(&session));
+        let closed = service.close("late-exit");
+        let reaped_at_return = reaped.load(std::sync::atomic::Ordering::SeqCst);
+        // 실패한 경우에도 자식을 남기지 않는다.
+        let cleanup = session.child.lock().unwrap().wait();
+        closed.expect("close failed");
+        cleanup.expect("reap the session child");
+        assert!(
+            reaped_at_return,
+            "close returned before the PTY child was reaped"
+        );
     }
 
     #[tokio::test]
