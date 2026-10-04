@@ -1723,6 +1723,31 @@ fn retain_keys(value: &Value) -> Result<std::collections::HashSet<String>, Strin
         .collect()
 }
 
+/// 이 연결의 표면 하나를 닫는다. 영속 등록부가 있으면 등록부에서 닫고, 이 연결의 송신기와 부착 판도 지운다.
+/// 남기면 같은 표면을 다시 열 때 지운 등록부 항목의 판과 비교되어 낡은 부착으로 거부된다(closed 알림과 close 요청).
+async fn close_connection_surface(
+    registry: Option<&Arc<PersistentRegistry>>,
+    surface_txs: &mut HashMap<String, mpsc::Sender<SurfaceCommand>>,
+    surface_epochs: &mut HashMap<String, u64>,
+    registry_key: &str,
+    owner: &str,
+) -> Result<(), String> {
+    if let Some(registry) = registry {
+        let closed = registry.close_surface(registry_key, owner).await;
+        if closed.is_ok() {
+            surface_txs.remove(registry_key);
+            surface_epochs.remove(registry_key);
+        }
+        closed
+    } else if let Some(tx) = surface_txs.remove(registry_key) {
+        tx.send(SurfaceCommand::SessionClose)
+            .await
+            .map_err(|_| "surface actor closed before close".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 fn local_surface_key(
     surface_txs: &HashMap<String, mpsc::Sender<SurfaceCommand>>,
     root: Option<&str>,
@@ -3062,22 +3087,14 @@ where
                 if env.closed == Some(true) {
                     let registry_key =
                         local_surface_key(&surface_txs, env.root.as_deref(), &surface_id);
-                    let close_result = if let Some(registry) = registry.as_ref() {
-                        // 닫은 표면의 송신기와 부착 판도 이 연결에서 지운다. 남기면 같은 표면을 다시 열 때
-                        // 지운 등록부 항목의 판과 비교되어 낡은 부착으로 거부된다.
-                        let closed = registry.close_surface(&registry_key, &owner).await;
-                        if closed.is_ok() {
-                            surface_txs.remove(&registry_key);
-                            surface_epochs.remove(&registry_key);
-                        }
-                        closed
-                    } else if let Some(tx) = surface_txs.remove(&registry_key) {
-                        tx.send(SurfaceCommand::SessionClose)
-                            .await
-                            .map_err(|_| "surface actor closed before close".to_string())
-                    } else {
-                        Ok(())
-                    };
+                    let close_result = close_connection_surface(
+                        registry.as_ref(),
+                        &mut surface_txs,
+                        &mut surface_epochs,
+                        &registry_key,
+                        &owner,
+                    )
+                    .await;
                     // 모든 closed 에 답한다. 실패하면 그 까닭을 함께 보낸다(core 의 docs/spec/sidecars.md#messages).
                     if let Err(error) = close_result {
                         let response =
@@ -3803,15 +3820,14 @@ where
                                 }
                             }
                             "close" => {
-                                let close_result = if let Some(registry) = registry.as_ref() {
-                                    registry.close_surface(&registry_key, &owner).await
-                                } else if let Some(tx) = surface_txs.remove(&registry_key) {
-                                    tx.send(SurfaceCommand::SessionClose).await.map_err(|_| {
-                                        "surface actor closed before close".to_string()
-                                    })
-                                } else {
-                                    Ok(())
-                                };
+                                let close_result = close_connection_surface(
+                                    registry.as_ref(),
+                                    &mut surface_txs,
+                                    &mut surface_epochs,
+                                    &registry_key,
+                                    &owner,
+                                )
+                                .await;
                                 if let Err(error) = close_result {
                                     let response =
                                         json!({"surface": surface_id, "body": {"error": error}});

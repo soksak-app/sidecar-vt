@@ -570,7 +570,6 @@ async fn retained(
 }
 
 // 영속 연결에서 retain 이 실제 PTY 세션의 표면 작업을 닫은 뒤에도 입력 루프는 다음 요청을 받는 즉시 처리해야 한다.
-// 검사 애플리케이션에서 retain 직후 host 가 쓴 줄이 소켓 수신 대기열에 10 초 머문 일이 있었다(G1.4-90-4-2).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_request_after_retain_closes_pty_sessions_is_handled_at_once() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -627,4 +626,43 @@ async fn a_request_after_retain_closes_pty_sessions_is_handled_at_once() {
         drop(client_write);
         let _ = tokio::time::timeout(Duration::from_secs(5), serving).await;
     }
+}
+
+#[tokio::test]
+async fn a_surface_reopened_after_its_close_request_is_not_a_stale_attachment() {
+    // 영속 연결에서 close 요청으로 닫은 표면을 다시 열면 낡은 부착이 아니라 새 표면이다. close 가 연결의 표면
+    // 채널을 남기면 다음 구성과 open 은 등록부에서 지워진 작업을 찾아 거부되고, 화면은 그려지지 않는다
+    // (core G1.4-90-4-2).
+    let (sender, mut receiver) = mpsc::channel(64);
+    let output = OutputSink::direct(sender);
+    let open = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}"#;
+    let input = format!(
+        "{open}\n{}\n{}\n{open}\n",
+        r#"{"surface":"s1","root":"/tmp","body":{"operation":"close"}}"#,
+        r#"{"surface":"s1","root":"/tmp","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}"#,
+    );
+    run_input_loop(
+        BufReader::new(input.as_bytes()),
+        output,
+        ServeOptions {
+            engine_factory: Arc::new(|| Box::new(FakeEngine::new())),
+            session_port_factory: Arc::new(|| Arc::new(FakeSessionPort::new())),
+            owner_close: None,
+            registry: Some(PersistentRegistry::new()),
+            owner: "test-owner".to_string(),
+            performance: crate::performance::PerformanceTrace::disabled(),
+        },
+    )
+    .await
+    .expect("input loop failed");
+    let mut replies = Vec::new();
+    while let Ok(line) = receiver.try_recv() {
+        replies.push(line);
+    }
+    assert!(
+        replies
+            .iter()
+            .all(|line| !line.contains("stale attachment")),
+        "the reopened surface was rejected: {replies:?}"
+    );
 }
