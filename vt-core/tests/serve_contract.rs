@@ -976,7 +976,7 @@ async fn test_selection_release_emits_one_user_copy_event() {
 }
 
 /// region에서 마지막 완전한 row 또는 column을 지난 point는 마지막 row와 마지막 column의 오른쪽 경계까지
-/// 선택한다. region 밖의 point는 error이다.
+/// 선택한다. region 을 한 device pixel 미만 지난 point 도 그렇고, 그보다 바깥의 point는 error이다.
 #[tokio::test]
 async fn test_selection_in_the_region_padding_selects_to_the_last_edge() {
     let calls = Arc::new(Mutex::new(Calls::default()));
@@ -985,7 +985,8 @@ async fn test_selection_in_the_region_padding_selects_to_the_last_edge() {
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":801,"height":383,"scale":1.0}}}}
 {"surface":"s1","body":{"operation":"selection.start","x":1.0,"y":1.0}}
 {"surface":"s1","body":{"operation":"selection.update","x":800.5,"y":382.5}}
-{"surface":"s1","body":{"operation":"selection.update","x":1.0,"y":383.0}}
+{"surface":"s1","body":{"operation":"selection.update","x":1.0,"y":383.5}}
+{"surface":"s1","body":{"operation":"selection.update","x":1.0,"y":384.0}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
     let mut writer = Vec::new();
@@ -1020,8 +1021,8 @@ async fn test_selection_in_the_region_padding_selects_to_the_last_edge() {
     );
     assert_eq!(
         *cells.lock().unwrap(),
-        vec![(0, 0), (cols, rows - 1)],
-        "the padding point selects to the right edge of the last cell: {output}"
+        vec![(0, 0), (cols, rows - 1), (0, rows - 1)],
+        "the padding point selects to the right edge of the last cell and the band point the last row: {output}"
     );
     let errors: Vec<&str> = output
         .lines()
@@ -4623,4 +4624,51 @@ async fn mouse_without_an_input_identity_is_rejected() {
     .await;
     assert!(output.contains("inputId"), "{output}");
     assert!(writes.is_empty());
+}
+
+/// host 는 native region 의 가장자리를 device pixel 에 맞추므로 region 은 view 보다 한 device pixel 미만 작을 수
+/// 있다. 그 띠의 point 는 오류가 아니고, 더 바깥의 point 는 그 mouse 연산의 inputId 를 담은 결과로 오류를 알린다.
+#[tokio::test]
+async fn a_mouse_point_in_the_snapping_band_is_accepted_and_a_failure_keeps_its_input_identity() {
+    let request = |id: &str, y: f64| {
+        serde_json::json!({"surface":"s1","body": {
+            "operation":"mouse", "inputId":id, "phase":"move", "x":1.0, "y":y, "pressed":false,
+            "shift":false,"alt":false,"ctrl":false
+        }})
+        .to_string()
+            + "\n"
+    };
+    let requests = request("band", 384.5) + &request("outside", 385.0) + &request("after", 1.0);
+    let (output, _, _) = serve_scroll(None, &requests).await;
+    let results = output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| value["body"]["event"] == "mouse")
+        .map(|value| {
+            (
+                value["body"]["inputId"].clone(),
+                value["body"]["error"].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        results,
+        vec![
+            (serde_json::json!("band"), serde_json::Value::Null),
+            (
+                serde_json::json!("outside"),
+                serde_json::json!(
+                    "invalidParams: selection coordinates are outside the terminal region: 1,385"
+                )
+            ),
+            (serde_json::json!("after"), serde_json::Value::Null),
+        ],
+        "{output}"
+    );
+    assert!(
+        !output
+            .lines()
+            .any(|line| line.contains(r#""error":"invalidParams""#)),
+        "a mouse failure is a mouse result, not a bare error: {output}"
+    );
 }

@@ -2059,7 +2059,15 @@ async fn surface_task(
                             .and_then(|state| state.selection_cell(x, y)) {
                             Ok(cell) => cell,
                             Err(reason) => {
-                                let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": reason}});
+                                // 실패도 그 연산의 mouse 결과다. 같은 inputId 를 실어 page 가 다음 결과와 짝을 잃지 않는다.
+                                let phase_name = match phase { MousePhase::Down => "down", MousePhase::Move => "move", MousePhase::Up => "up" };
+                                let response = json!({"surface": surface_id, "body": {
+                                    "event": "mouse", "inputId": input_id, "phase": phase_name, "x": null, "y": null,
+                                    "pressed": pressed, "shift": shift, "alt": alt, "ctrl": ctrl,
+                                    "reported": false, "written": false,
+                                    "modes": {"click": modes.mouse_click, "drag": modes.mouse_drag, "motion": modes.mouse_motion},
+                                    "bytes": null, "error": format!("invalidParams: {reason}")
+                                }});
                                 if output_tx.send(response.to_string()).await.is_err() { return; }
                                 continue;
                             }

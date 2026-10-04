@@ -90,7 +90,10 @@ impl ImageState {
         }
         let width = f64::from(self.width_px) / f64::from(self.scale);
         let height = f64::from(self.height_px) / f64::from(self.scale);
-        if x >= width || y >= height {
+        // host 는 region 의 가장자리를 device pixel 에 맞추므로 region 은 page 의 view 보다 한 device pixel 미만
+        // 작을 수 있다. 그 띠의 point 는 region 의 여백처럼 마지막 열과 행이다.
+        let band = 1.0 / f64::from(self.scale);
+        if x >= width + band || y >= height + band {
             return Err(format!(
                 "selection coordinates are outside the terminal region: {x},{y}"
             ));
