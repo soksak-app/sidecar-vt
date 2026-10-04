@@ -1,0 +1,23 @@
+name: ci
+# build-machine: skip smoke reason=the sidecar has no application to start; its recovery test runs the built service
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - name: Build
+        run: make build
+      - name: Test
+        run: make test
