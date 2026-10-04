@@ -83,9 +83,13 @@ fn wait(service: &mut Service) {
     assert_eq!(waited, pid as i32, "waitpid failed");
 }
 
+/// 검사 service 디렉터리의 경로.
+fn service_directory_name() -> PathBuf {
+    std::env::temp_dir().join(format!("vt-cleanup-{}-{}", std::process::id(), uuid()))
+}
+
 fn service_dir() -> Directory {
-    let directory =
-        std::env::temp_dir().join(format!("vt-cleanup-{}-{}", std::process::id(), uuid()));
+    let directory = service_directory_name();
     std::fs::create_dir_all(&directory).expect("create the service directory");
     std::fs::set_permissions(
         &directory,
@@ -95,11 +99,16 @@ fn service_dir() -> Directory {
     Directory(directory)
 }
 
-fn uuid() -> u128 {
-    std::time::SystemTime::now()
+/// 이 process 안에서 겹치지 않는 이름 조각. 시계는 마이크로초 단위라 같은 순간에 만든 이름이 같아지므로 증가 번호를
+/// 붙인다.
+fn uuid() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
-        .as_nanos()
+        .as_nanos();
+    let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{time}-{next}")
 }
 
 #[test]
@@ -153,4 +162,33 @@ fn a_new_service_removes_the_socket_directory_of_a_killed_one() {
         std::fs::remove_dir_all(&socket_dir).expect("remove the socket directory the service left");
     }
     assert!(!left, "the next service left {}", socket_dir.display());
+}
+
+// 같은 process 에서 병렬로 도는 검사들의 service 디렉터리는 서로 달라야 한다. 이름이 같으면 한 검사의 service 가
+// 다른 검사의 잠금이나 endpoint 를 보고 실패한다(S15).
+#[test]
+fn service_directories_are_unique_within_the_test_process() {
+    // 검사들처럼 여러 thread 가 같은 순간에 이름을 만든다.
+    let start = std::sync::Arc::new(std::sync::Barrier::new(16));
+    let threads: Vec<_> = (0..16)
+        .map(|_| {
+            let start = start.clone();
+            std::thread::spawn(move || {
+                start.wait();
+                (0..20)
+                    .map(|_| service_directory_name())
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect();
+    let names: Vec<PathBuf> = threads
+        .into_iter()
+        .flat_map(|thread| thread.join().expect("name thread"))
+        .collect();
+    let unique: std::collections::HashSet<&PathBuf> = names.iter().collect();
+    assert_eq!(
+        unique.len(),
+        names.len(),
+        "service directory names repeated"
+    );
 }
