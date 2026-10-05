@@ -29,6 +29,8 @@ pub struct ImageState {
     pub presentation_events: Vec<String>,
     /// 대기 중인 전송을 보낸 시각. consumed 대기 시간의 계기다(V5-104).
     pub sent_at: Option<std::time::Instant>,
+    /// 답을 기다리는 전송 이미지를 나른 연결의 보관소. 표면이 답 전에 이 상태를 놓으면 전송 이미지를 그곳에 맡긴다.
+    pub carrier: Option<std::sync::Arc<crate::protocol::TransferStore>>,
 }
 
 /// 호스트가 configure 로 정한 래스터: 이름, 세대, 래스터 번호, 픽셀 크기, 배율.
@@ -76,6 +78,7 @@ impl ImageState {
             inline_images: Vec::new(),
             presentation_events: Vec::new(),
             sent_at: None,
+            carrier: None,
         })
     }
 

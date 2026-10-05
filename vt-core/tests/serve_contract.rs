@@ -4672,3 +4672,137 @@ async fn a_mouse_point_in_the_snapping_band_is_accepted_and_a_failure_keeps_its_
         "a mouse failure is a mouse result, not a bare error: {output}"
     );
 }
+
+#[link(name = "IOSurface", kind = "framework")]
+extern "C" {
+    // 전역 IOSurface 를 ID 로 찾는다. 호스트가 전송 이미지를 찾는 방법과 같다.
+    fn IOSurfaceLookup(id: u32) -> *const std::ffi::c_void;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFRelease(object: *const std::ffi::c_void);
+}
+
+/// 그 ID 의 전송 이미지가 아직 있는지. 찾은 참조는 바로 놓아 수명을 늘리지 않는다.
+fn transfer_image_exists(id: u32) -> bool {
+    let surface = unsafe { IOSurfaceLookup(id) };
+    if surface.is_null() {
+        return false;
+    }
+    unsafe { CFRelease(surface) };
+    true
+}
+
+/// 표면을 열고 첫 표시 요청을 받는다. 호스트가 아직 답하지 않은 그 전송 이미지의 ID 를 돌려준다.
+async fn open_with_unanswered_transfer<R: tokio::io::AsyncBufRead + Unpin>(
+    to_serve: &mut tokio::io::DuplexStream,
+    lines: &mut tokio::io::Lines<R>,
+) -> u32 {
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    loop {
+        let line = next_line_except_screen(lines).await;
+        let message: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if let Some(image) = message["body"].get("image") {
+            assert_eq!(image["sequence"], 1, "{line}");
+            let id = image["token"]["id"].as_u64().expect("the token has no id");
+            return u32::try_from(id).expect("the token id is not a u32");
+        }
+    }
+}
+
+/// close 의 답을 기다린다.
+async fn wait_for_close_reply<R: tokio::io::AsyncBufRead + Unpin>(lines: &mut tokio::io::Lines<R>) {
+    loop {
+        let line = next_line_except_screen(lines).await;
+        let message: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if message["surface"] == "s1" && message["body"] == serde_json::json!({}) {
+            return;
+        }
+        assert!(message["body"].get("error").is_none(), "{line}");
+    }
+}
+
+/// 닫힌 표면의 전송 이미지도 호스트가 그 표시에 답할 때까지 남는다. 답이 오면 놓고, 그 답은 표면을 다시 만들지 않는다.
+#[tokio::test]
+async fn a_closed_surface_keeps_its_unanswered_transfer_image_until_the_host_answers() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new("transfer".into(), calls.clone()));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
+    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+
+    let id = open_with_unanswered_transfer(&mut to_serve, &mut lines).await;
+    to_serve
+        .write_all(
+            br#"{"surface":"s1","body":{"operation":"close"}}
+"#,
+        )
+        .await
+        .unwrap();
+    wait_for_close_reply(&mut lines).await;
+    assert!(
+        transfer_image_exists(id),
+        "the service released transfer image {id} on close before the host answered its frame"
+    );
+
+    // 답 뒤의 close 답은 입력 루프가 그 답을 처리했음을 알린다.
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
+{"surface":"s1","body":{"operation":"close"}}
+"#).await.unwrap();
+    wait_for_close_reply(&mut lines).await;
+    assert!(
+        !transfer_image_exists(id),
+        "the service kept transfer image {id} after the host answered its frame"
+    );
+
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+    let calls = calls.lock().unwrap();
+    assert_eq!(
+        (calls.opens.len(), calls.closes.len()),
+        (1, 1),
+        "the answer of a closed surface opened or closed a session: {calls:?}"
+    );
+}
+
+/// 답이 오지 않은 채 연결이 끝나면 더 올 답이 없으므로 닫힌 표면의 전송 이미지를 놓는다.
+#[tokio::test]
+async fn a_closed_surface_releases_its_unanswered_transfer_image_when_the_connection_ends() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new("transfer".into(), calls.clone()));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
+    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+
+    let id = open_with_unanswered_transfer(&mut to_serve, &mut lines).await;
+    to_serve
+        .write_all(
+            br#"{"surface":"s1","body":{"operation":"close"}}
+"#,
+        )
+        .await
+        .unwrap();
+    wait_for_close_reply(&mut lines).await;
+    assert!(
+        transfer_image_exists(id),
+        "the service released transfer image {id} on close before the host answered its frame"
+    );
+
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+    assert!(
+        !transfer_image_exists(id),
+        "the service kept transfer image {id} after the connection that carried it ended"
+    );
+}

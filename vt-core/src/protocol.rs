@@ -10,63 +10,141 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant, MissedTickBehavior};
 
+/// 연결 하나의 출력 송신기와, 그 연결이 나른 전송 이미지 가운데 호스트의 답을 기다리며 남은 것.
+#[derive(Clone)]
+struct Connection {
+    sender: mpsc::Sender<String>,
+    transfers: Arc<TransferStore>,
+}
+
+impl Connection {
+    fn new(sender: mpsc::Sender<String>) -> Self {
+        Self {
+            sender,
+            transfers: TransferStore::new(),
+        }
+    }
+}
+
+/// 연결 하나가 나른 전송 이미지 가운데, 그 이미지를 그린 표면이 놓은 뒤에도 호스트의 답을 기다리는 것.
+/// 공급자는 답을 받기 전에 전송 이미지를 고치거나 다시 쓰지 않는다(core 의 docs/spec/native-surfaces.md#image-regions).
+/// 답 전에 놓으면 호스트가 그 IOSurface 를 찾지 못한다. 답이 오거나, 연결이 끝나 더 올 답이 없으면 놓는다.
+pub struct TransferStore {
+    /// None 은 끝난 연결이다.
+    images: std::sync::Mutex<Option<Vec<RetainedTransfer>>>,
+}
+
+struct RetainedTransfer {
+    surface: String,
+    name: String,
+    sequence: u32,
+    // 놓을 때까지 IOSurface 를 붙든다.
+    _frame: crate::platform::Frame,
+}
+
+impl TransferStore {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            images: std::sync::Mutex::new(Some(Vec::new())),
+        })
+    }
+
+    fn images(&self) -> std::sync::MutexGuard<'_, Option<Vec<RetainedTransfer>>> {
+        // 잠금 안에서는 목록만 바꾸고 panic 하는 일을 하지 않으므로 잠금은 오염되지 않는다.
+        self.images.lock().expect("transfer store lock is poisoned")
+    }
+
+    /// 끝난 연결이면 답이 올 수 없으므로 바로 놓는다.
+    fn retain(&self, transfer: RetainedTransfer) {
+        if let Some(images) = self.images().as_mut() {
+            images.push(transfer);
+        }
+    }
+
+    /// 답에 맞는 전송 이미지를 놓고, 그런 이미지가 있었는지 돌려준다. 호스트는 표시 요청을 받은 순서로 답하므로,
+    /// 같은 표면, 이름, 순번의 이미지가 여럿이면 먼저 보낸 것이 그 답의 이미지이다.
+    fn answer(&self, surface: &str, name: &str, sequence: u64) -> bool {
+        let mut images = self.images();
+        let Some(images) = images.as_mut() else {
+            return false;
+        };
+        let Some(index) = images.iter().position(|image| {
+            image.surface == surface && image.name == name && u64::from(image.sequence) == sequence
+        }) else {
+            return false;
+        };
+        images.remove(index);
+        true
+    }
+
+    /// 연결의 입력이 끝났다. 더 올 답이 없으므로 남은 전송 이미지를 모두 놓는다.
+    fn end(&self) {
+        self.images().take();
+    }
+}
+
 #[derive(Clone)]
 struct OutputSink {
-    sender: Arc<tokio::sync::Mutex<Option<mpsc::Sender<String>>>>,
+    connection: Arc<tokio::sync::Mutex<Option<Connection>>>,
     /// 영속 서비스의 연결이다. 클라이언트의 출력이 닫히면 오류 대신 분리한다.
     detachable: bool,
 }
 
 impl OutputSink {
-    fn direct(sender: mpsc::Sender<String>) -> Self {
+    fn direct(connection: Connection) -> Self {
         Self {
-            sender: Arc::new(tokio::sync::Mutex::new(Some(sender))),
+            connection: Arc::new(tokio::sync::Mutex::new(Some(connection))),
             detachable: false,
         }
     }
 
     /// 영속 서비스의 연결. 세션은 클라이언트가 끊겨도 유지되므로(docs/spec/terminal-runtime.md), 입력의 끝을
     /// 읽기 전에 출력 쪽이 먼저 닫힌 클라이언트도 분리한다. 다시 붙은 클라이언트는 현재 화면을 받는다.
-    fn detachable(sender: mpsc::Sender<String>) -> Self {
+    fn detachable(connection: Connection) -> Self {
         Self {
-            sender: Arc::new(tokio::sync::Mutex::new(Some(sender))),
+            connection: Arc::new(tokio::sync::Mutex::new(Some(connection))),
             detachable: true,
         }
     }
 
     async fn send(&self, message: String) -> Result<(), ()> {
-        let sender = self.sender.lock().await.clone();
-        match sender {
-            Some(sender) => match sender.send(message).await {
-                Ok(()) => Ok(()),
+        self.send_carried(message).await.map(|_| ())
+    }
+
+    /// 보내고, 메시지를 나른 연결의 전송 이미지 보관소를 돌려준다. 붙은 연결이 없으면 나른 연결도 없다.
+    async fn send_carried(&self, message: String) -> Result<Option<Arc<TransferStore>>, ()> {
+        let connection = self.connection.lock().await.clone();
+        match connection {
+            Some(connection) => match connection.sender.send(message).await {
+                Ok(()) => Ok(Some(connection.transfers)),
                 Err(_) if self.detachable => {
-                    let mut current = self.sender.lock().await;
+                    let mut current = self.connection.lock().await;
                     if current
                         .as_ref()
-                        .is_some_and(|current| current.same_channel(&sender))
+                        .is_some_and(|current| current.sender.same_channel(&connection.sender))
                     {
                         *current = None;
                     }
-                    Ok(())
+                    Ok(None)
                 }
                 Err(_) => Err(()),
             },
-            None => Ok(()),
+            None => Ok(None),
         }
     }
 
-    async fn sender(&self) -> Option<mpsc::Sender<String>> {
-        self.sender.lock().await.clone()
+    async fn connection(&self) -> Option<Connection> {
+        self.connection.lock().await.clone()
     }
 
-    async fn replace_sender(&self, sender: Option<mpsc::Sender<String>>) {
-        *self.sender.lock().await = sender;
+    async fn replace_connection(&self, connection: Option<Connection>) {
+        *self.connection.lock().await = connection;
     }
 
-    async fn detach_sender(&self, previous: &Option<mpsc::Sender<String>>) {
-        let mut current = self.sender.lock().await;
-        if let (Some(sender), Some(previous)) = (current.as_ref(), previous.as_ref()) {
-            if sender.same_channel(previous) {
+    async fn detach_connection(&self, previous: &Option<Connection>) {
+        let mut current = self.connection.lock().await;
+        if let (Some(connection), Some(previous)) = (current.as_ref(), previous.as_ref()) {
+            if connection.sender.same_channel(&previous.sender) {
                 *current = None;
             }
         }
@@ -246,7 +324,10 @@ impl PersistentRegistry {
             .next_epoch
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             + 1;
-        entry.output.replace_sender(output.sender().await).await;
+        entry
+            .output
+            .replace_connection(output.connection().await)
+            .await;
         Ok((entry.tx.clone(), entry.epoch))
     }
 
@@ -1161,11 +1242,14 @@ async fn present_screen(
     });
     // 페이지의 화면은 이 래스터가 그린 화면이다. 둘을 함께 보내야 커서와 글자 상태가 화면 픽셀과 같다.
     // 이 래스터가 그린 인라인 그림의 상태 이벤트도 그 뒤에 보낸다.
-    if output_tx.send(image_envelope.to_string()).await.is_err()
-        || output_tx
-            .send(screen_event(surface_id, screen).to_string())
-            .await
-            .is_err()
+    match output_tx.send_carried(image_envelope.to_string()).await {
+        Ok(carrier) => state.carrier = carrier,
+        Err(()) => return false,
+    }
+    if output_tx
+        .send(screen_event(surface_id, screen).to_string())
+        .await
+        .is_err()
     {
         return false;
     }
@@ -1188,6 +1272,42 @@ fn hold_while_presenting(image_state: &mut Option<ImageState>) -> bool {
         }
         _ => false,
     }
+}
+
+/// 표면이 이미지 상태를 놓는다. 호스트가 아직 답하지 않은 전송 이미지는 그 이미지를 나른 연결에 맡겨 답이 오거나
+/// 연결이 끝날 때까지 남긴다. 나른 연결이 없으면 올 답도 없다. 남은 인라인 그림을 돌려준다.
+fn release_image_state(surface_id: &str, state: ImageState) -> Vec<InlineImagePlacement> {
+    let ImageState {
+        name,
+        frame,
+        sequence,
+        pending_draw,
+        carrier,
+        inline_images,
+        ..
+    } = state;
+    if let (true, Some(carrier)) = (pending_draw, carrier) {
+        carrier.retain(RetainedTransfer {
+            surface: surface_id.to_string(),
+            name,
+            sequence,
+            _frame: frame,
+        });
+    }
+    inline_images
+}
+
+/// 표시 요청에 대한 호스트의 답(consumed 또는 오류)의 이름과 순번.
+fn image_answer(image: &serde_json::Map<String, Value>) -> Option<(&str, u64)> {
+    let answer = match image.get("consumed") {
+        Some(consumed) => consumed.as_object()?,
+        None if image.contains_key("error") => image,
+        None => return None,
+    };
+    Some((
+        answer.get("name")?.as_str()?,
+        answer.get("sequence")?.as_u64()?,
+    ))
 }
 
 async fn send_state(
@@ -1883,7 +2003,7 @@ async fn surface_task(
                         // 이전 native image만 폐기하여 재연결하는
                         // client가 새 Configure message를 제공하게 한다.
                         if let Some(previous_state) = image_state.take() {
-                            preserved_inline_images = previous_state.inline_images;
+                            preserved_inline_images = release_image_state(&surface_id, previous_state);
                         }
                         pending_configuration = None;
                         if !headless {
@@ -2627,6 +2747,10 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::SessionClose { result } => {
+                        // 닫기의 답보다 먼저 맡겨야, 답을 받은 호스트가 보내는 표시의 답이 그 전송 이미지를 찾는다.
+                        if let Some(state) = image_state.take() {
+                            release_image_state(&surface_id, state);
+                        }
                         let closed = match session_id.as_deref() {
                             Some(sid) => session_port
                                 .close(sid)
@@ -2685,7 +2809,9 @@ async fn surface_task(
                                     "answer": if consumed.is_some() { "consumed" } else { "error" },
                                 }));
                             }
-                            image_state.as_mut().unwrap().pending_draw = false;
+                            let state = image_state.as_mut().unwrap();
+                            state.pending_draw = false;
+                            state.carrier = None;
                             if let Some(configuration) = pending_configuration.take() {
                                 let new_state = match ImageState::new(&configuration, &terminal_font, terminal_font_size) {
                                     Ok(state) => state,
@@ -2937,14 +3063,21 @@ where
 {
     let buf_reader = BufReader::new(PolledReader::new(reader, options.performance.clone()));
     let (output_sender, output_rx) = mpsc::channel::<String>(100);
+    let connection = Connection::new(output_sender);
+    let transfers = connection.transfers.clone();
     let output_tx = if options.registry.is_some() {
-        OutputSink::detachable(output_sender)
+        OutputSink::detachable(connection)
     } else {
-        OutputSink::direct(output_sender)
+        OutputSink::direct(connection)
     };
 
     let output_trace = options.performance.clone();
-    let input_task = run_input_loop(buf_reader, output_tx, options);
+    let input_task = async {
+        let result = run_input_loop(buf_reader, output_tx, options).await;
+        // 입력이 끝난 연결로는 답이 오지 않는다.
+        transfers.end();
+        result
+    };
     let output_task = run_output_loop(writer, output_rx, output_trace);
 
     tokio::try_join!(input_task, output_task)?;
@@ -2974,7 +3107,11 @@ where
     let mut surface_epochs: HashMap<String, u64> = HashMap::new();
     let mut tasks = tokio::task::JoinSet::new();
     let mut line = String::new();
-    let connection_sender = output_tx.sender().await;
+    let connection_output = output_tx.connection().await;
+    // 이 연결이 나른 전송 이미지 가운데 표면이 놓은 것. 그 답은 이 연결로 온다.
+    let transfers = connection_output
+        .as_ref()
+        .map(|connection| connection.transfers.clone());
     // 입력이 끝났을 때 이미 끝난 표면 작업. serve 의 끝에서 오류로 알린다.
     let mut ended_surfaces = Vec::new();
 
@@ -2993,7 +3130,7 @@ where
                     }
                 }
             } else {
-                output_tx.detach_sender(&connection_sender).await;
+                output_tx.detach_connection(&connection_output).await;
             }
             break;
         }
@@ -3133,6 +3270,19 @@ where
                         break;
                     }
                 } else if let Some(body) = env.body {
+                    // 닫힌 표면이 남긴 전송 이미지의 답이면 그 이미지를 놓는다. 그 답은 표면을 다시 만들지 않는다.
+                    if let Some((name, sequence)) = body
+                        .get("image")
+                        .and_then(Value::as_object)
+                        .and_then(image_answer)
+                    {
+                        if transfers
+                            .as_ref()
+                            .is_some_and(|transfers| transfers.answer(&surface_id, name, sequence))
+                        {
+                            continue;
+                        }
+                    }
                     let registry_key =
                         local_surface_key(&surface_txs, env.root.as_deref(), &surface_id);
                     let tx = if let Some(tx) = surface_txs.get(&registry_key) {

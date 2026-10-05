@@ -183,7 +183,7 @@ fn test_base64_decode() {
 #[tokio::test]
 async fn previous_client_eof_preserves_new_attachment_output() {
     let (previous_sender, _previous_receiver) = mpsc::channel(4);
-    let output = OutputSink::detachable(previous_sender);
+    let output = OutputSink::detachable(Connection::new(previous_sender));
     let (client, reader) = tokio::io::duplex(64);
     let input = run_input_loop(
         BufReader::new(reader),
@@ -205,7 +205,9 @@ async fn previous_client_eof_preserves_new_attachment_output() {
         _ = std::future::ready(()) => {}
     }
     let (new_sender, mut new_receiver) = mpsc::channel(4);
-    output.replace_sender(Some(new_sender.clone())).await;
+    output
+        .replace_connection(Some(Connection::new(new_sender.clone())))
+        .await;
     drop(client);
     tokio::time::timeout(Duration::from_secs(2), input)
         .await
@@ -213,9 +215,9 @@ async fn previous_client_eof_preserves_new_attachment_output() {
         .expect("previous input failed");
     assert!(
         output
-            .sender()
+            .connection()
             .await
-            .is_some_and(|sender| sender.same_channel(&new_sender)),
+            .is_some_and(|connection| connection.sender.same_channel(&new_sender)),
         "previous client EOF removed the new attachment output sender"
     );
     output
@@ -235,15 +237,15 @@ async fn previous_client_eof_preserves_new_attachment_output() {
 async fn a_persistent_sink_detaches_when_its_client_output_closed_and_a_direct_sink_fails() {
     // 영속 서비스의 세션은 클라이언트가 끊겨도 유지된다. 출력 쪽이 먼저 닫힌 연결로 보낸 출력은 분리로 다룬다.
     let (sender, receiver) = mpsc::channel(4);
-    let persistent = OutputSink::detachable(sender);
+    let persistent = OutputSink::detachable(Connection::new(sender));
     drop(receiver);
     assert!(persistent.send("screen".to_string()).await.is_ok());
     assert!(
-        persistent.sender().await.is_none(),
+        persistent.connection().await.is_none(),
         "the closed client must be detached"
     );
     let (sender, receiver) = mpsc::channel(4);
-    let direct = OutputSink::direct(sender);
+    let direct = OutputSink::direct(Connection::new(sender));
     drop(receiver);
     assert!(
         direct.send("screen".to_string()).await.is_err(),
@@ -278,7 +280,7 @@ async fn persistent_registry_rejects_stale_owner_and_awaits_actor_close() {
         "root\0surface".to_string(),
         PersistentEntry {
             tx,
-            output: OutputSink::direct(output_sender),
+            output: OutputSink::direct(Connection::new(output_sender)),
             actor,
             epoch: 1,
             owner: "client-a".to_string(),
@@ -286,7 +288,11 @@ async fn persistent_registry_rejects_stale_owner_and_awaits_actor_close() {
     );
     let (new_sender, _new_receiver) = mpsc::channel(4);
     let attached = registry
-        .attach("root\0surface", "client-a", &OutputSink::direct(new_sender))
+        .attach(
+            "root\0surface",
+            "client-a",
+            &OutputSink::direct(Connection::new(new_sender)),
+        )
         .await
         .unwrap();
     assert!(attached.1 > 1);
@@ -294,7 +300,7 @@ async fn persistent_registry_rejects_stale_owner_and_awaits_actor_close() {
         .attach(
             "root\0surface",
             "client-b",
-            &OutputSink::direct(mpsc::channel(1).0)
+            &OutputSink::direct(Connection::new(mpsc::channel(1).0))
         )
         .await
         .is_err());
@@ -328,7 +334,7 @@ async fn persistent_registry_retain_closes_only_the_owners_unlisted_sessions() {
             key.to_string(),
             PersistentEntry {
                 tx,
-                output: OutputSink::direct(output),
+                output: OutputSink::direct(Connection::new(output)),
                 actor,
                 epoch: 1,
                 owner: owner.to_string(),
@@ -365,7 +371,7 @@ async fn assert_cleanup_closes_remaining_actors(retain: bool) {
             PersistentEntry {
                 tx,
                 actor,
-                output: OutputSink::direct(output),
+                output: OutputSink::direct(Connection::new(output)),
                 epoch: 1,
                 owner: "client".to_string(),
             },
@@ -416,7 +422,7 @@ async fn cleanup_reports_each_failed_surface() {
                 PersistentEntry {
                     tx,
                     actor: tokio::spawn(async {}),
-                    output: OutputSink::direct(output),
+                    output: OutputSink::direct(Connection::new(output)),
                     epoch: 1,
                     owner: "client".to_string(),
                 },
@@ -472,7 +478,7 @@ async fn persistent_registry_close_owner_keeps_other_client_sessions() {
         "root\0a".to_string(),
         PersistentEntry {
             tx: a_tx,
-            output: OutputSink::direct(a_output),
+            output: OutputSink::direct(Connection::new(a_output)),
             actor: a_actor,
             epoch: 1,
             owner: "client-a".to_string(),
@@ -482,7 +488,7 @@ async fn persistent_registry_close_owner_keeps_other_client_sessions() {
         "root\0b".to_string(),
         PersistentEntry {
             tx: b_tx,
-            output: OutputSink::direct(b_output),
+            output: OutputSink::direct(Connection::new(b_output)),
             actor: b_actor,
             epoch: 1,
             owner: "client-b".to_string(),
@@ -512,7 +518,7 @@ async fn persistent_surface_close_reports_an_actor_that_does_not_answer() {
         "root\0surface".to_string(),
         PersistentEntry {
             tx,
-            output: OutputSink::direct(output),
+            output: OutputSink::direct(Connection::new(output)),
             actor,
             epoch: 1,
             owner: "client".to_string(),
@@ -531,7 +537,7 @@ async fn persistent_surface_close_reports_an_actor_that_does_not_answer() {
 async fn a_surface_reopened_after_its_closed_notice_is_not_a_stale_attachment() {
     // 창이 닫혀 closed 알림을 받은 표면을 같은 연결에서 다시 열면 낡은 부착이 아니라 새 표면이다.
     let (sender, mut receiver) = mpsc::channel(64);
-    let output = OutputSink::direct(sender);
+    let output = OutputSink::direct(Connection::new(sender));
     let open = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}"#;
     let input = format!(
         "{open}\n{}\n{open}\n{}\n",
@@ -645,7 +651,7 @@ async fn a_surface_reopened_after_its_close_request_is_not_a_stale_attachment() 
     // 채널을 남기면 다음 구성과 open 은 등록부에서 지워진 작업을 찾아 거부되고, 화면은 그려지지 않는다
     // (core G1.4-90-4-2).
     let (sender, mut receiver) = mpsc::channel(64);
-    let output = OutputSink::direct(sender);
+    let output = OutputSink::direct(Connection::new(sender));
     let open = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}"#;
     let input = format!(
         "{open}\n{}\n{}\n{open}\n",
@@ -689,7 +695,7 @@ async fn assert_closed_answer_follows_the_session_close(registry: Option<Arc<Per
     let (mut client, reader) = tokio::io::duplex(4096);
     let input = run_input_loop(
         BufReader::new(reader),
-        OutputSink::direct(sender),
+        OutputSink::direct(Connection::new(sender)),
         ServeOptions {
             engine_factory: Arc::new(|| Box::new(FakeEngine::new())),
             session_port_factory: Arc::new(move || Arc::clone(&port) as Arc<dyn SessionPort>),
