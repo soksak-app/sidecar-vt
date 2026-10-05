@@ -87,6 +87,36 @@ pub fn kill_process_group(
     }
 }
 
+/// 자식 pid 가 끝날 때까지 기다리되 회수하지 않는다(waitid 의 WNOWAIT). 자식은 회수될 때까지 좀비로 남으므로
+/// 그 pid 는 다른 프로세스에 다시 쓰이지 않는다.
+pub fn wait_for_exit(#[cfg(unix)] pid: u32, #[cfg(not(unix))] _pid: u32) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        loop {
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let result = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            };
+            if result == 0 {
+                return Ok(());
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(format!("wait for PTY child {pid} to exit: {error}"));
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        Err("waiting for a PTY child is not implemented on this platform".to_string())
+    }
+}
+
 /// Rust test process 내부와 process 사이에서 실제 PTY test를 직렬화한다.
 #[cfg(test)]
 pub(crate) fn native_pty_test_lock() -> NativePtyTestLock {

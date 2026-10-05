@@ -4,12 +4,14 @@
 //! 의도적으로 PTY handle로 표현하지 않는다. attachment를 drop하면 그 client로의
 //! 전달만 멈추고, session 종료는 명시적인 close가 담당한다.
 
-use crate::platform::pty::{kill_process_group, pending_input, process_group_leader};
+use crate::platform::pty::{
+    kill_process_group, pending_input, process_group_leader, wait_for_exit,
+};
 use crate::protocol::DaemonEvent;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use uuid::Uuid;
 
@@ -57,13 +59,23 @@ pub struct PtyMeasurement {
     pub written: u64,
 }
 
+/// session 의 자식과 회수 thread 의 결과. 회수 thread 만 자식을 회수하고, 이 lock 을 쥔 채 회수하고 결과를 적는다.
+/// 그러므로 reaped 가 None 인 동안 이 lock 을 쥔 쪽이 보는 pid 는 이 자식을 가리킨다.
+struct SessionChild {
+    child: Box<dyn Child + Send>,
+    /// 회수 thread 의 결과. None 이면 회수 thread 가 아직 끝나지 않았다.
+    reaped: Option<Result<(), String>>,
+}
+
 struct Session {
     id: String,
     owner: String,
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     process_group: Option<i32>,
     writer: Mutex<Option<Box<dyn Write + Send>>>,
-    child: Mutex<Box<dyn Child + Send>>,
+    child: Mutex<SessionChild>,
+    /// 회수 thread 가 child 의 reaped 를 적은 뒤에 알린다.
+    child_reaped: Condvar,
     next_sequence: Mutex<i64>,
     written_output: Mutex<u64>,
     output: Mutex<VecDeque<(i64, Vec<u8>)>>,
@@ -168,7 +180,11 @@ impl PtyService {
             master: Mutex::new(Some(pair.master)),
             process_group,
             writer: Mutex::new(Some(writer)),
-            child: Mutex::new(child),
+            child: Mutex::new(SessionChild {
+                child,
+                reaped: None,
+            }),
+            child_reaped: Condvar::new(),
             next_sequence: Mutex::new(0),
             written_output: Mutex::new(0),
             output: Mutex::new(VecDeque::with_capacity(RETAINED_OUTPUT)),
@@ -327,19 +343,22 @@ impl PtyService {
         session.master.lock().unwrap().take();
         let kill_result = {
             let process_group_result = kill_process_group(session.process_group);
-            // 자식을 회수한 뒤에 돌아온다. 회수 thread 가 child lock 을 먼저 쥐었으면 그 wait 가 끝난 뒤 이 lock 을
-            // 얻고 try_wait 는 기록된 종료 상태를 돌려준다. close 가 먼저 쥐었으면 여기서 끝내고 회수한다. 이 lock 을
-            // 쥔 동안 자식은 회수되지 않으므로 그 pid 는 다른 프로세스를 가리키지 않는다.
-            let mut child = session.child.lock().unwrap();
-            let child_result = match child.try_wait() {
-                Ok(Some(_status)) => Ok(()),
-                Ok(None) => kill_child(child.as_ref()).and_then(|()| {
+            // process group 신호가 자식에 닿지 않았을 수 있으므로 자식에 pid 로 SIGKILL 을 보내고, 회수 thread 가 자식을
+            // 회수한 뒤에 돌아온다. 회수 thread 는 child lock 을 쥐지 않고 기다리고 이 lock 을 쥔 채 회수하므로,
+            // reaped 가 None 인 동안 이 lock 을 쥐고 보내는 신호는 다른 프로세스에 가지 않는다.
+            let child = session.child.lock().unwrap();
+            let child_result = match &child.reaped {
+                Some(result) => result.clone(),
+                None => kill_child(child.child.as_ref()).and_then(|()| {
+                    let child = session
+                        .child_reaped
+                        .wait_while(child, |child| child.reaped.is_none())
+                        .unwrap();
                     child
-                        .wait()
-                        .map(|_status| ())
-                        .map_err(|error| format!("wait PTY: {error}"))
+                        .reaped
+                        .clone()
+                        .expect("wait_while returns after the reaper recorded its result")
                 }),
-                Err(wait_error) => Err(format!("check PTY child: {wait_error}")),
             };
             match (process_group_result, child_result) {
                 (Err(group_error), _) => Err(group_error),
@@ -386,7 +405,7 @@ impl PtyService {
 
     pub fn process_id(&self, session_id: &str) -> Result<u32, String> {
         let session = self.session(session_id)?;
-        let process_id = session.child.lock().unwrap().process_id();
+        let process_id = session.child.lock().unwrap().child.process_id();
         process_id.ok_or_else(|| "PTY child has no process id".to_string())
     }
 
@@ -445,7 +464,8 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
     }
 }
 
-/// session 의 자식에 SIGKILL 을 보낸다. 부르는 쪽은 child lock 을 쥐고 자식이 아직 회수되지 않았음을 확인했다.
+/// session 의 자식에 SIGKILL 을 보낸다. 부르는 쪽은 child lock 을 쥐고 회수 thread 가 자식을 아직 회수하지 않았음을
+/// 확인했다.
 fn kill_child(child: &(dyn Child + Send)) -> Result<(), String> {
     let pid = child
         .process_id()
@@ -455,20 +475,39 @@ fn kill_child(child: &(dyn Child + Send)) -> Result<(), String> {
         nix::unistd::Pid::from_raw(pid),
         nix::sys::signal::Signal::SIGKILL,
     ) {
-        // ESRCH: 자식이 이미 끝나 회수를 기다린다. 뒤의 wait 가 회수한다.
+        // ESRCH: 자식이 이미 끝나 회수를 기다린다. 회수 thread 가 회수한다.
         Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
         Err(error) => Err(format!("kill PTY child {pid}: {error}")),
     }
 }
 
+/// session 의 자식을 회수한다. 자식이 끝날 때까지 child lock 을 쥐지 않고 기다리므로, 그동안 close 는 lock 을 얻어
+/// 자식에 신호를 보낸다. 끝난 자식은 회수될 때까지 좀비로 남아 그 pid 가 다시 쓰이지 않는다. 회수와 그 결과는 같은
+/// lock 안에서 적고 child_reaped 로 알린다.
 fn reap_child(session: Arc<Session>) {
-    // close 가 먼저 자식을 회수했으면 wait 는 기록된 종료 상태를 돌려주므로, 오류는 회수 실패다.
-    if let Err(error) = session.child.lock().unwrap().wait() {
+    let process_id = session.child.lock().unwrap().child.process_id();
+    let exited = process_id
+        .ok_or_else(|| "PTY child has no process id".to_string())
+        .and_then(wait_for_exit);
+    let result = {
+        let mut child = session.child.lock().unwrap();
+        let result = exited.and_then(|()| {
+            child
+                .child
+                .wait()
+                .map(|_status| ())
+                .map_err(|error| format!("wait PTY: {error}"))
+        });
+        child.reaped = Some(result.clone());
+        result
+    };
+    session.child_reaped.notify_all();
+    if let Err(error) = result {
         broadcast(
             &session,
             DaemonEvent::Error {
                 session_id: session.id.clone(),
-                error: format!("wait PTY: {error}"),
+                error,
             },
         );
     }
@@ -584,19 +623,28 @@ mod tests {
         while !matches!(next_event(&mut rx).await, DaemonEvent::Exit { .. }) {}
     }
 
-    /// 종료를 늦게 알리는 자식. 첫 try_wait 는 아직 끝나지 않았다고 답하고, kill 은 SIGKILL 만 보내고 회수하지 않는다.
-    /// 실제 자식의 kill 은 SIGHUP 을 보내고 200 ms 동안 종료를 확인한 뒤 SIGKILL 을 보내고 돌아오므로, 그 동안 종료가
-    /// 보이지 않은 경우를 재현한다. reaped 는 자식을 회수한 순간에 참이 된다.
+    /// 회수 thread 의 시작과 회수 결과를 알리는 자식. 회수 thread 가 자식에 처음 닿으면(pid 조회나 wait) started 로
+    /// 알리고, wait 가 회수한 종료 상태를 status 에 적는다.
     #[derive(Debug)]
-    struct LateExitChild {
+    struct ObservedChild {
         inner: std::process::Child,
-        checked: bool,
-        reaped: Arc<std::sync::atomic::AtomicBool>,
+        started: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+        status: Arc<Mutex<Option<std::process::ExitStatus>>>,
     }
 
-    impl portable_pty::ChildKiller for LateExitChild {
+    impl ObservedChild {
+        fn mark_started(&self) {
+            if let Some(started) = self.started.lock().unwrap().take() {
+                started
+                    .send(())
+                    .expect("the test waits for the reaper to start");
+            }
+        }
+    }
+
+    impl portable_pty::ChildKiller for ObservedChild {
         fn kill(&mut self) -> std::io::Result<()> {
-            self.inner.kill()
+            panic!("PtyService signals the session child by its process id")
         }
 
         fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
@@ -604,54 +652,57 @@ mod tests {
         }
     }
 
-    impl Child for LateExitChild {
+    impl Child for ObservedChild {
         fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
-            if !self.checked {
-                self.checked = true;
-                return Ok(None);
-            }
-            let status = self.inner.try_wait()?;
-            if status.is_some() {
-                self.reaped.store(true, std::sync::atomic::Ordering::SeqCst);
-            }
-            Ok(status.map(Into::into))
+            panic!("only the reaper thread reaps the session child")
         }
 
         fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
+            self.mark_started();
             let status = self.inner.wait()?;
-            self.reaped.store(true, std::sync::atomic::Ordering::SeqCst);
+            *self.status.lock().unwrap() = Some(status);
             Ok(status.into())
         }
 
         fn process_id(&self) -> Option<u32> {
+            self.mark_started();
             Some(self.inner.id())
         }
     }
 
-    // close 가 회수 thread 보다 먼저 child lock 을 쥐고, 그때 자식이 아직 끝나지 않았어도 close 는 자식을 회수한 뒤에
-    // 돌아온다. 회수 thread 가 없는 session 이 이 순서를 고정한다(S20, core F61).
-    #[test]
-    fn close_reaps_a_child_whose_exit_is_not_yet_visible() {
+    /// 스스로 seconds 초 뒤에 끝나는 자식의 session 을 service 에 넣고 회수 thread 를 시작한다. 회수 thread 가 자식에
+    /// 닿은 뒤에 돌아오며, 자식을 회수하면 적히는 종료 상태를 돌려준다. with_group 이 거짓이면 session 에 process group
+    /// 이 없어 close 의 group 신호가 실패한다.
+    fn observed_session(
+        service: &PtyService,
+        id: &str,
+        seconds: u32,
+        with_group: bool,
+    ) -> Arc<Mutex<Option<std::process::ExitStatus>>> {
         use std::os::unix::process::CommandExt;
         let inner = std::process::Command::new("/bin/sleep")
-            .arg("30")
+            .arg(seconds.to_string())
             .process_group(0)
             .spawn()
             .expect("spawn the session child");
         let group = inner.id() as i32;
-        let reaped = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let service = PtyService::new();
+        let (started_sender, started) = std::sync::mpsc::channel();
+        let status = Arc::new(Mutex::new(None));
         let session = Arc::new(Session {
-            id: "late-exit".to_string(),
+            id: id.to_string(),
             owner: String::new(),
             master: Mutex::new(None),
-            process_group: Some(group),
+            process_group: with_group.then_some(group),
             writer: Mutex::new(None),
-            child: Mutex::new(Box::new(LateExitChild {
-                inner,
-                checked: false,
-                reaped: Arc::clone(&reaped),
-            })),
+            child: Mutex::new(SessionChild {
+                child: Box::new(ObservedChild {
+                    inner,
+                    started: Mutex::new(Some(started_sender)),
+                    status: Arc::clone(&status),
+                }),
+                reaped: None,
+            }),
+            child_reaped: Condvar::new(),
             next_sequence: Mutex::new(0),
             written_output: Mutex::new(0),
             output: Mutex::new(VecDeque::new()),
@@ -665,16 +716,43 @@ mod tests {
             .lock()
             .unwrap()
             .insert(session.id.clone(), Arc::clone(&session));
-        let closed = service.close("late-exit");
-        let reaped_at_return = reaped.load(std::sync::atomic::Ordering::SeqCst);
-        // 실패한 경우에도 자식을 남기지 않는다.
-        let cleanup = session.child.lock().unwrap().wait();
+        let session_for_reaper = Arc::clone(&session);
+        *session.reaper.lock().unwrap() =
+            Some(thread::spawn(move || reap_child(session_for_reaper)));
+        started.recv().expect("the reaper thread did not start");
+        status
+    }
+
+    // close 는 회수 thread 가 자식을 회수한 뒤에 돌아온다(S20, core F61).
+    #[test]
+    fn close_returns_after_the_reaper_reaps_the_child() {
+        let service = PtyService::new();
+        let status = observed_session(&service, "reaped", 30, true);
+        let closed = service.close("reaped");
+        let status_at_return = *status.lock().unwrap();
         closed.expect("close failed");
-        cleanup.expect("reap the session child");
         assert!(
-            reaped_at_return,
+            status_at_return.is_some(),
             "close returned before the PTY child was reaped"
         );
+    }
+
+    // 회수 thread 가 자식을 기다리는 동안 process group 신호가 자식에 닿지 않아도(여기서는 group 이 없어 실패한다),
+    // close 는 자식을 pid 로 끝내고 회수된 뒤에 돌아온다. 자식은 스스로 20 초 뒤에 끝나므로, close 가 회수 thread 의
+    // child lock 에서 막히면 자식은 신호 없이 끝난다(S22).
+    #[test]
+    fn close_ends_a_child_that_the_group_signal_missed_while_the_reaper_waits() {
+        use std::os::unix::process::ExitStatusExt;
+        let service = PtyService::new();
+        let status = observed_session(&service, "group-missed", 20, false);
+        let closed = service.close("group-missed");
+        let status_at_return = *status.lock().unwrap();
+        assert_eq!(
+            status_at_return.map(|status| status.signal()),
+            Some(Some(libc::SIGKILL)),
+            "close did not end the PTY child with SIGKILL before it returned: {status_at_return:?}"
+        );
+        assert_eq!(closed, Err("PTY process group is unavailable".to_string()));
     }
 
     #[tokio::test]
