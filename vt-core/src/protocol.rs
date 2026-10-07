@@ -3166,16 +3166,22 @@ where
                     }
                     continue;
                 };
-                let mut result = owner_close
+                // 표면 작업을 먼저 닫는다. 각 작업은 자기 세션을 닫고 답한다. 소유자의 세션을 먼저 끝내면 세션이 끝난
+                // 작업이 스스로 끝나 그 닫기에 답하지 못한다(core F98). 소유자 닫기는 그 뒤에 남은 세션을 닫는다.
+                let closed = match registry.as_ref() {
+                    Some(registry) => registry.close_owner(&owner).await,
+                    None => Ok(()),
+                };
+                let owner_closed = owner_close
                     .as_ref()
                     .map(|close| close())
                     // 기본값: 소유자 닫기가 없는 서비스는 그 요청을 오류로 답한다.
                     .unwrap_or_else(|| Err("owner close is unavailable".to_string()));
-                if result.is_ok() {
-                    if let Some(registry) = registry.as_ref() {
-                        result = registry.close_owner(&owner).await;
-                    }
-                }
+                let result = match (closed, owner_closed) {
+                    (Ok(()), Ok(())) => Ok(()),
+                    (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+                    (Err(closed), Err(owner)) => Err(format!("{closed}; {owner}")),
+                };
                 let reply = match result {
                     Ok(()) => json!({"operation": "closed-owner", "request": request, "ok": true}),
                     Err(error) => {

@@ -645,6 +645,92 @@ async fn a_request_after_retain_closes_pty_sessions_is_handled_at_once() {
     }
 }
 
+// 소유자 닫기는 그 소유자의 PTY 세션을 끝낸다. 세션이 끝난 표면 작업은 스스로 끝나므로, 표면 작업을 닫기 전에
+// 세션을 끝내면 그 닫기는 답을 받지 못한다(core F98). 열린 PTY 세션의 close-owner 는 성공으로 답해야 한다.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn close_owner_closes_open_pty_surfaces_without_error() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let line = |text: &str| {
+        let mut bytes = text.as_bytes().to_vec();
+        bytes.push(b'\n');
+        bytes
+    };
+    for round in 0..5 {
+        let (client, service) = tokio::net::UnixStream::pair().unwrap();
+        let (service_read, service_write) = service.into_split();
+        let pty = Arc::new(crate::pty::PtyService::new());
+        let port_pty = Arc::clone(&pty);
+        let close_pty = Arc::clone(&pty);
+        let serving = tokio::spawn(serve_with_registry(
+            Arc::new(|| Box::new(FakeEngine::new()) as Box<dyn Engine>),
+            BufReader::new(service_read),
+            service_write,
+            Arc::new(move || {
+                Arc::new(LocalSessionPort::new_with_owner(
+                    Arc::clone(&port_pty),
+                    "test-owner".to_string(),
+                )) as Arc<dyn SessionPort>
+            }),
+            PersistentOwner {
+                close: Arc::new(move || close_pty.close_owner("test-owner")),
+                registry: PersistentRegistry::new(),
+                owner: "test-owner".to_string(),
+                performance: crate::performance::PerformanceTrace::disabled(),
+            },
+        ));
+        let (client_read, mut client_write) = client.into_split();
+        let mut replies = tokio::io::BufReader::new(client_read).lines();
+        for surface in ["s1", "s2"] {
+            client_write
+                .write_all(&line(&format!(r#"{{"surface":"{surface}","root":"/tmp","body":{{"operation":"open","shell":"/bin/sh"}}}}"#)))
+                .await
+                .unwrap();
+            // 표면 작업은 명령을 받은 순서대로 처리하므로, 화면 답이 오면 open 이 PTY 세션을 열었다.
+            client_write
+                .write_all(&line(&format!(r#"{{"surface":"{surface}","root":"/tmp","body":{{"operation":"screen.read"}}}}"#)))
+                .await
+                .unwrap();
+        }
+        let mut screens = 0;
+        while screens < 2 {
+            let reply = tokio::time::timeout(Duration::from_secs(5), replies.next_line())
+                .await
+                .expect("the screen reads were not answered")
+                .unwrap()
+                .expect("the connection closed");
+            if reply.contains("\"event\":\"screen\"") {
+                screens += 1;
+            }
+        }
+        assert_eq!(pty.session_count(), 2, "round {round}: the PTY sessions are not open");
+        client_write
+            .write_all(&line(r#"{"operation":"close-owner","request":"1"}"#))
+            .await
+            .unwrap();
+        let reply = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let reply = replies
+                    .next_line()
+                    .await
+                    .unwrap()
+                    .expect("the connection closed");
+                if reply.contains("\"closed-owner\"") {
+                    break reply;
+                }
+            }
+        })
+        .await
+        .expect("close-owner was not answered");
+        assert!(
+            reply.contains("\"ok\":true"),
+            "round {round}: close-owner failed: {reply}"
+        );
+        assert_eq!(pty.session_count(), 0, "round {round}: a PTY session remains");
+        drop(client_write);
+        let _ = tokio::time::timeout(Duration::from_secs(5), serving).await;
+    }
+}
+
 #[tokio::test]
 async fn a_surface_reopened_after_its_close_request_is_not_a_stale_attachment() {
     // 영속 연결에서 close 요청으로 닫은 표면을 다시 열면 낡은 부착이 아니라 새 표면이다. close 가 연결의 표면
