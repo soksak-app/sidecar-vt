@@ -39,6 +39,10 @@ struct Hello {
 struct HelloReply<'a> {
     operation: &'static str,
     protocol: Option<u64>,
+    /// The version of this sidecar, by which a host tells a service of another version than the installed one
+    /// (core docs/spec/terminal-runtime.md).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<&'static str>,
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<&'a str>,
@@ -197,6 +201,8 @@ async fn authenticate(
         HelloReply {
             operation: "hello",
             protocol: Some(PROTOCOL),
+            // Both crates and vt-alacritty/package.json declare the same version (tests/versions.test.mjs).
+            version: Some(env!("CARGO_PKG_VERSION")),
             ok: true,
             error: None,
         }
@@ -204,6 +210,7 @@ async fn authenticate(
         HelloReply {
             operation: "hello",
             protocol: None,
+            version: None,
             ok: false,
             error: Some("authentication or protocol mismatch"),
         }
@@ -409,9 +416,13 @@ mod tests {
             .unwrap();
         let mut reply = String::new();
         BufReader::new(client).read_line(&mut reply).await.unwrap();
+        let reply = serde_json::from_str::<serde_json::Value>(reply.trim()).unwrap();
+        assert_eq!(reply["ok"], true);
+        // The reply carries the version of this sidecar, so a host can tell a service of another version.
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(reply.trim()).unwrap()["ok"],
-            true
+            reply["version"],
+            env!("CARGO_PKG_VERSION"),
+            "hello reply {reply}"
         );
         let (_, _, client_id) = task.await.unwrap().unwrap();
         assert_eq!(client_id, "config-a");
