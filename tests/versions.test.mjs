@@ -1,4 +1,5 @@
-// sidecar package 의 version 과 Rust crate 의 version 이 같은지 검사한다. 배포 asset 의 version 은 package.json 이 정한다.
+// Checks that the version of the package.json of the sidecar equals the version of each Rust crate. package.json sets the
+// version of the releases.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -20,7 +21,7 @@ function crateVersion(text) {
   return undefined;
 }
 
-test("every crate declares the version of the sidecar package", () => {
+test("every crate declares the version of the package.json of the sidecar", () => {
   const { version } = JSON.parse(read("vt-alacritty/package.json"));
   for (const crate of ["vt-alacritty/Cargo.toml", "vt-core/Cargo.toml"]) {
     assert.equal(crateVersion(read(crate)), version, crate);

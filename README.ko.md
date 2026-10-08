@@ -7,7 +7,7 @@
 ```sh
 make test                 # test
 make build                # sidecar.json이 가리키는 실행 파일
-make release OUT=<folder> SOK=<core>/target/debug/sok   # 이 platform의 release asset
+make release OUT=<folder> SOK=<core>/target/debug/sok   # 이 platform의 release
 ```
 
 Checklist는 [docs/features.md](docs/features.md)다.

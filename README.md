@@ -7,7 +7,7 @@
 ```sh
 make test                 # tests
 make build                # the executable that sidecar.json names
-make release OUT=<folder> SOK=<core>/target/debug/sok   # the release asset for this platform
+make release OUT=<folder> SOK=<core>/target/debug/sok   # the release for this platform
 ```
 
 The checklist is [docs/features.md](docs/features.md).

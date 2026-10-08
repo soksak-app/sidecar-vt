@@ -6,7 +6,7 @@ const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const engine = readFileSync(`${ROOT}vt-alacritty/src/engine.rs`, "utf8");
 const tests = readFileSync(`${ROOT}vt-alacritty/tests/engine_test.rs`, "utf8");
 const specification = readFileSync(`${ROOT}docs/spec/terminal-protocols.md`, "utf8");
-// 명세 보고서가 근거로 적는 테스트는 사이드카 패키지의 Rust 소스 어디에나 있을 수 있다.
+// A test that the specification report names as evidence can be anywhere in the Rust sources of the sidecar.
 const rustFiles = (directory) => readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
   const path = join(directory, entry.name);
   if (entry.isDirectory()) return entry.name === "target" ? [] : rustFiles(path);
