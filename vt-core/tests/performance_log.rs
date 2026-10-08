@@ -299,3 +299,26 @@ fn request_operation_names_the_kind_of_request() {
     );
     assert_eq!(name(serde_json::json!({"surface": "s"})), "unknown");
 }
+
+// A connection made while the trace was off writes events from the moment the host writes the flag, so a long-lived
+// connection is recorded once the trace turns on (S31).
+#[test]
+fn trace_starts_writing_once_the_flag_appears() {
+    let service = temp_dir("appears");
+    let log = service.join("performance.ndjson");
+    let trace = PerformanceTrace::from_service_dir(&service);
+    trace.line("frame", serde_json::json!({"reason": "before"}));
+    assert!(!log.exists(), "the trace wrote before the flag existed");
+    fs::write(service.join("performance"), format!("{}\n", log.display())).unwrap();
+    assert!(
+        trace.enabled(),
+        "the trace did not turn on when the flag appeared"
+    );
+    trace.line("frame", serde_json::json!({"reason": "after"}));
+    let text = fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        text.contains("\"reason\":\"after\""),
+        "the trace did not write after the flag appeared: {text:?}"
+    );
+    let _ = fs::remove_dir_all(&service);
+}

@@ -303,8 +303,8 @@ pub async fn serve_persistent(
                 let service = Arc::clone(&service);
                 let engine_factory = Arc::clone(&engine_factory);
                 let registry = Arc::clone(&registry);
-                // 연결마다 플래그를 다시 읽는다. 세션 열기와 같은 주기라 설정 변경이
-                // 다음 연결에 반영된다(docs/spec/performance-trace.md).
+                // The trace of each connection reads the flag of the service directory at each event
+                // (core docs/spec/performance-trace.md).
                 let trace_dir = service_dir.to_path_buf();
                 clients.spawn(async move {
             if let Ok((reader, writer, client)) = authenticate(stream, &token).await {
@@ -321,7 +321,7 @@ pub async fn serve_persistent(
                 let close_service = Arc::clone(&service);
                 let close_client = client.clone();
                 let close_owner = Arc::new(move || close_service.close_owner(&close_client));
-                // 연결마다 새로 읽은 트레이스를 표면 작업까지 내려보낸다(V5-104).
+                // The trace of the connection reaches the surface actors.
                 let connection_trace =
                     crate::performance::PerformanceTrace::from_service_dir(&trace_dir);
                 if let Err(error) = serve_with_registry(

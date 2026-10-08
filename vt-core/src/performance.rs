@@ -1,11 +1,9 @@
-//! 영구 성능 트레이스의 기록기(docs/spec/performance-trace.md, V5-104).
+//! The writer of the permanent performance trace (core docs/spec/performance-trace.md).
 //!
-//! 트레이스는 모든 빌드에 상시 있고 스위치는 서비스 디렉터리의 `performance` 플래그
-//! 파일이다. 플래그 파일은 대상 로그 파일의 경로를 한 줄로 담는다(호스트가 설정에서
-//! 켤 때 쓴다). 플래그가 없는 동안 이 모듈은 어떤 파일 작업도 하지 않는다 — 열지도,
-//! 만들지도, 포맷팅하지도 않는다. 로테이션은 이 파일을 소유하지 않으므로 호스트가
-//! 담당하고, 기록기는 이벤트마다 열어 한 줄을 덧붙이고 닫는다(호스트의 로테이션이
-//! 즉시 반영되게 한다).
+//! The trace is present in every build, and its switch is the `performance` flag file of the service directory, which
+//! names the log file on one line (the host writes it when the setting turns on). The writer reads the flag at each
+//! event; while the flag is absent it neither opens, creates nor formats the log. The host owns the rotation of the
+//! log, so the writer opens the log for each event, appends one line and closes it, and a rotation applies at once.
 
 use serde_json::{json, Map, Value};
 use std::fs::OpenOptions;
@@ -13,49 +11,47 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// 서비스 디렉터리의 플래그 파일을 읽어 만든 트레이스. 켜진 트레이스는 플래그 파일의 경로를 함께 가진다.
+/// The trace of a service directory. It reads the flag file at each event, so a connection made while the trace was
+/// off writes from the moment the host writes the flag and stops when the host removes it.
 #[derive(Clone)]
 pub struct PerformanceTrace {
-    target: Option<PathBuf>,
-    flag: PathBuf,
+    /// The flag file, or `None` for a trace that never writes.
+    flag: Option<PathBuf>,
 }
 
 impl PerformanceTrace {
-    /// 서비스 디렉터리에서 플래그를 다시 읽는다. 세션을 열 때마다 새로 만들어
-    /// 설정 변경이 다음 세션에 반영되게 한다.
+    /// The trace of the flag file of service_dir.
     pub fn from_service_dir(service_dir: &Path) -> Self {
-        let flag = service_dir.join("performance");
-        let target = std::fs::read_to_string(&flag)
+        Self {
+            flag: Some(service_dir.join("performance")),
+        }
+    }
+
+    /// A trace that never writes, which the serve path of the test harness uses.
+    pub fn disabled() -> Self {
+        Self { flag: None }
+    }
+
+    /// The log path that the flag file names now, or `None` while the flag is absent or names no absolute path.
+    fn target(&self) -> Option<PathBuf> {
+        let flag = self.flag.as_ref()?;
+        std::fs::read_to_string(flag)
             .ok()
             .map(|text| text.trim().to_string())
             .filter(|line| line.starts_with('/'))
-            .map(PathBuf::from);
-        Self { target, flag }
+            .map(PathBuf::from)
     }
 
-    /// 꺼진 트레이스. 검사 하네스의 serve 경로가 쓴다.
-    pub fn disabled() -> Self {
-        Self {
-            target: None,
-            flag: PathBuf::new(),
-        }
-    }
-
-    /// 트레이스가 켜져 있는가.
+    /// Whether the flag names a log now.
     pub fn enabled(&self) -> bool {
-        self.target.is_some()
+        self.target().is_some()
     }
 
-    /// 한 이벤트 줄을 덧붙인다. 꺼져 있으면 아무 일도 하지 않는다. 켜진 트레이스도 host 가 플래그를 지웠으면 쓰지
-    /// 않는다. 연결을 받을 때 읽은 상태는 그 연결이 끝날 때까지 남으므로, 꺼진 스위치가 이벤트를 쓰지 않으려면 쓰기
-    /// 직전에 플래그를 확인해야 한다(docs/spec/performance-trace.md).
+    /// Appends one event line to the log that the flag names now; it writes nothing while the flag is absent.
     pub fn line(&self, event: &str, fields: Value) {
-        let Some(target) = self.target.as_ref() else {
+        let Some(target) = self.target() else {
             return;
         };
-        if !self.flag.exists() {
-            return;
-        }
         let mut record = Map::new();
         record.insert("ts".into(), json!(now_iso8601_ms()));
         record.insert("pid".into(), json!(std::process::id()));
