@@ -65,7 +65,8 @@ pub fn installed(name: &str) -> bool {
     let Ok(name) = CString::new(name) else {
         return false;
     };
-    let locale = unsafe { libc::newlocale(libc::LC_CTYPE_MASK, name.as_ptr(), std::ptr::null_mut()) };
+    let locale =
+        unsafe { libc::newlocale(libc::LC_CTYPE_MASK, name.as_ptr(), std::ptr::null_mut()) };
     if locale.is_null() {
         return false;
     }

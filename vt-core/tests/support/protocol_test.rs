@@ -702,7 +702,11 @@ async fn close_owner_closes_open_pty_surfaces_without_error() {
                 screens += 1;
             }
         }
-        assert_eq!(pty.session_count(), 2, "round {round}: the PTY sessions are not open");
+        assert_eq!(
+            pty.session_count(),
+            2,
+            "round {round}: the PTY sessions are not open"
+        );
         client_write
             .write_all(&line(r#"{"operation":"close-owner","request":"1"}"#))
             .await
@@ -725,7 +729,11 @@ async fn close_owner_closes_open_pty_surfaces_without_error() {
             reply.contains("\"ok\":true"),
             "round {round}: close-owner failed: {reply}"
         );
-        assert_eq!(pty.session_count(), 0, "round {round}: a PTY session remains");
+        assert_eq!(
+            pty.session_count(),
+            0,
+            "round {round}: a PTY session remains"
+        );
         drop(client_write);
         let _ = tokio::time::timeout(Duration::from_secs(5), serving).await;
     }

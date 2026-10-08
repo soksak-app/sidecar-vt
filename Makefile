@@ -6,10 +6,11 @@ PROFILE ?= debug
 CARGO_PROFILE = $(if $(filter release,$(PROFILE)),--release,)
 SOK ?= sok
 
-# 단위 test, 진단 build 의 engine trace test, clippy(경고 없음) 뒤에 build 한 service 로 연결 복구를
-# 검사하고(scripts/verify-vt-recovery.mjs), protocol inventory 를 engine 과 대조한다
-# (scripts/check-terminal-protocol-inventory.mjs).
+# rustfmt, unit tests, the engine trace test of the diagnostics build and clippy without warnings run first; then
+# the built service checks connection recovery (scripts/verify-vt-recovery.mjs) and the protocol inventory is
+# compared with the engine (scripts/check-terminal-protocol-inventory.mjs).
 test: build
+	cargo fmt --all --check
 	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test --workspace
 	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -p soksak-sidecar-vt-core --features diagnostics --test engine_trace_test
 	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo clippy --workspace --all-targets --features diagnostics -- -D warnings

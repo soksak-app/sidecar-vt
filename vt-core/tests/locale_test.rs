@@ -43,7 +43,10 @@ async fn a_shell_without_locale_variables_runs_in_a_utf8_locale() {
     })
     .await;
     let text = String::from_utf8_lossy(&output);
-    assert!(finished.is_ok(), "the shell did not exit within 5 s; output so far: {text:?}");
+    assert!(
+        finished.is_ok(),
+        "the shell did not exit within 5 s; output so far: {text:?}"
+    );
     assert!(
         text.contains("charmap=UTF-8 length=1"),
         "the shell must run in a UTF-8 locale and count one character; output: {text:?}"
@@ -75,11 +78,13 @@ fn a_non_empty_locale_variable_is_kept() {
 fn empty_locale_variables_set_the_installed_regional_locale() {
     let values = [("LANG", ""), ("LC_ALL", ""), ("LC_CTYPE", "")];
     assert_eq!(
-        shell_locale(environment(&values), Some("ko"), Some("KR"), |name| name == "ko_KR.UTF-8"),
+        shell_locale(environment(&values), Some("ko"), Some("KR"), |name| name
+            == "ko_KR.UTF-8"),
         ShellLocale::Lang("ko_KR.UTF-8".into())
     );
     assert_eq!(
-        shell_locale(environment(&[]), Some("zh"), Some("CN"), |name| name == "zh_CN.UTF-8"),
+        shell_locale(environment(&[]), Some("zh"), Some("CN"), |name| name
+            == "zh_CN.UTF-8"),
         ShellLocale::Lang("zh_CN.UTF-8".into())
     );
 }
@@ -88,7 +93,9 @@ fn empty_locale_variables_set_the_installed_regional_locale() {
 fn a_regional_locale_that_is_not_installed_sets_lc_ctype() {
     assert_eq!(
         shell_locale(environment(&[]), Some("en"), Some("KR"), |_| false),
-        ShellLocale::CtypeUtf8 { name: "en_KR.UTF-8".into() }
+        ShellLocale::CtypeUtf8 {
+            name: "en_KR.UTF-8".into()
+        }
     );
 }
 
@@ -96,11 +103,15 @@ fn a_regional_locale_that_is_not_installed_sets_lc_ctype() {
 fn a_macos_locale_without_a_language_or_region_sets_lc_ctype() {
     assert_eq!(
         shell_locale(environment(&[]), Some("en"), None, |_| true),
-        ShellLocale::CtypeUtf8 { name: "en_.UTF-8".into() }
+        ShellLocale::CtypeUtf8 {
+            name: "en_.UTF-8".into()
+        }
     );
     assert_eq!(
         shell_locale(environment(&[]), None, None, |_| true),
-        ShellLocale::CtypeUtf8 { name: "_.UTF-8".into() }
+        ShellLocale::CtypeUtf8 {
+            name: "_.UTF-8".into()
+        }
     );
 }
 
