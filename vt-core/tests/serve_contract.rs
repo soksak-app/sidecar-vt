@@ -4678,21 +4678,88 @@ async fn a_mouse_point_in_the_snapping_band_is_accepted_and_a_failure_keeps_its_
 extern "C" {
     // 전역 IOSurface 를 ID 로 찾는다. 호스트가 전송 이미지를 찾는 방법과 같다.
     fn IOSurfaceLookup(id: u32) -> *const std::ffi::c_void;
+    fn IOSurfaceSetValue(
+        buffer: *const std::ffi::c_void,
+        key: *const std::ffi::c_void,
+        value: *const std::ffi::c_void,
+    );
+    fn IOSurfaceCopyValue(
+        buffer: *const std::ffi::c_void,
+        key: *const std::ffi::c_void,
+    ) -> *const std::ffi::c_void;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
     fn CFRelease(object: *const std::ffi::c_void);
+    fn CFEqual(left: *const std::ffi::c_void, right: *const std::ffi::c_void) -> u8;
+    fn CFStringCreateWithCString(
+        allocator: *const std::ffi::c_void,
+        text: *const std::ffi::c_char,
+        encoding: u32,
+    ) -> *const std::ffi::c_void;
 }
 
 /// 그 ID 의 전송 이미지가 아직 있는지. 찾은 참조는 바로 놓아 수명을 늘리지 않는다.
-fn transfer_image_exists(id: u32) -> bool {
+/// The state of the transfer image that a check marked. IOSurface ids are global and reused, so a surface that a
+/// lookup finds by the id of a released image can be another surface; the mark tells them apart.
+#[derive(Debug, PartialEq)]
+enum TransferImage {
+    /// The id names the marked image.
+    Marked,
+    /// The id names another surface, which a later allocation gave the released id.
+    Other,
+    /// No surface has the id.
+    Absent,
+}
+
+/// The key of the value by which a check marks the transfer image it watches.
+const TRANSFER_MARK: &std::ffi::CStr = c"soksak.test.transfer";
+
+/// A CFString of text. The caller releases it.
+fn cf_string(text: &std::ffi::CStr) -> *const std::ffi::c_void {
+    // kCFStringEncodingUTF8.
+    unsafe { CFStringCreateWithCString(std::ptr::null(), text.as_ptr(), 0x0800_0100) }
+}
+
+/// Marks the transfer image id with mark. The value does not keep the surface alive.
+fn mark_transfer_image(id: u32, mark: &std::ffi::CStr) {
+    let surface = unsafe { IOSurfaceLookup(id) };
+    assert!(
+        !surface.is_null(),
+        "transfer image {id} does not exist when it is marked"
+    );
+    let (key, value) = (cf_string(TRANSFER_MARK), cf_string(mark));
+    unsafe {
+        IOSurfaceSetValue(surface, key, value);
+        CFRelease(value);
+        CFRelease(key);
+        CFRelease(surface);
+    }
+}
+
+/// The state of the transfer image id that mark_transfer_image marked with mark.
+fn transfer_image(id: u32, mark: &std::ffi::CStr) -> TransferImage {
     let surface = unsafe { IOSurfaceLookup(id) };
     if surface.is_null() {
-        return false;
+        return TransferImage::Absent;
     }
-    unsafe { CFRelease(surface) };
-    true
+    let (key, expected) = (cf_string(TRANSFER_MARK), cf_string(mark));
+    let value = unsafe { IOSurfaceCopyValue(surface, key) };
+    let marked = !value.is_null() && unsafe { CFEqual(value, expected) } != 0;
+    unsafe {
+        if !value.is_null() {
+            CFRelease(value);
+        }
+        CFRelease(expected);
+        CFRelease(key);
+        CFRelease(surface);
+    }
+    if marked {
+        TransferImage::Marked
+    } else {
+        TransferImage::Other
+    }
 }
 
 /// 전송 이미지의 답 전에 표면이 이미지 상태를 놓게 하는 요청.
@@ -4757,6 +4824,8 @@ async fn check_unanswered_transfer(persistent: bool, letting_go: LettingGo, rele
     };
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
     let case = format!("persistent {persistent}, {letting_go:?}, {release:?}");
+    // Each check marks its image with a value of its own, because checks run in parallel and reuse released ids.
+    let mark = std::ffi::CString::new(format!("{} {case}", std::process::id())).unwrap();
 
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
@@ -4770,6 +4839,7 @@ async fn check_unanswered_transfer(persistent: bool, letting_go: LettingGo, rele
             break u32::try_from(id).expect("the token id is not a u32");
         }
     };
+    mark_transfer_image(id, &mark);
 
     let request: &[u8] = match letting_go {
         LettingGo::Close => b"{\"surface\":\"s1\",\"body\":{\"operation\":\"close\"}}\n",
@@ -4777,8 +4847,9 @@ async fn check_unanswered_transfer(persistent: bool, letting_go: LettingGo, rele
     };
     to_serve.write_all(request).await.unwrap();
     wait_for_reply(&mut lines, letting_go).await;
-    assert!(
-        transfer_image_exists(id),
+    assert_eq!(
+        transfer_image(id, &mark),
+        TransferImage::Marked,
         "{case}: the service released transfer image {id} before the host answered its frame"
     );
 
@@ -4788,8 +4859,9 @@ async fn check_unanswered_transfer(persistent: bool, letting_go: LettingGo, rele
 {"surface":"s1","body":{"operation":"close"}}
 "#).await.unwrap();
             wait_for_reply(&mut lines, LettingGo::Close).await;
-            assert!(
-                !transfer_image_exists(id),
+            assert_ne!(
+                transfer_image(id, &mark),
+                TransferImage::Marked,
                 "{case}: the service kept transfer image {id} after the host answered its frame"
             );
             drop(to_serve);
@@ -4804,8 +4876,9 @@ async fn check_unanswered_transfer(persistent: bool, letting_go: LettingGo, rele
         Release::ConnectionEnd => {
             drop(to_serve);
             task.await.unwrap().unwrap();
-            assert!(
-                !transfer_image_exists(id),
+            assert_ne!(
+                transfer_image(id, &mark),
+                TransferImage::Marked,
                 "{case}: the service kept transfer image {id} after the connection that carried it ended"
             );
         }
