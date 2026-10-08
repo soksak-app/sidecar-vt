@@ -96,6 +96,27 @@ impl Default for PtyService {
     }
 }
 
+/// 터미널 locale 규칙을 자식 환경에 적용한다(core docs/spec/terminal-runtime.md). 지역 locale 을 쓸 수 없으면
+/// `LC_CTYPE=UTF-8` 을 정하고 그 사실을 service log 에 쓴다.
+#[cfg(target_os = "macos")]
+fn apply_shell_locale(command: &mut CommandBuilder) {
+    let (language, region) = crate::platform::darwin::locale::codes();
+    let locale = crate::locale::shell_locale(
+        |name| command.get_env(name),
+        language.as_deref(),
+        region.as_deref(),
+        crate::platform::darwin::locale::installed,
+    );
+    match locale {
+        crate::locale::ShellLocale::Kept => {}
+        crate::locale::ShellLocale::Lang(name) => command.env("LANG", name),
+        crate::locale::ShellLocale::CtypeUtf8 { name } => {
+            eprintln!("terminal: locale {name} is not installed; LC_CTYPE=UTF-8");
+            command.env("LC_CTYPE", "UTF-8");
+        }
+    }
+}
+
 impl PtyService {
     pub fn new() -> Self {
         Self {
@@ -157,6 +178,8 @@ impl PtyService {
         }
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
+        #[cfg(target_os = "macos")]
+        apply_shell_locale(&mut command);
 
         let child = pair
             .slave
