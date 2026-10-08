@@ -9,16 +9,19 @@ on:
 permissions:
   contents: write
 
+# sok sidecar release 를 build 하는 core release. 이 저장소가 릴리스하는 version 과 관계가 없다.
+env:
+  CORE_RELEASE: v0.0.5
+
 jobs:
   release:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      # sok sidecar release 는 core 의 같은 version tag 에서 빌드한다.
       - uses: actions/checkout@v4
         with:
           repository: soksak-app/core
-          ref: ${{ github.ref_name }}
+          ref: ${{ env.CORE_RELEASE }}
           path: core
       - uses: actions/setup-go@v5
         with:
