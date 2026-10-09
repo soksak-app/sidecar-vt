@@ -4,6 +4,7 @@
 //! 의도적으로 PTY handle로 표현하지 않는다. attachment를 drop하면 그 client로의
 //! 전달만 멈추고, session 종료는 명시적인 close가 담당한다.
 
+use crate::performance::{bytes_fields, PerformanceTrace};
 use crate::platform::pty::{
     kill_process_group, pending_input, process_group_leader, wait_for_exit,
 };
@@ -83,11 +84,14 @@ struct Session {
     closed: Mutex<bool>,
     reader: Mutex<Option<thread::JoinHandle<()>>>,
     reaper: Mutex<Option<thread::JoinHandle<()>>>,
+    /// The trace of the service that opened the session, which records each write, each read and the end of the child.
+    performance: PerformanceTrace,
 }
 
 #[derive(Clone)]
 pub struct PtyService {
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
+    performance: PerformanceTrace,
 }
 
 impl Default for PtyService {
@@ -121,7 +125,14 @@ impl PtyService {
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            performance: PerformanceTrace::disabled(),
         }
+    }
+
+    /// The service with the performance trace that records every write to and read from its sessions.
+    pub fn with_performance(mut self, performance: PerformanceTrace) -> Self {
+        self.performance = performance;
+        self
     }
 
     pub fn open(
@@ -215,6 +226,7 @@ impl PtyService {
             closed: Mutex::new(false),
             reader: Mutex::new(None),
             reaper: Mutex::new(None),
+            performance: self.performance.clone(),
         });
         session
             .attachments
@@ -226,6 +238,17 @@ impl PtyService {
             .lock()
             .unwrap()
             .insert(session_id.clone(), session.clone());
+        session.performance.line(
+            "session_open",
+            serde_json::json!({
+                "session": session_id,
+                "owner": owner,
+                "cwd": cwd,
+                "cols": cols,
+                "rows": rows,
+                "pid": session.child.lock().unwrap().child.process_id(),
+            }),
+        );
         let reader_handle = thread::spawn(move || read_output(session, reader));
         // handle은 session이 게시된 뒤에 설치된다. close는 그 join을
         // request 경로에서 분리하므로 멈춘 PTY reader가 이후의 session open을
@@ -313,6 +336,15 @@ impl PtyService {
             .ok_or_else(|| "session writer is closed".to_string())?
             .write_all(data)
             .map_err(|error| format!("write PTY: {error}"));
+        if session.performance.enabled() {
+            let mut fields = bytes_fields(data);
+            fields["session"] = serde_json::json!(session_id);
+            fields["ok"] = serde_json::json!(result.is_ok());
+            if let Err(error) = &result {
+                fields["error"] = serde_json::json!(error);
+            }
+            session.performance.line("pty_write", fields);
+        }
         result
     }
 
@@ -446,7 +478,12 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
     let mut buffer = [0u8; 8192];
     loop {
         match reader.read(&mut buffer) {
-            Ok(0) => break,
+            Ok(0) => {
+                session
+                    .performance
+                    .line("pty_eof", serde_json::json!({"session": session.id}));
+                break;
+            }
             Ok(size) => {
                 let data = buffer[..size].to_vec();
                 *session.written_output.lock().unwrap() += size as u64;
@@ -456,6 +493,12 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
                     *next += 1;
                     sequence
                 };
+                if session.performance.enabled() {
+                    let mut fields = bytes_fields(&data);
+                    fields["session"] = serde_json::json!(session.id);
+                    fields["sequence"] = serde_json::json!(sequence);
+                    session.performance.line("pty_read", fields);
+                }
                 {
                     let mut output = session.output.lock().unwrap();
                     output.push_back((sequence, data.clone()));
@@ -474,6 +517,10 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
                 );
             }
             Err(error) => {
+                session.performance.line(
+                    "pty_read_error",
+                    serde_json::json!({"session": session.id, "error": error.to_string()}),
+                );
                 broadcast(
                     &session,
                     DaemonEvent::Error {
@@ -518,7 +565,12 @@ fn reap_child(session: Arc<Session>) {
             child
                 .child
                 .wait()
-                .map(|_status| ())
+                .map(|status| {
+                    session.performance.line(
+                        "session_exit",
+                        serde_json::json!({"session": session.id, "status": format!("{status:?}")}),
+                    );
+                })
                 .map_err(|error| format!("wait PTY: {error}"))
         });
         child.reaped = Some(result.clone());
@@ -575,6 +627,64 @@ mod tests {
                 return data;
             }
         }
+    }
+
+    /// The records of the performance trace that the file holds, one JSON object for each line.
+    fn trace_records(log: &std::path::Path) -> Vec<serde_json::Value> {
+        std::fs::read_to_string(log)
+            .unwrap_or_default() // default: the trace file does not exist before the first record
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("every line is one JSON object"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_trace_records_every_write_to_and_read_from_the_pty_with_its_bytes() {
+        let _test_lock = crate::platform::pty::native_pty_test_lock();
+        let directory =
+            std::env::temp_dir().join(format!("vt-core-pty-trace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let log = directory.join("performance.ndjson");
+        std::fs::write(
+            directory.join("performance"),
+            format!("{}\n", log.display()),
+        )
+        .unwrap();
+        let service = PtyService::new().with_performance(
+            crate::performance::PerformanceTrace::from_service_dir(&directory),
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (session_id, _) = service
+            .open("/bin/sh", &["-c".into(), "cat".into()], None, 80, 24, tx)
+            .expect("PTY setup failed; environmental PTY errors must fail this test");
+        service.write(&session_id, "한a\n".as_bytes()).unwrap();
+        // The terminal echoes the line, which is the read that the trace must record with the same text.
+        let mut seen = String::new();
+        while !seen.contains("한a") {
+            seen.push_str(&String::from_utf8_lossy(&next_output(&mut rx).await));
+        }
+        service.close(&session_id).unwrap();
+        let records = trace_records(&log);
+        let written = records
+            .iter()
+            .find(|record| record["event"] == "pty_write")
+            .expect("the write was not recorded");
+        assert_eq!(written["session"], session_id);
+        assert_eq!(written["bytes"], 5);
+        assert_eq!(written["text"], "한a\n");
+        assert_eq!(written["hex"], "ed959c610a");
+        assert_eq!(written["ok"], true);
+        let read = records
+            .iter()
+            .filter(|record| record["event"] == "pty_read")
+            .map(|record| record["text"].as_str().unwrap().to_string())
+            .collect::<String>();
+        assert!(read.contains("한a"), "the read was not recorded: {read:?}");
+        assert!(records
+            .iter()
+            .any(|record| record["event"] == "session_open" && record["session"] == session_id));
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[tokio::test]
@@ -733,6 +843,7 @@ mod tests {
             closed: Mutex::new(false),
             reader: Mutex::new(None),
             reaper: Mutex::new(None),
+            performance: PerformanceTrace::disabled(),
         });
         service
             .sessions

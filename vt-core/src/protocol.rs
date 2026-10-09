@@ -3143,6 +3143,10 @@ where
         // 이 요청의 처리 기록. 표면 작업으로 넘기는 일까지 포함해, 이번 반복을 떠날 때(다음 요청을 읽기 전) 남긴다.
         let parsed = serde_json::from_str::<Value>(trimmed).ok();
         let _request = RequestTrace {
+            // The whole request as it arrived; a line that is not JSON is recorded as text.
+            body: parsed
+                .clone()
+                .unwrap_or_else(|| json!({"unparsed": trimmed})),
             performance: &performance,
             started: std::time::Instant::now(),
             idle,
@@ -4217,6 +4221,8 @@ struct RequestTrace<'a> {
     connection: u64,
     operation: String,
     surface: Option<String>,
+    /// 요청 전체. 읽은 그대로이며 JSON 이 아닌 줄은 `{"unparsed": <줄>}` 이다.
+    body: Value,
 }
 
 impl Drop for RequestTrace<'_> {
@@ -4233,6 +4239,7 @@ impl Drop for RequestTrace<'_> {
                 "connection": self.connection,
                 "idle_us": self.idle.as_micros() as u64,
                 "us": self.started.elapsed().as_micros() as u64,
+                "body": self.body,
             }),
         );
     }

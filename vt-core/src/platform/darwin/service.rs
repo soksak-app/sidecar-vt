@@ -288,7 +288,7 @@ pub async fn serve_persistent(
     // 성능 트레이스(V5-104). 플래그가 없으면 아래 두 호출은 아무 파일 작업도 하지 않는다.
     let performance = crate::performance::PerformanceTrace::from_service_dir(service_dir);
     performance.line("session_start", serde_json::json!({"role": "vt-core"}));
-    let service = Arc::new(crate::pty::PtyService::new());
+    let service = Arc::new(crate::pty::PtyService::new().with_performance(performance.clone()));
     let registry = PersistentRegistry::new();
     let mut clients = JoinSet::new();
     let mut had_client = false;

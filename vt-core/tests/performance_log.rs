@@ -251,6 +251,59 @@ async fn a_served_surface_records_its_frames_with_reasons() {
     let _ = std::fs::remove_dir_all(&service);
 }
 
+#[tokio::test]
+async fn a_served_request_records_its_whole_body_and_an_unparsed_line_as_it_arrived() {
+    let service = temp_dir("bodies");
+    let log = service.join("performance.ndjson");
+    std::fs::write(service.join("performance"), format!("{}\n", log.display())).unwrap();
+    let trace = PerformanceTrace::from_service_dir(&service);
+    let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
+    let port = Arc::new(TracePort);
+    let factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync> =
+        Arc::new(move || port.clone() as Arc<dyn SessionPort>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
+    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let task = tokio::spawn(async move {
+        let _ = serve_with_performance(engine_factory, serve_in, serve_out, factory, trace).await;
+    });
+    let mut lines = BufReader::new(from_serve).lines();
+    to_serve
+        .write_all(
+            br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"operation":"input","compose":{"text":"\ud55c","selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":false}}}
+not json at all
+"#,
+        )
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), lines.next_line()).await;
+    }
+    drop(to_serve);
+    let _ = task.await;
+    let text = std::fs::read_to_string(&log).expect("the served requests reach the flagged log");
+    let requests: Vec<serde_json::Value> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .filter(|v: &serde_json::Value| v["event"] == "request")
+        .collect();
+    let compose = requests
+        .iter()
+        .find(|request| request["operation"] == "input")
+        .expect("the input request is recorded");
+    assert_eq!(compose["body"]["body"]["compose"]["text"], "한");
+    assert_eq!(
+        compose["body"]["body"]["compose"]["selectedRange"]["location"],
+        1
+    );
+    let unparsed = requests
+        .iter()
+        .find(|request| request["operation"] == "unparsed")
+        .expect("the unparsed line is recorded");
+    assert_eq!(unparsed["body"]["unparsed"], "not json at all");
+    let _ = std::fs::remove_dir_all(&service);
+}
+
 #[test]
 fn trace_stops_writing_once_the_flag_is_removed() {
     // 연결을 받을 때 켜진 기록기도 host 가 플래그를 지우면 더 쓰지 않는다(docs/spec/performance-trace.md).
