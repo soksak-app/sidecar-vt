@@ -105,19 +105,15 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
-/// The most bytes of one chunk that a record holds in full; a longer chunk keeps its length and its first bytes.
-const BYTES_RECORDED: usize = 4096;
-
 /// The fields of a record of bytes: the length, the text (the bytes read as UTF-8, with the replacement character for
-/// bytes that are not), the same bytes in hexadecimal, and whether the record holds the first bytes only.
+/// bytes that are not) and the same bytes in hexadecimal. A record holds every byte, because a defect of the input is
+/// located from what was written and read.
 pub fn bytes_fields(data: &[u8]) -> Value {
-    let kept = &data[..data.len().min(BYTES_RECORDED)];
-    let hex: String = kept.iter().map(|byte| format!("{byte:02x}")).collect();
+    let hex: String = data.iter().map(|byte| format!("{byte:02x}")).collect();
     json!({
         "bytes": data.len(),
-        "text": String::from_utf8_lossy(kept),
+        "text": String::from_utf8_lossy(data),
         "hex": hex,
-        "truncated": data.len() > kept.len(),
     })
 }
 

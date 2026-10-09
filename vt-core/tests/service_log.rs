@@ -25,3 +25,19 @@ fn the_line_that_is_written_ends_with_one_line_feed() {
     );
     assert_eq!(line.matches('\n').count(), 1);
 }
+
+// A record of bytes holds every byte: nothing is cut, because a defect of the input is located from what was written.
+#[test]
+fn a_record_of_bytes_holds_every_byte_of_a_long_chunk() {
+    let data: Vec<u8> = (0..8192u32)
+        .map(|index| b'a' + (index % 26) as u8)
+        .collect();
+    let fields = soksak_sidecar_vt_core::performance::bytes_fields(&data);
+    assert_eq!(fields["bytes"], 8192);
+    assert_eq!(fields["text"].as_str().unwrap().len(), 8192);
+    assert_eq!(fields["hex"].as_str().unwrap().len(), 8192 * 2);
+    assert!(
+        fields.get("truncated").is_none(),
+        "a record that is cut is not a record of the bytes"
+    );
+}
