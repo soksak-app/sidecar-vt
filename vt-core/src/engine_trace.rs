@@ -16,7 +16,7 @@ pub fn record(surface: &str, line: impl FnOnce() -> String) {
         .open(&path)
         .and_then(|mut file| writeln!(file, "{}", line()));
     if let Err(error) = written {
-        eprintln!("engine trace {}: {error}", path.display());
+        crate::service_log::log_error("engine trace", format!("{}: {error}", path.display()));
     }
 }
 

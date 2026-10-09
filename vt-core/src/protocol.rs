@@ -2761,7 +2761,7 @@ async fn surface_task(
                         // 닫기를 보낸 쪽이 기다리기를 그만두었으면 그 쪽이 시간 초과를 이미 보고했다. 닫기 오류는
                         // 받을 곳이 없으므로 service log 에 남긴다.
                         if let Err(Err(error)) = result.send(closed) {
-                            eprintln!("surface {surface_id}: {error}");
+                            crate::service_log::log_error(&format!("surface {surface_id}"), error);
                         }
                         break;
                     }
@@ -3421,11 +3421,11 @@ where
                                         "body": {"event": "error", "reason": format!("surface task ended: {}", panic_msg)}
                                     });
                                     if let Err(error) = out_tx_monitor.send(response.to_string()).await {
-                                        eprintln!("surface panic report was not delivered: {error:?}");
+                                        crate::service_log::log_error("surface task", format!("the panic report was not delivered: {error:?}"));
                                     }
                                 }
                                 Err(error) => {
-                                    eprintln!("surface task was cancelled: {error}");
+                                    crate::service_log::log_error("surface task", format!("cancelled: {error}"));
                                 }
                             }
                         });
@@ -3701,12 +3701,13 @@ where
                                     Ok((selection, size)) => {
                                         // 설치되어 있지 않은 family 는 오류가 아니라 로그에 남긴다.
                                         for family in &selection.skipped {
-                                            eprintln!(
-                                                "terminal font family is not installed: {family}"
+                                            crate::service_log::log_info(
+                                                "font",
+                                                format!("terminal font family is not installed: {family}"),
                                             );
                                         }
                                         if selection.system {
-                                            eprintln!("no listed terminal font family is installed; using the system fixed-pitch font");
+                                            crate::service_log::log_info("font", "no listed terminal font family is installed; using the system fixed-pitch font");
                                         }
                                         let (font, system, skipped) =
                                             (selection.font, selection.system, selection.skipped);

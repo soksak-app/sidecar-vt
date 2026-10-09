@@ -10,6 +10,7 @@ pub mod platform;
 pub mod protocol;
 pub mod pty;
 pub mod service;
+pub mod service_log;
 pub mod shell_integration;
 
 pub use palette::{

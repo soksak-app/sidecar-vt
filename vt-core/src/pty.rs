@@ -115,7 +115,10 @@ fn apply_shell_locale(command: &mut CommandBuilder) {
         crate::locale::ShellLocale::Kept => {}
         crate::locale::ShellLocale::Lang(name) => command.env("LANG", name),
         crate::locale::ShellLocale::CtypeUtf8 { name } => {
-            eprintln!("terminal: locale {name} is not installed; LC_CTYPE=UTF-8");
+            crate::service_log::log_info(
+                "locale",
+                format!("{name} is not installed; LC_CTYPE=UTF-8"),
+            );
             command.env("LC_CTYPE", "UTF-8");
         }
     }
@@ -426,12 +429,12 @@ impl PtyService {
         thread::spawn(move || {
             if let Some(reader) = reader {
                 if reader.join().is_err() {
-                    eprintln!("PTY reader thread panicked during close");
+                    crate::service_log::log_error("pty close", "the reader thread panicked");
                 }
             }
             if let Some(reaper) = reaper {
                 if reaper.join().is_err() {
-                    eprintln!("PTY reaper thread panicked during close");
+                    crate::service_log::log_error("pty close", "the reaper thread panicked");
                 }
             }
         });

@@ -61,12 +61,15 @@ impl Drop for ServiceCleanup {
     fn drop(&mut self) {
         if let Err(error) = fs::remove_file(self.service_dir.join("endpoint.json")) {
             if error.kind() != std::io::ErrorKind::NotFound {
-                eprintln!("service endpoint cleanup failed: {error}");
+                crate::service_log::log_error(
+                    "service",
+                    format!("endpoint cleanup failed: {error}"),
+                );
             }
         }
         if let Err(error) = fs::remove_dir_all(&self.socket_dir) {
             if error.kind() != std::io::ErrorKind::NotFound {
-                eprintln!("service socket cleanup failed: {error}");
+                crate::service_log::log_error("service", format!("socket cleanup failed: {error}"));
             }
         }
     }
@@ -77,7 +80,7 @@ struct Lock(File);
 impl Drop for Lock {
     fn drop(&mut self) {
         if let Err(error) = nix::fcntl::flock(self.0.as_raw_fd(), nix::fcntl::FlockArg::Unlock) {
-            eprintln!("service lock unlock failed: {error}");
+            crate::service_log::log_error("service", format!("lock unlock failed: {error}"));
         }
     }
 }
@@ -138,7 +141,7 @@ fn remove_previous_socket(service_dir: &Path) {
     let endpoint = match read_endpoint(service_dir) {
         Ok(endpoint) => endpoint,
         Err(error) => {
-            eprintln!("previous service endpoint: {error}");
+            crate::service_log::log_error("service", format!("previous endpoint: {error}"));
             return;
         }
     };
@@ -151,15 +154,21 @@ fn remove_previous_socket(service_dir: &Path) {
                 .is_some_and(|name| name.starts_with("spv-"))
     });
     let Some(directory) = owned else {
-        eprintln!(
-            "previous service socket {} is not in a service socket directory",
-            endpoint.socket
+        crate::service_log::log_error(
+            "service",
+            format!(
+                "previous socket {} is not in a service socket directory",
+                endpoint.socket
+            ),
         );
         return;
     };
     if let Err(error) = fs::remove_dir_all(directory) {
         if error.kind() != std::io::ErrorKind::NotFound {
-            eprintln!("previous service socket cleanup failed: {error}");
+            crate::service_log::log_error(
+                "service",
+                format!("previous socket cleanup failed: {error}"),
+            );
         }
     }
 }
@@ -307,7 +316,9 @@ pub async fn serve_persistent(
                 // (core docs/spec/performance-trace.md).
                 let trace_dir = service_dir.to_path_buf();
                 clients.spawn(async move {
-            if let Ok((reader, writer, client)) = authenticate(stream, &token).await {
+            match authenticate(stream, &token).await {
+            Err(error) => crate::service_log::log_error("client authentication", error),
+            Ok((reader, writer, client)) => {
                 crate::performance::PerformanceTrace::from_service_dir(&trace_dir)
                     .line("client_connect", serde_json::json!({"owner": client}));
                 let owner = client.clone();
@@ -338,8 +349,9 @@ pub async fn serve_persistent(
                 )
                 .await
                 {
-                    eprintln!("sidecar client session failed: {error}");
+                    crate::service_log::log_error("client session", error);
                 }
+            }
             }
                 });
             }

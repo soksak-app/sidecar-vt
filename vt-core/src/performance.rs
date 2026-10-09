@@ -76,7 +76,7 @@ impl PerformanceTrace {
 }
 
 /// 유닉스 시각(밀리초)을 ISO-8601 로 바꾼다(종속성을 더하지 않고 직접 계산).
-fn now_iso8601_ms() -> String {
+pub(crate) fn now_iso8601_ms() -> String {
     let since = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default(); // 기본값: 시계는 에포크 이전을 돌려주지 않는다
