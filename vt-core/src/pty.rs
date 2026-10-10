@@ -95,9 +95,9 @@ pub struct PtyService {
 }
 
 /// 터미널 locale 규칙을 자식 환경에 적용한다(core docs/spec/terminal-runtime.md). 지역 locale 을 쓸 수 없으면
-/// `LC_CTYPE=UTF-8` 을 정하고 그 사실을 service log 에 쓴다.
+/// `LC_CTYPE=UTF-8` 을 정하고 그 사실을 info 기록 event 로 남긴다.
 #[cfg(target_os = "macos")]
-fn apply_shell_locale(command: &mut CommandBuilder) {
+fn apply_shell_locale(command: &mut CommandBuilder, log: &Events) {
     let (language, region) = crate::platform::darwin::locale::codes();
     let locale = crate::locale::shell_locale(
         |name| command.get_env(name),
@@ -109,10 +109,7 @@ fn apply_shell_locale(command: &mut CommandBuilder) {
         crate::locale::ShellLocale::Kept => {}
         crate::locale::ShellLocale::Lang(name) => command.env("LANG", name),
         crate::locale::ShellLocale::CtypeUtf8 { name } => {
-            crate::service_log::log_info(
-                "locale",
-                format!("{name} is not installed; LC_CTYPE=UTF-8"),
-            );
+            log.record_info("locale", format!("{name} is not installed; LC_CTYPE=UTF-8"));
             command.env("LC_CTYPE", "UTF-8");
         }
     }
@@ -182,7 +179,7 @@ impl PtyService {
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
         #[cfg(target_os = "macos")]
-        apply_shell_locale(&mut command);
+        apply_shell_locale(&mut command, &self.log);
 
         let child = pair
             .slave
@@ -420,15 +417,16 @@ impl PtyService {
         };
         let reader = session.reader.lock().unwrap().take();
         let reaper = session.reaper.lock().unwrap().take();
+        let log = session.log.clone();
         thread::spawn(move || {
             if let Some(reader) = reader {
                 if reader.join().is_err() {
-                    crate::service_log::log_error("pty close", "the reader thread panicked");
+                    log.record_error("pty close", "the reader thread panicked");
                 }
             }
             if let Some(reaper) = reaper {
                 if reaper.join().is_err() {
-                    crate::service_log::log_error("pty close", "the reaper thread panicked");
+                    log.record_error("pty close", "the reaper thread panicked");
                 }
             }
         });

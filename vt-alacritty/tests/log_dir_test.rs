@@ -63,14 +63,29 @@ fn a_service_with_log_dir_writes_log_open_and_flushes_it_when_it_ends() {
         .arg(&root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("start the service");
+    let pid = child.id();
     let mut ready = String::new();
     BufReader::new(child.stdout.take().expect("service stdout"))
         .read_line(&mut ready)
         .expect("read the ready line");
     assert!(ready.contains("\"socket\""), "no ready line: {ready:?}");
+    // A client with a wrong token is an error record, and the standard error stays empty.
+    let mut rejected = std::os::unix::net::UnixStream::connect(endpoint_socket(&ready))
+        .expect("connect to the service");
+    writeln!(
+        rejected,
+        "{}",
+        serde_json::json!({"operation": "hello", "protocol": 1, "token": "wrong", "client": "owner-y"})
+    )
+    .expect("send the hello");
+    let mut rejection = String::new();
+    BufReader::new(&rejected)
+        .read_line(&mut rejection)
+        .expect("read the rejection");
+    assert!(rejection.contains("\"ok\":false"), "{rejection}");
     // A client that authenticates is the event `client_connect` with its owner.
     let endpoint: serde_json::Value = serde_json::from_str(&ready).expect("ready endpoint");
     let mut client = std::os::unix::net::UnixStream::connect(endpoint["socket"].as_str().unwrap())
@@ -87,8 +102,14 @@ fn a_service_with_log_dir_writes_log_open_and_flushes_it_when_it_ends() {
         .expect("read the hello reply");
     assert!(reply.contains("\"ok\":true"), "{reply}");
     // SAFETY: the test asks the child process it started to end.
-    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }, 0);
-    let status = child.wait().expect("wait for the service");
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGTERM) }, 0);
+    let output = child.wait_with_output().expect("wait for the service");
+    let status = output.status;
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "",
+        "the standard error holds only what the process or the system writes"
+    );
     assert!(status.success(), "{status:?}");
     let files: Vec<_> = std::fs::read_dir(&logs)
         .expect("the service created the log directory")
@@ -97,7 +118,7 @@ fn a_service_with_log_dir_writes_log_open_and_flushes_it_when_it_ends() {
     assert_eq!(files.len(), 1, "{files:?}");
     let name = files[0].file_name().unwrap().to_string_lossy().into_owned();
     assert!(
-        name.starts_with("vt-") && name.ends_with(&format!("-{}.jsonl", child.id())),
+        name.starts_with("vt-") && name.ends_with(&format!("-{}.jsonl", pid)),
         "{name}"
     );
     let text = std::fs::read_to_string(&files[0]).expect("read the event file");
@@ -105,7 +126,7 @@ fn a_service_with_log_dir_writes_log_open_and_flushes_it_when_it_ends() {
         serde_json::from_str(text.lines().next().expect("a first line")).expect("JSON line");
     assert_eq!(open["event"], "log.open");
     assert_eq!(open["fields"]["role"], "vt");
-    assert_eq!(open["fields"]["pid"], child.id());
+    assert_eq!(open["fields"]["pid"], pid);
     let events: Vec<serde_json::Value> = text
         .lines()
         .map(|line| serde_json::from_str(line).expect("JSON line"))
@@ -115,10 +136,28 @@ fn a_service_with_log_dir_writes_log_open_and_flushes_it_when_it_ends() {
         .find(|event| event["event"] == "sidecar.vt.session_start")
         .expect("the service records its start");
     assert_eq!(start["level"], "info");
+    let rejected = events
+        .iter()
+        .find(|event| event["event"] == "sidecar.vt.record.error")
+        .expect("the service records the failed authentication");
+    assert_eq!(rejected["fields"]["where"], "client authentication");
+    assert_eq!(
+        rejected["fields"]["text"],
+        "authentication or protocol mismatch"
+    );
     let connect = events
         .iter()
         .find(|event| event["event"] == "sidecar.vt.client_connect")
         .expect("the service records the client that connected");
     assert_eq!(connect["fields"]["owner"], "owner-x");
     std::fs::remove_dir_all(&root).expect("remove the test directory");
+}
+
+/// The socket path of the ready line.
+fn endpoint_socket(ready: &str) -> String {
+    let endpoint: serde_json::Value = serde_json::from_str(ready).expect("ready endpoint");
+    endpoint["socket"]
+        .as_str()
+        .expect("socket path")
+        .to_string()
 }

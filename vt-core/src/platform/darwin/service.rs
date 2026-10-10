@@ -56,32 +56,33 @@ pub struct AlreadyRunning {
 struct ServiceCleanup {
     service_dir: PathBuf,
     socket_dir: PathBuf,
+    log: Events,
 }
 
 impl Drop for ServiceCleanup {
     fn drop(&mut self) {
         if let Err(error) = fs::remove_file(self.service_dir.join("endpoint.json")) {
             if error.kind() != std::io::ErrorKind::NotFound {
-                crate::service_log::log_error(
-                    "service",
-                    format!("endpoint cleanup failed: {error}"),
-                );
+                self.log
+                    .record_error("service", format!("endpoint cleanup failed: {error}"));
             }
         }
         if let Err(error) = fs::remove_dir_all(&self.socket_dir) {
             if error.kind() != std::io::ErrorKind::NotFound {
-                crate::service_log::log_error("service", format!("socket cleanup failed: {error}"));
+                self.log
+                    .record_error("service", format!("socket cleanup failed: {error}"));
             }
         }
     }
 }
 
-struct Lock(File);
+struct Lock(File, Events);
 
 impl Drop for Lock {
     fn drop(&mut self) {
         if let Err(error) = nix::fcntl::flock(self.0.as_raw_fd(), nix::fcntl::FlockArg::Unlock) {
-            crate::service_log::log_error("service", format!("lock unlock failed: {error}"));
+            self.1
+                .record_error("service", format!("lock unlock failed: {error}"));
         }
     }
 }
@@ -135,14 +136,14 @@ fn read_endpoint(service_dir: &Path) -> Result<Endpoint, String> {
 
 /// 잠금을 얻었으면 이전 service 는 끝났다. 강제 종료나 충돌로 정리하지 못하고 끝난 이전 service 의 socket 디렉터리를
 /// 지운다. 이 service 가 만드는 /tmp/spv-* 디렉터리만 지우며, 지우지 못하면 그 까닭을 보고한다.
-fn remove_previous_socket(service_dir: &Path) {
+fn remove_previous_socket(service_dir: &Path, log: &Events) {
     if !service_dir.join("endpoint.json").exists() {
         return;
     }
     let endpoint = match read_endpoint(service_dir) {
         Ok(endpoint) => endpoint,
         Err(error) => {
-            crate::service_log::log_error("service", format!("previous endpoint: {error}"));
+            log.record_error("service", format!("previous endpoint: {error}"));
             return;
         }
     };
@@ -155,7 +156,7 @@ fn remove_previous_socket(service_dir: &Path) {
                 .is_some_and(|name| name.starts_with("spv-"))
     });
     let Some(directory) = owned else {
-        crate::service_log::log_error(
+        log.record_error(
             "service",
             format!(
                 "previous socket {} is not in a service socket directory",
@@ -166,7 +167,7 @@ fn remove_previous_socket(service_dir: &Path) {
     };
     if let Err(error) = fs::remove_dir_all(directory) {
         if error.kind() != std::io::ErrorKind::NotFound {
-            crate::service_log::log_error(
+            log.record_error(
                 "service",
                 format!("previous socket cleanup failed: {error}"),
             );
@@ -250,7 +251,7 @@ pub async fn serve_persistent(
 ) -> Result<(), String> {
     crate::platform::darwin::frame::load_default_font()?;
     let _lock = match service_lock(service_dir) {
-        Ok(file) => Lock(file),
+        Ok(file) => Lock(file, log.clone()),
         Err(error) if error == "already-running" => {
             let endpoint = read_endpoint(service_dir)?;
             let mut line = serde_json::to_vec(
@@ -265,12 +266,13 @@ pub async fn serve_persistent(
         }
         Err(error) => return Err(error),
     };
-    remove_previous_socket(service_dir);
+    remove_previous_socket(service_dir, &log);
     let (socket_dir, socket) = socket_path()?;
     let listener = UnixListener::bind(&socket).map_err(|e| format!("bind service socket: {e}"))?;
     let _cleanup = ServiceCleanup {
         service_dir: service_dir.to_path_buf(),
         socket_dir,
+        log: log.clone(),
     };
     let token = Uuid::new_v4().to_string();
     let endpoint = Endpoint {
@@ -319,7 +321,7 @@ pub async fn serve_persistent(
                 let log = log.clone();
                 clients.spawn(async move {
             match authenticate(stream, &token).await {
-            Err(error) => crate::service_log::log_error("client authentication", error),
+            Err(error) => log.record_error("client authentication", error),
             Ok((reader, writer, client)) => {
                 log.emit(
                     Level::Info,
@@ -346,12 +348,12 @@ pub async fn serve_persistent(
                         close: close_owner,
                         registry,
                         owner: client,
-                        log,
+                        log: log.clone(),
                     },
                 )
                 .await
                 {
-                    crate::service_log::log_error("client session", error);
+                    log.record_error("client session", error);
                 }
             }
             }

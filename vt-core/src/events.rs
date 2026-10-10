@@ -394,6 +394,25 @@ impl EventLog {
         self.loss.bytes.fetch_add(bytes, Ordering::Relaxed);
     }
 
+    /// Records what the service reports to its operator as an error: the event `sidecar.vt.record.error` with the
+    /// place (`where`) and the text.
+    pub fn record_error(&self, place: &str, text: impl std::fmt::Display) {
+        self.emit(
+            Level::Error,
+            "sidecar.vt.record.error",
+            &json!({"where": place, "text": text.to_string()}),
+        );
+    }
+
+    /// Records what the service reports to its operator as information: the event `sidecar.vt.record.info`.
+    pub fn record_info(&self, place: &str, text: impl std::fmt::Display) {
+        self.emit(
+            Level::Info,
+            "sidecar.vt.record.info",
+            &json!({"where": place, "text": text.to_string()}),
+        );
+    }
+
     /// Writes everything that is queued and waits until it is on disk, at most `deadline`.
     pub fn flush(&self, deadline: Duration) -> Result<(), String> {
         let (done, wait) = sync_channel(1);

@@ -255,6 +255,41 @@ async fn cids_that_are_not_a_list_of_strings_are_rejected_with_an_error() {
     }
 }
 
+// A terminal font family that is not installed is not an error of the request: the service records it.
+#[tokio::test]
+async fn a_font_family_that_is_not_installed_is_recorded_as_an_info_record() {
+    let events = TestEvents::new();
+    serve_lines(
+        &events,
+        br#"{"surface":"s1","root":"/tmp","body":{"operation":"font","family":"No Such Terminal Font Family","size":13}}
+"#,
+    )
+    .await;
+    let records = events.named("sidecar.vt.record.info");
+    let texts: Vec<_> = records
+        .iter()
+        .map(|record| {
+            (
+                record["fields"]["where"].as_str().unwrap(),
+                record["fields"]["text"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        texts,
+        vec![
+            (
+                "font",
+                "terminal font family is not installed: No Such Terminal Font Family"
+            ),
+            (
+                "font",
+                "no listed terminal font family is installed; using the system fixed-pitch font"
+            ),
+        ]
+    );
+}
+
 /// The correlation identifiers of a request reach the event of the write to the PTY that the request caused, through a
 /// real PTY service.
 #[tokio::test]

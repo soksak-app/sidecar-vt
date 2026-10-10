@@ -1824,7 +1824,7 @@ async fn open_if_configured(
             // 기다리면 다음 configure 가 세션을 연다(V5-96-14-6-4-8).
             Err(_) => return true,
         };
-    crate::engine_trace::record(surface_id, || format!("resize {cols} {rows}"));
+    crate::engine_trace::record(log, surface_id, || format!("resize {cols} {rows}"));
     engine.resize(cols, rows);
     if let Err(error) = set_engine_metrics(engine, state) {
         let response = json!({"surface": surface_id, "body": {"error": "invalid renderer metrics", "reason": error}});
@@ -2071,7 +2071,7 @@ async fn surface_task(
                                 (screen.cols, screen.rows)
                             }
                         };
-                        crate::engine_trace::record(&surface_id, || format!("resize {cols} {rows}"));
+                        crate::engine_trace::record(&log, &surface_id, || format!("resize {cols} {rows}"));
                         engine.resize(cols, rows);
                         if let Err(error) = set_engine_metrics(&mut engine, &new_state) {
                             let response = json!({"surface": surface_id, "body": {"error": "invalid renderer metrics", "reason": error}});
@@ -2620,7 +2620,7 @@ async fn surface_task(
                                 }
                             };
                             state.metrics = metrics;
-                            crate::engine_trace::record(&surface_id, || format!("resize {cols} {rows}"));
+                            crate::engine_trace::record(&log, &surface_id, || format!("resize {cols} {rows}"));
                             engine.resize(cols, rows);
                             if let Err(error) = set_engine_metrics(&mut engine, state) {
                                 let response = json!({"surface": surface_id, "body": {"error": "invalid renderer metrics", "reason": error}});
@@ -2771,9 +2771,9 @@ async fn surface_task(
                             None => Ok(()),
                         };
                         // 닫기를 보낸 쪽이 기다리기를 그만두었으면 그 쪽이 시간 초과를 이미 보고했다. 닫기 오류는
-                        // 받을 곳이 없으므로 service log 에 남긴다.
+                        // 받을 곳이 없으므로 오류 기록 event 로 남긴다.
                         if let Err(Err(error)) = result.send(closed) {
-                            crate::service_log::log_error(&format!("surface {surface_id}"), error);
+                            log.record_error(&format!("surface {surface_id}"), error);
                         }
                         break;
                     }
@@ -2845,7 +2845,7 @@ async fn surface_task(
                                         (screen.cols, screen.rows)
                                     }
                                 };
-                                crate::engine_trace::record(&surface_id, || format!("resize {cols} {rows}"));
+                                crate::engine_trace::record(&log, &surface_id, || format!("resize {cols} {rows}"));
                                 engine.resize(cols, rows);
                                 if let Err(error) = set_engine_metrics(&mut engine, &new_state) {
                                     let response = json!({"surface": surface_id, "body": {"error": "invalid renderer metrics", "reason": error}});
@@ -2890,10 +2890,10 @@ async fn surface_task(
                                 cursor_activity = Instant::now();
                                 last_cursor_frame = None;
                                 if truncated {
-                                    crate::engine_trace::record(&surface_id, || "reset".to_string());
+                                    crate::engine_trace::record(&log, &surface_id, || "reset".to_string());
                                     engine.reset();
                                 }
-                                crate::engine_trace::record(&surface_id, || format!("feed {}", base64_encode(&data)));
+                                crate::engine_trace::record(&log, &surface_id, || format!("feed {}", base64_encode(&data)));
                                 engine.feed(&data);
                                 if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart).await { return; }
                                 if headless || hold_while_presenting(&mut image_state) { continue; }
@@ -3370,6 +3370,7 @@ where
 
                         // panic을 감시하는 monitor task를 spawn한다
                         let out_tx_monitor = output_tx.clone();
+                        let log_monitor = log.clone();
                         tasks.spawn(async move {
                             match surface_handle.await {
                                 Ok(_) => {},
@@ -3391,11 +3392,11 @@ where
                                         "body": {"event": "error", "reason": format!("surface task ended: {}", panic_msg)}
                                     });
                                     if let Err(error) = out_tx_monitor.send(response.to_string()).await {
-                                        crate::service_log::log_error("surface task", format!("the panic report was not delivered: {error:?}"));
+                                        log_monitor.record_error("surface task", format!("the panic report was not delivered: {error:?}"));
                                     }
                                 }
                                 Err(error) => {
-                                    crate::service_log::log_error("surface task", format!("cancelled: {error}"));
+                                    log_monitor.record_error("surface task", format!("cancelled: {error}"));
                                 }
                             }
                         });
@@ -3684,13 +3685,13 @@ where
                                     Ok((selection, size)) => {
                                         // 설치되어 있지 않은 family 는 오류가 아니라 로그에 남긴다.
                                         for family in &selection.skipped {
-                                            crate::service_log::log_info(
+                                            log.record_info(
                                                 "font",
                                                 format!("terminal font family is not installed: {family}"),
                                             );
                                         }
                                         if selection.system {
-                                            crate::service_log::log_info("font", "no listed terminal font family is installed; using the system fixed-pitch font");
+                                            log.record_info("font", "no listed terminal font family is installed; using the system fixed-pitch font");
                                         }
                                         let (font, system, skipped) =
                                             (selection.font, selection.system, selection.skipped);

@@ -317,3 +317,26 @@ fn the_fields_of_bytes_hold_every_byte_of_a_long_chunk() {
     assert_eq!(multibyte["text"], "한a\n");
     assert_eq!(multibyte["hex"], "ed959c610a");
 }
+
+// The records of the service (what it reports to its operator) are events with the fields `where` and `text`; the text is
+// stored as it is, with its line feeds.
+#[test]
+fn a_record_is_an_event_with_the_place_and_the_text() {
+    let dir = directory("records");
+    let log = EventLog::start(options(&dir)).unwrap();
+    log.record_error("surface close", "first\nsecond");
+    log.record_info("font", "no listed font is installed");
+    log.flush(DEADLINE).unwrap();
+    let lines = lines_of(log.path());
+    let error = &lines[1];
+    assert_eq!(error["event"], "sidecar.vt.record.error");
+    assert_eq!(error["level"], "error");
+    assert_eq!(error["layer"], "sidecar");
+    assert_eq!(error["fields"]["where"], "surface close");
+    assert_eq!(error["fields"]["text"], "first\nsecond");
+    let info = &lines[2];
+    assert_eq!(info["event"], "sidecar.vt.record.info");
+    assert_eq!(info["level"], "info");
+    assert_eq!(info["fields"]["where"], "font");
+    assert_eq!(info["fields"]["text"], "no listed font is installed");
+}
