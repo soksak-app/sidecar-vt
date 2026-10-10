@@ -1,11 +1,11 @@
-// The catalog of the events of the service (events.json at the root of the repository) as the tests read it.
+// The catalog of the events of the service (vt-alacritty/events.json) as the tests read it.
 #![allow(dead_code)]
 
 use serde_json::Value;
 
 /// The catalog, read from the root of the repository.
 pub fn catalog() -> Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../events.json");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../vt-alacritty/events.json");
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()))

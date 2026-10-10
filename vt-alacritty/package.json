@@ -11,6 +11,7 @@
   "type": "module",
   "files": [
     "sidecar.json",
+    "events.json",
     "build/soksak-vt-alacritty"
   ]
 }

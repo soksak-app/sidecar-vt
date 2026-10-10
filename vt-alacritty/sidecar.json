@@ -1,5 +1,6 @@
 {
   "executable": "build/soksak-vt-alacritty",
   "protocol": 1,
-  "transport": "persistent"
+  "transport": "persistent",
+  "events": "events.json"
 }

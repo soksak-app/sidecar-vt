@@ -1,4 +1,4 @@
-// Checks the catalog of the events of the service, events.json (core docs/spec/logging.md#catalog): its structure, that
+// Checks the catalog of the events of the service, vt-alacritty/events.json (core docs/spec/logging.md#catalog): its structure, that
 // every declared event is named by a source of vt-core, and that every event a source names is declared.
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 const root = new URL("../", import.meta.url).pathname;
-const catalog = JSON.parse(readFileSync(join(root, "events.json"), "utf8"));
+const catalog = JSON.parse(readFileSync(join(root, "vt-alacritty/events.json"), "utf8"));
 
 const LEVELS = ["error", "warn", "info", "debug", "trace"];
 const CLASSES = ["lifecycle", "input", "call", "io", "frame"];
@@ -57,4 +57,11 @@ test("every event that a source of vt-core names is declared", () => {
   const undeclared = [...found].filter((name) => catalog.events[name] === undefined);
   assert.deepEqual(undeclared, [], "events that no catalog entry declares");
   assert.ok(found.size > 0, "the sources name no event");
+});
+
+test("the manifest of the sidecar names the catalog and the release packs it", () => {
+  const manifest = JSON.parse(readFileSync(join(root, "vt-alacritty/sidecar.json"), "utf8"));
+  const packed = JSON.parse(readFileSync(join(root, "vt-alacritty/package.json"), "utf8")).files;
+  assert.equal(manifest.events, "events.json");
+  assert.ok(packed.includes(manifest.events), `package.json files ${JSON.stringify(packed)} lack ${manifest.events}`);
 });

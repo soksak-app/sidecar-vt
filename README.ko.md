@@ -10,6 +10,6 @@ make build                # sidecar.json이 가리키는 실행 파일
 make release OUT=<folder> SOK=<core>/target/debug/sok   # 이 platform의 release
 ```
 
-service는 `soksak-vt-alacritty --service-dir <dir> --log-dir <dir>`로 시작하며 두 option이 모두 필요하다. event는 `<log-dir>/vt-<boot>.jsonl`에 쓰고, [events.json](events.json)이 그 event를 선언한다.
+service는 `soksak-vt-alacritty --service-dir <dir> --log-dir <dir>`로 시작하며 두 option이 모두 필요하다. event는 `<log-dir>/vt-<boot>.jsonl`에 쓰고, [events.json](vt-alacritty/events.json)이 그 event를 선언한다.
 
 Checklist는 [docs/features.md](docs/features.md)다.
