@@ -1,6 +1,8 @@
 // The events of the serve loop and of the PTY service (core docs/spec/logging.md): the frames, the requests with their
 // whole bodies, and the writes to the PTY with the correlation identifiers of the request that caused them. The events
 // are produced by the writer of this crate and read from its file.
+#[path = "support/catalog_test.rs"]
+mod catalog_test;
 #[path = "support/events_test.rs"]
 mod events_test;
 
@@ -349,4 +351,43 @@ fn request_operation_names_the_kind_of_request() {
         "bytes"
     );
     assert_eq!(name(serde_json::json!({"surface": "s"})), "unknown");
+}
+
+// The events of a whole session through a real PTY satisfy the catalog of the service: each is declared, with its level and
+// its required fields.
+#[tokio::test]
+async fn the_events_of_a_session_satisfy_the_catalog() {
+    let events = TestEvents::new();
+    let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
+    let factory = make_default_session_port_factory(events.handle());
+    serve_with(
+        &events,
+        engine_factory,
+        factory,
+        br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/cat","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","cids":["b1.1"],"body":{"operation":"input","bytes":"7ZWcYQo="}}
+{"surface":"s1","body":{"operation":"font","family":"No Such Terminal Font Family","size":13}}
+not json at all
+"#,
+    )
+    .await;
+    let lines = events.lines();
+    let names: std::collections::BTreeSet<&str> = lines
+        .iter()
+        .map(|line| line["event"].as_str().unwrap())
+        .collect();
+    for expected in [
+        "sidecar.vt.frame",
+        "sidecar.vt.pty_write",
+        "sidecar.vt.record.info",
+        "sidecar.vt.request",
+        "sidecar.vt.session_open",
+    ] {
+        assert!(
+            names.contains(expected),
+            "{expected} was not written: {names:?}"
+        );
+    }
+    assert_eq!(catalog_test::findings(&lines), Vec::<String>::new());
 }

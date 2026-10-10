@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S38: 저장소 root의 `events.json`이 service의 event 15개(layer, class, level, 필수 필드와 그 type, 설명)를 선언하고, `tests/events.test.mjs`와 `vt-core/tests/serve_events.rs`가 선언한 event마다 이를 이름 붙인 source가 있는지, source가 이름 붙인 event가 모두 선언되었는지, 실제 session의 event가 catalog를 만족하는지 검사한다.
 - S37: service의 기록은 필드 `where`와 `text`를 가진 event `sidecar.vt.record.error`와 `sidecar.vt.record.info`이고, 표준 오류에는 process나 system이 쓰는 것만 남는다. `service_log`는 없앴고, 실패한 client 인증, 실패한 정리, 설치되지 않은 글꼴 family, 쓸 수 없는 trace 폴더는 event 파일의 기록이다.
 - S36: performance trace의 event는 event 파일의 event `sidecar.vt.pty_write`, `pty_read`, `pty_eof`, `pty_read_error`, `session_open`, `session_exit`, `frame`, `consumed_wait`, `read_wait`, `output_blocked`, `request`, `session_start`, `client_connect`이고 항상 저장한다. 수준은 `pty_read`, `frame`, `consumed_wait`가 `debug`이고 나머지는 `info`다. 요청 줄의 `cids` 필드(문자열 목록이며 다른 값은 parse 오류로 답한다)는 event `request`와 `pty_write`의 줄 최상위에 쓰이고, `SessionPort::write`와 `PtyService::write`가 이를 받는다. 플래그 파일 `performance`와 모듈 `performance`는 없앴다.
 - S35: service는 event를 event contract의 JSON line으로 `<log-dir>/vt-<boot>.jsonl`에 쓴다(폴더 mode 0700 안의 mode 0600 파일, 첫 줄 `log.open`, `seq`는 1부터, 100 MB에서 rotation하고 이전 파일 5개를 유지, 거절한 event는 `log.dropped`). 디렉터리는 새 필수 인자 `--log-dir <dir>`에서 받는다. 이 인자가 없으면 service는 시작을 거부하고, 값이 없는 인자, 반복한 인자, 모르는 인자는 오류다.

@@ -1,0 +1,163 @@
+{
+  "schema": 1,
+  "layers": [
+    "sidecar"
+  ],
+  "events": {
+    "sidecar.vt.session_start": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "role": "string"
+      },
+      "description": "The service started and accepts clients."
+    },
+    "sidecar.vt.client_connect": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "owner": "string"
+      },
+      "description": "A client authenticated; owner is the name it gave."
+    },
+    "sidecar.vt.session_open": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "owner": "string",
+        "cols": "number",
+        "rows": "number"
+      },
+      "description": "A terminal session started; the line names it in session. cwd and pid are present when known."
+    },
+    "sidecar.vt.session_exit": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "status": "string"
+      },
+      "description": "The child of a session was reaped; status is the exit status."
+    },
+    "sidecar.vt.pty_eof": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {},
+      "description": "The read side of the PTY of a session ended."
+    },
+    "sidecar.vt.pty_read_error": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "error": "string"
+      },
+      "description": "Reading the PTY of a session failed."
+    },
+    "sidecar.vt.pty_write": {
+      "layer": "sidecar",
+      "class": "io",
+      "level": "info",
+      "fields": {
+        "bytes": "number",
+        "text": "string",
+        "hex": "string",
+        "ok": "boolean"
+      },
+      "description": "Bytes written to the PTY of a session, all of them, with the cids of the inputs that caused the write. error is present when the write failed."
+    },
+    "sidecar.vt.pty_read": {
+      "layer": "sidecar",
+      "class": "io",
+      "level": "debug",
+      "fields": {
+        "bytes": "number",
+        "text": "string",
+        "hex": "string",
+        "sequence": "number"
+      },
+      "description": "Bytes read from the PTY of a session, all of them."
+    },
+    "sidecar.vt.request": {
+      "layer": "sidecar",
+      "class": "io",
+      "level": "info",
+      "fields": {
+        "operation": "string",
+        "owner": "string",
+        "connection": "number",
+        "idle_us": "number",
+        "us": "number"
+      },
+      "description": "A request line of a client with its whole body, written when its handling ended; a line that is not JSON is body.unparsed."
+    },
+    "sidecar.vt.frame": {
+      "layer": "sidecar",
+      "class": "frame",
+      "level": "debug",
+      "fields": {
+        "reason": "string",
+        "draw_us": "number",
+        "raster": "string",
+        "seq": "number"
+      },
+      "description": "An image frame of a surface was drawn."
+    },
+    "sidecar.vt.consumed_wait": {
+      "layer": "sidecar",
+      "class": "frame",
+      "level": "debug",
+      "fields": {
+        "wait_us": "number",
+        "answer": "string"
+      },
+      "description": "The time from sending a frame to the answer of the host."
+    },
+    "sidecar.vt.read_wait": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "waited_us": "number",
+        "pending_polls": "number",
+        "since_last_poll_us": "number",
+        "bytes": "number"
+      },
+      "description": "The read side of a connection waited one second or more for data."
+    },
+    "sidecar.vt.output_blocked": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "us": "number",
+        "bytes": "number"
+      },
+      "description": "Writing a line to a client took 10 milliseconds or more."
+    },
+    "sidecar.vt.record.error": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "error",
+      "fields": {
+        "where": "string",
+        "text": "string"
+      },
+      "description": "An error that the service reports to its operator."
+    },
+    "sidecar.vt.record.info": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "where": "string",
+        "text": "string"
+      },
+      "description": "A fact that the service reports to its operator."
+    }
+  }
+}
