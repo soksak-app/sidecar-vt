@@ -1,4 +1,5 @@
 use crate::encoding::{self, Key};
+use crate::events::{Events, Level, Subject};
 use crate::inline_image::{Dimension, InlineImageCommand};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -727,7 +728,8 @@ pub struct ShellRequest {
 #[async_trait]
 pub trait SessionPort: Send + Sync {
     async fn open(&self, request: &ShellRequest, cols: u16, rows: u16) -> Result<String, String>;
-    async fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String>;
+    /// Writes `data` to the session. `cids` are the correlation identifiers of the inputs that caused the write.
+    async fn write(&self, session_id: &str, data: &[u8], cids: &[String]) -> Result<(), String>;
     async fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String>;
     async fn detach(&self, session_id: &str) -> Result<(), String>;
     async fn close(&self, session_id: &str) -> Result<(), String>;
@@ -755,6 +757,9 @@ struct Envelope {
     root: Option<String>,
     body: Option<Value>,
     closed: Option<bool>,
+    /// The correlation identifiers of the inputs the request continues (core docs/spec/sidecars.md#messages).
+    #[serde(default)]
+    cids: Vec<String>,
 }
 
 /// 표면 작업으로 보낼 명령
@@ -768,18 +773,22 @@ enum SurfaceCommand {
     Configure(ImageConfiguration),
     Input {
         bytes: Vec<u8>,
+        cids: Vec<String>,
     },
     InputKeys {
         keys: Vec<InputKey>,
+        cids: Vec<String>,
     },
     Paste {
         text: String,
+        cids: Vec<String>,
     },
     Compose {
         preedit: Option<Preedit>,
     },
     Focus {
         focused: bool,
+        cids: Vec<String>,
     },
     Theme {
         // 테마는 다른 명령보다 훨씬 크므로 명령 크기를 키우지 않도록 따로 둔다.
@@ -825,6 +834,7 @@ enum SurfaceCommand {
         shift: bool,
         alt: bool,
         ctrl: bool,
+        cids: Vec<String>,
     },
     SelectionStart {
         x: f64,
@@ -842,6 +852,7 @@ enum SurfaceCommand {
         lines: i32,
         col: u16,
         row: u16,
+        cids: Vec<String>,
     },
     /// 스크롤바 끌기. 기본 뷰포트를 이 오프셋으로 옮기며 프로그램에는 쓰지 않는다.
     Viewport {
@@ -1172,7 +1183,7 @@ async fn present_screen(
     state: &mut ImageState,
     output_tx: &OutputSink,
     reason: &str,
-    performance: &crate::performance::PerformanceTrace,
+    log: &Events,
 ) -> bool {
     // 호스트는 표시 요청의 래스터를 복사한 뒤 consumed 로 답한다. 답을 받기 전에 같은 래스터에 다시 그리면
     // 복사 중인 픽셀을 덮어 글자가 빠진 프레임이 표시된다. 그 동안의 화면은 dirty 로 남겨 답을 받은 뒤 그린다.
@@ -1204,11 +1215,12 @@ async fn present_screen(
         return true;
     }
     // 프레임 한 장의 계기(V5-104): 무엇 때문에 그렸는지, 얼마나 걸렸는지, 어떤 래스터에.
-    performance.line(
-        "frame",
-        serde_json::json!({
+    log.emit_for(
+        Level::Debug,
+        "sidecar.vt.frame",
+        Subject::surface(surface_id),
+        &serde_json::json!({
             "reason": reason,
-            "surface": surface_id,
             "draw_us": draw_started.elapsed().as_micros() as u64,
             "raster": format!("{}x{}", state.width_px, state.height_px),
             "seq": state.sequence + 1,
@@ -1484,7 +1496,7 @@ struct SurfacePorts<'a> {
     surface_id: &'a str,
     session_port: &'a Arc<dyn SessionPort>,
     output_tx: &'a OutputSink,
-    performance: &'a crate::performance::PerformanceTrace,
+    log: &'a Events,
 }
 
 async fn send_engine_events(
@@ -1576,7 +1588,7 @@ async fn send_engine_events(
                     let response = json!({"surface": surface_id, "body": {"error": "engine response without session"}});
                     return output_tx.send(response.to_string()).await.is_ok();
                 };
-                if let Err(error) = session_port.write(session_id, &bytes).await {
+                if let Err(error) = session_port.write(session_id, &bytes, &[]).await {
                     let response = json!({"surface": surface_id, "body": {"error": "engine response write failed", "reason": error}});
                     return output_tx.send(response.to_string()).await.is_ok();
                 }
@@ -1790,7 +1802,7 @@ async fn open_if_configured(
         surface_id,
         session_port,
         output_tx,
-        performance,
+        log,
     } = ports;
     if !requested || session_id.is_some() {
         return true;
@@ -1825,7 +1837,7 @@ async fn open_if_configured(
                 return false;
             }
             let screen = engine.screen();
-            present_screen(surface_id, &screen, state, output_tx, "open", performance).await
+            present_screen(surface_id, &screen, state, output_tx, "open", log).await
         }
         Err(error) => {
             let response = json!({"surface": surface_id, "body": {"error": format!("Failed to open: {error}")}});
@@ -1901,7 +1913,7 @@ fn local_surface_key(
 /// 표면별 비동기 작업. 엔진과 데몬 연결을 소유하며 명령을 처리한다.
 async fn surface_task(
     surface_id: String,
-    performance: crate::performance::PerformanceTrace,
+    log: Events,
     engine_factory: Arc<dyn Fn() -> Box<dyn Engine> + Send + Sync>,
     session_port: Arc<dyn SessionPort>,
     mut cmd_rx: mpsc::Receiver<SurfaceCommand>,
@@ -1976,7 +1988,7 @@ async fn surface_task(
                     if let Some(state) = image_state.as_mut() {
                         if state.pending_draw {
                             state.dirty = true;
-                        } else if !present_screen(&surface_id, &screen, state, &output_tx, "blink", &performance).await {
+                        } else if !present_screen(&surface_id, &screen, state, &output_tx, "blink", &log).await {
                             return;
                         } else {
                             last_cursor_frame = Some(signature);
@@ -1992,7 +2004,7 @@ async fn surface_task(
                         requested_shell = request;
                         headless = requested_image.is_none();
                         if headless && !open_headless(&requested_shell, &mut session_id, &mut engine, &session_port, &output_tx).await { return; }
-                        if !open_if_configured(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, performance: &performance }, open_requested, &requested_image, &requested_shell, &mut session_id,
+                        if !open_if_configured(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log }, open_requested, &requested_image, &requested_shell, &mut session_id,
                             &mut engine, &mut image_state).await {
                             return;
                         }
@@ -2077,15 +2089,15 @@ async fn surface_task(
                                 return;
                             }
                             let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-                            if !present_screen(&surface_id, &screen, image_state.as_mut().unwrap(), &output_tx, "resize", &performance).await {
+                            if !present_screen(&surface_id, &screen, image_state.as_mut().unwrap(), &output_tx, "resize", &log).await {
                                 return;
                             }
-                        } else if !open_if_configured(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, performance: &performance }, open_requested, &requested_image, &requested_shell, &mut session_id,
+                        } else if !open_if_configured(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log }, open_requested, &requested_image, &requested_shell, &mut session_id,
                             &mut engine, &mut image_state).await {
                             return;
                         }
                     }
-                    SurfaceCommand::Input { bytes } => {
+                    SurfaceCommand::Input { bytes, cids } => {
                         cursor_activity = Instant::now();
                         last_cursor_frame = None;
                         // 입력은 뷰포트를 가장 새 출력으로 되돌린 뒤 쓴다.
@@ -2094,12 +2106,12 @@ async fn surface_task(
                             if !hold_while_presenting(&mut image_state) {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
                                 if let Some(state) = image_state.as_mut() {
-                                    if !present_screen(&surface_id, &screen, state, &output_tx, "input", &performance).await { return; }
+                                    if !present_screen(&surface_id, &screen, state, &output_tx, "input", &log).await { return; }
                                 } else if output_tx.send(screen_event(&surface_id, &screen).to_string()).await.is_err() { return; }
                             }
                         }
                         if let Some(ref sid) = session_id {
-                            match session_port.write(sid, &bytes).await {
+                            match session_port.write(sid, &bytes, &cids).await {
                                 Ok(()) => {
                                     let response = json!({
                                         "surface": surface_id,
@@ -2129,7 +2141,7 @@ async fn surface_task(
                             }
                         }
                     }
-                    SurfaceCommand::Paste { text } => {
+                    SurfaceCommand::Paste { text, cids } => {
                         cursor_activity = Instant::now();
                         last_cursor_frame = None;
                         // 입력은 뷰포트를 가장 새 출력으로 되돌린 뒤 쓴다.
@@ -2138,7 +2150,7 @@ async fn surface_task(
                             if !hold_while_presenting(&mut image_state) {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
                                 if let Some(state) = image_state.as_mut() {
-                                    if !present_screen(&surface_id, &screen, state, &output_tx, "paste", &performance).await { return; }
+                                    if !present_screen(&surface_id, &screen, state, &output_tx, "paste", &log).await { return; }
                                 } else if output_tx.send(screen_event(&surface_id, &screen).to_string()).await.is_err() { return; }
                             }
                         }
@@ -2156,7 +2168,7 @@ async fn surface_task(
                                     continue;
                                 }
                             };
-                            match session_port.write(sid, &bytes).await {
+                            match session_port.write(sid, &bytes, &cids).await {
                                 Ok(()) => {
                                     let response = json!({
                                         "surface": surface_id,
@@ -2186,7 +2198,7 @@ async fn surface_task(
                             }
                         }
                     }
-                    SurfaceCommand::Mouse { input_id, phase, x, y, pressed, shift, alt, ctrl } => {
+                    SurfaceCommand::Mouse { input_id, phase, x, y, pressed, shift, alt, ctrl, cids } => {
                         let modes = engine.modes();
                         let cell = match image_state.as_ref()
                             .ok_or_else(|| "mouse image is not configured".to_string())
@@ -2215,7 +2227,7 @@ async fn surface_task(
                                     last_cursor_frame = None;
                                     if let Some(state) = image_state.as_mut() {
                                         let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                                        if !present_screen(&surface_id, &screen, state, &output_tx, "mouse", &performance).await { return; }
+                                        if !present_screen(&surface_id, &screen, state, &output_tx, "mouse", &log).await { return; }
                                     }
                                 }
                                 Some((encoding::MouseButton::Left, encoding::MouseAction::Press))
@@ -2243,7 +2255,7 @@ async fn surface_task(
                             match encoded {
                                 Ok(bytes) => {
                                     let written = if let Some(ref sid) = session_id {
-                                        if let Err(error) = session_port.write(sid, &bytes).await {
+                                        if let Err(error) = session_port.write(sid, &bytes, &cids).await {
                                             let response = json!({"surface": surface_id, "body": {"error": "mouse write failed", "reason": error}});
                                             if output_tx.send(response.to_string()).await.is_err() { return; }
                                             false
@@ -2324,7 +2336,7 @@ async fn surface_task(
                             last_cursor_frame = None;
                             if let Some(state) = image_state.as_mut() {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                                if !present_screen(&surface_id, &screen, state, &output_tx, "selection", &performance).await { return; }
+                                if !present_screen(&surface_id, &screen, state, &output_tx, "selection", &log).await { return; }
                             }
                             let response = json!({"surface": surface_id, "body": {"ack": true, "event": "selection.start"}});
                             if output_tx.send(response.to_string()).await.is_err() { return; }
@@ -2342,7 +2354,7 @@ async fn surface_task(
                             last_cursor_frame = None;
                             if let Some(state) = image_state.as_mut() {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                                if !present_screen(&surface_id, &screen, state, &output_tx, "selection", &performance).await { return; }
+                                if !present_screen(&surface_id, &screen, state, &output_tx, "selection", &log).await { return; }
                             }
                             let response = json!({"surface": surface_id, "body": {"ack": true, "event": "selection.update"}});
                             if output_tx.send(response.to_string()).await.is_err() { return; }
@@ -2361,7 +2373,7 @@ async fn surface_task(
                             Ok(text) => {
                                 if let Some(state) = image_state.as_mut() {
                                     let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                                    if !present_screen(&surface_id, &screen, state, &output_tx, "selection", &performance).await { return; }
+                                    if !present_screen(&surface_id, &screen, state, &output_tx, "selection", &log).await { return; }
                                     let body = match text {
                                         Some(text) => json!({"event": "selection.copy", "text": text, "userInitiated": true}),
                                         None => json!({"event": "selection.end", "copied": false}),
@@ -2393,10 +2405,10 @@ async fn surface_task(
                         if hold_while_presenting(&mut image_state) { continue; }
                         let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
                         if let Some(state) = image_state.as_mut() {
-                            if !present_screen(&surface_id, &screen, state, &output_tx, "viewport", &performance).await { return; }
+                            if !present_screen(&surface_id, &screen, state, &output_tx, "viewport", &log).await { return; }
                         } else if output_tx.send(screen_event(&surface_id, &screen).to_string()).await.is_err() { return; }
                     }
-                    SurfaceCommand::Scroll { lines, col, row } => {
+                    SurfaceCommand::Scroll { lines, col, row, cids } => {
                         let modes = engine.modes();
                         // 마우스 보고, 대체 화면의 대체 스크롤, 기본 화면의 뷰포트 순으로 적용한다.
                         let bytes = if modes.mouse_report() {
@@ -2425,7 +2437,7 @@ async fn surface_task(
                         match bytes {
                             Some(bytes) => {
                                 if let Some(ref sid) = session_id {
-                                    if let Err(error) = session_port.write(sid, &bytes).await {
+                                    if let Err(error) = session_port.write(sid, &bytes, &cids).await {
                                         let response = json!({"surface": surface_id, "body": {"error": "scroll write failed", "reason": error}});
                                         if output_tx.send(response.to_string()).await.is_err() { return; }
                                     }
@@ -2437,7 +2449,7 @@ async fn surface_task(
                                 if hold_while_presenting(&mut image_state) { continue; }
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
                                 if let Some(state) = image_state.as_mut() {
-                                    if !present_screen(&surface_id, &screen, state, &output_tx, "scroll", &performance).await { return; }
+                                    if !present_screen(&surface_id, &screen, state, &output_tx, "scroll", &log).await { return; }
                                 } else if output_tx.send(screen_event(&surface_id, &screen).to_string()).await.is_err() { return; }
                             }
                         }
@@ -2451,7 +2463,7 @@ async fn surface_task(
                         let response = json!({"surface": surface_id, "body": body});
                         if output_tx.send(response.to_string()).await.is_err() { return; }
                     }
-                    SurfaceCommand::InputKeys { keys } => {
+                    SurfaceCommand::InputKeys { keys, cids } => {
                         cursor_activity = Instant::now();
                         last_cursor_frame = None;
                         // 입력은 뷰포트를 가장 새 출력으로 되돌린 뒤 쓴다.
@@ -2460,7 +2472,7 @@ async fn surface_task(
                             if !hold_while_presenting(&mut image_state) {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
                                 if let Some(state) = image_state.as_mut() {
-                                    if !present_screen(&surface_id, &screen, state, &output_tx, "input", &performance).await { return; }
+                                    if !present_screen(&surface_id, &screen, state, &output_tx, "input", &log).await { return; }
                                 } else if output_tx.send(screen_event(&surface_id, &screen).to_string()).await.is_err() { return; }
                             }
                         }
@@ -2469,7 +2481,7 @@ async fn surface_task(
                             match encode_keys(&keys, &modes) {
                                 Ok(bytes) => {
                                     if !bytes.is_empty() {
-                                        match session_port.write(sid, &bytes).await {
+                                        match session_port.write(sid, &bytes, &cids).await {
                                             Ok(()) => {
                                                 let response = json!({
                                                     "surface": surface_id,
@@ -2534,7 +2546,7 @@ async fn surface_task(
                                     &cursor_policy,
                                     0,
                                 );
-                                if !present_screen(&surface_id, &screen, state, &output_tx, "input", &performance).await {
+                                if !present_screen(&surface_id, &screen, state, &output_tx, "input", &log).await {
                                     return;
                                 }
                             }
@@ -2542,14 +2554,14 @@ async fn surface_task(
                         let response = json!({"surface": surface_id, "body": {"ack": true}});
                         if output_tx.send(response.to_string()).await.is_err() { return; }
                     }
-                    SurfaceCommand::Focus { focused: next } => {
+                    SurfaceCommand::Focus { focused: next, cids } => {
                         cursor_activity = Instant::now();
                         last_cursor_frame = None;
                         // ?1004 를 켠 프로그램에는 초점이 바뀔 때마다 알린다.
                         if next != focused && engine.modes().focus_in_out {
                             if let Some(ref sid) = session_id {
                                 let report: &[u8] = if next { b"\x1b[I" } else { b"\x1b[O" };
-                                if let Err(error) = session_port.write(sid, report).await {
+                                if let Err(error) = session_port.write(sid, report, &cids).await {
                                     let response = json!({"surface": surface_id, "body": {"error": "focus report write failed", "reason": error}});
                                     if output_tx.send(response.to_string()).await.is_err() { return; }
                                 }
@@ -2558,7 +2570,7 @@ async fn surface_task(
                         focused = next;
                         let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
                         if let Some(ref mut state) = image_state {
-                            if !present_screen(&surface_id, &screen, state, &output_tx, "focus", &performance).await { return; }
+                            if !present_screen(&surface_id, &screen, state, &output_tx, "focus", &log).await { return; }
                         }
                         let response = json!({"surface": surface_id, "body": {"ack": true}});
                         if output_tx.send(response.to_string()).await.is_err() { return; }
@@ -2573,7 +2585,7 @@ async fn surface_task(
                                 state.dirty = true;
                             } else {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-                                if !present_screen(&surface_id, &screen, state, &output_tx, "theme", &performance).await { return; }
+                                if !present_screen(&surface_id, &screen, state, &output_tx, "theme", &log).await { return; }
                             }
                         }
                         let response = json!({"surface": surface_id, "body": {"ack": true, "event": "theme", "mode": theme.mode.name(), "background": format!("#{:02x}{:02x}{:02x}", theme.background[0], theme.background[1], theme.background[2])}});
@@ -2631,7 +2643,7 @@ async fn surface_task(
                                 state.dirty = true;
                             } else {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-                                if !present_screen(&surface_id, &screen, state, &output_tx, "metrics", &performance).await { return; }
+                                if !present_screen(&surface_id, &screen, state, &output_tx, "metrics", &log).await { return; }
                             }
                         } else {
                             terminal_font = font;
@@ -2654,7 +2666,7 @@ async fn surface_task(
                         if let Some(state) = image_state.as_mut() {
                             if state.pending_draw {
                                 state.dirty = true;
-                            } else if !present_screen(&surface_id, &screen, state, &output_tx, "cursor", &performance).await {
+                            } else if !present_screen(&surface_id, &screen, state, &output_tx, "cursor", &log).await {
                                 return;
                             }
                         }
@@ -2693,7 +2705,7 @@ async fn surface_task(
                         if let Err(error) = engine.resolve_clipboard(request_id, &text) {
                             let response = json!({"surface": surface_id, "body": {"error": error}});
                             if output_tx.send(response.to_string()).await.is_err() { return; }
-                        } else if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, performance: &performance }, session_id.as_deref(), &mut engine, true, &mut image_state, &mut multipart).await {
+                        } else if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log }, session_id.as_deref(), &mut engine, true, &mut image_state, &mut multipart).await {
                             return;
                         }
                     }
@@ -2743,7 +2755,7 @@ async fn surface_task(
                             state.dirty = true;
                         } else {
                             let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-                            if !present_screen(&surface_id, &screen, state, &output_tx, "image", &performance).await { return; }
+                            if !present_screen(&surface_id, &screen, state, &output_tx, "image", &log).await { return; }
                         }
                     }
                     SurfaceCommand::SessionClose { result } => {
@@ -2803,8 +2815,7 @@ async fn surface_task(
                         if releases_pending {
                             // 전송 완료 대기의 계기(V5-104): 보낸 순간부터 consumed/오류 응답까지.
                             if let Some(sent) = image_state.as_mut().unwrap().sent_at.take() {
-                                performance.line("consumed_wait", serde_json::json!({
-                                    "surface": surface_id,
+                                log.emit_for(Level::Debug, "sidecar.vt.consumed_wait", Subject::surface(&surface_id), &serde_json::json!({
                                     "wait_us": sent.elapsed().as_micros() as u64,
                                     "answer": if consumed.is_some() { "consumed" } else { "error" },
                                 }));
@@ -2851,14 +2862,14 @@ async fn surface_task(
                                         return;
                                     }
                                     let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-                                    if !present_screen(&surface_id, &screen, image_state.as_mut().unwrap(), &output_tx, "image", &performance).await {
+                                    if !present_screen(&surface_id, &screen, image_state.as_mut().unwrap(), &output_tx, "image", &log).await {
                                         return;
                                     }
                                 }
                             } else if image_state.as_ref().unwrap().dirty {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
                                 // 기다린 동안의 변경을 담은 화면 하나를 래스터와 함께 보낸다.
-                                if !present_screen(&surface_id, &screen, image_state.as_mut().unwrap(), &output_tx, "image", &performance).await {
+                                if !present_screen(&surface_id, &screen, image_state.as_mut().unwrap(), &output_tx, "image", &log).await {
                                     return;
                                 }
                             }
@@ -2884,7 +2895,7 @@ async fn surface_task(
                                 }
                                 crate::engine_trace::record(&surface_id, || format!("feed {}", base64_encode(&data)));
                                 engine.feed(&data);
-                                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, performance: &performance }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart).await { return; }
+                                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart).await { return; }
                                 if headless || hold_while_presenting(&mut image_state) { continue; }
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
 
@@ -2892,7 +2903,7 @@ async fn surface_task(
                                         // 그림이 호스트에 있으면 돌려받을 때까지 그리지 않고 변경 사실만 남긴다.
                                         if img_state.pending_draw {
                                             img_state.dirty = true;
-                                        } else if !present_screen(&surface_id, &screen, img_state, &output_tx, "image", &performance).await {
+                                        } else if !present_screen(&surface_id, &screen, img_state, &output_tx, "image", &log).await {
                                             return;
                                         }
                                 } }
@@ -2932,35 +2943,13 @@ async fn surface_task(
     }
 }
 
-/// 서비스 루프. stdin에서 JSON을 읽고 stdout으로 응답을 씀.
+/// 서비스 루프. stdin에서 JSON을 읽고 stdout으로 응답을 씀. 프레임, 요청, PTY 입출력의 event 는 `log` 에 쓴다.
 pub async fn serve<R, W>(
     engine_factory: Arc<dyn Fn() -> Box<dyn Engine> + Send + Sync>,
     reader: R,
     writer: W,
     session_port_factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync>,
-) -> std::io::Result<()>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    serve_with_performance(
-        engine_factory,
-        reader,
-        writer,
-        session_port_factory,
-        crate::performance::PerformanceTrace::disabled(),
-    )
-    .await
-}
-
-/// 성능 트레이스를 직접 받는 검사용 진입점. 플래그 파일 경로의 트레이스를 넣으면
-/// 프레임 계기가 대상 파일에 기록된다(V5-104).
-pub async fn serve_with_performance<R, W>(
-    engine_factory: Arc<dyn Fn() -> Box<dyn Engine> + Send + Sync>,
-    reader: R,
-    writer: W,
-    session_port_factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync>,
-    performance: crate::performance::PerformanceTrace,
+    log: Events,
 ) -> std::io::Result<()>
 where
     R: AsyncRead + Unpin,
@@ -2975,33 +2964,7 @@ where
             owner_close: None,
             registry: None,
             owner: String::new(),
-            performance,
-        },
-    )
-    .await
-}
-
-pub async fn serve_with_owner_close<R, W>(
-    engine_factory: Arc<dyn Fn() -> Box<dyn Engine> + Send + Sync>,
-    reader: R,
-    writer: W,
-    session_port_factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync>,
-    owner_close: Option<Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
-) -> std::io::Result<()>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    serve_with_options(
-        reader,
-        writer,
-        ServeOptions {
-            engine_factory,
-            session_port_factory,
-            owner_close,
-            registry: None,
-            owner: String::new(),
-            performance: crate::performance::PerformanceTrace::disabled(),
+            log,
         },
     )
     .await
@@ -3013,7 +2976,7 @@ pub struct PersistentOwner {
     pub close: Arc<dyn Fn() -> Result<(), String> + Send + Sync>,
     pub registry: Arc<PersistentRegistry>,
     pub owner: String,
-    pub performance: crate::performance::PerformanceTrace,
+    pub log: Events,
 }
 
 pub async fn serve_with_registry<R, W>(
@@ -3036,7 +2999,7 @@ where
             owner_close: Some(owner.close),
             registry: Some(owner.registry),
             owner: owner.owner,
-            performance: owner.performance,
+            log: owner.log,
         },
     )
     .await
@@ -3049,7 +3012,7 @@ struct ServeOptions {
     owner_close: Option<Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     registry: Option<Arc<PersistentRegistry>>,
     owner: String,
-    performance: crate::performance::PerformanceTrace,
+    log: Events,
 }
 
 async fn serve_with_options<R, W>(
@@ -3061,7 +3024,7 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let buf_reader = BufReader::new(PolledReader::new(reader, options.performance.clone()));
+    let buf_reader = BufReader::new(PolledReader::new(reader, options.log.clone()));
     let (output_sender, output_rx) = mpsc::channel::<String>(100);
     let connection = Connection::new(output_sender);
     let transfers = connection.transfers.clone();
@@ -3071,7 +3034,7 @@ where
         OutputSink::direct(connection)
     };
 
-    let output_trace = options.performance.clone();
+    let output_trace = options.log.clone();
     let input_task = async {
         let result = run_input_loop(buf_reader, output_tx, options).await;
         // 입력이 끝난 연결로는 답이 오지 않는다.
@@ -3098,7 +3061,7 @@ where
         owner_close,
         registry,
         owner,
-        performance,
+        log,
     } = options;
     // 연결 순번. 같은 소유자의 연결을 trace 에서 구별한다.
     static CONNECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -3147,7 +3110,7 @@ where
             body: parsed
                 .clone()
                 .unwrap_or_else(|| json!({"unparsed": trimmed})),
-            performance: &performance,
+            log: &log,
             started: std::time::Instant::now(),
             idle,
             owner: owner.clone(),
@@ -3160,6 +3123,12 @@ where
                 .and_then(|value| value.get("surface"))
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            // A `cids` that is not a list of strings is answered with a parse error below; the event holds the body.
+            cids: parsed
+                .as_ref()
+                .and_then(|value| value.get("cids"))
+                .and_then(|cids| serde_json::from_value::<Vec<String>>(cids.clone()).ok())
+                .unwrap_or_default(),
         };
         if let Some(value) = parsed {
             if value.get("operation").and_then(Value::as_str) == Some("close-owner") {
@@ -3253,6 +3222,7 @@ where
         match serde_json::from_str::<Envelope>(trimmed) {
             Ok(env) => {
                 let surface_id = env.surface.clone();
+                let cids = env.cids.clone();
 
                 if env.closed == Some(true) {
                     let registry_key =
@@ -3346,7 +3316,7 @@ where
                                 let factory = engine_factory.clone();
                                 let out_tx = output_tx.clone();
                                 let sid = surface_id.clone();
-                                let task_trace = performance.clone();
+                                let task_trace = log.clone();
                                 let actor = tokio::spawn(async move {
                                     surface_task(
                                         sid,
@@ -3390,7 +3360,7 @@ where
                         let out_tx = output_tx.clone();
                         let sid = surface_id.clone();
                         let sid_for_monitor = sid.clone();
-                        let task_trace = performance.clone();
+                        let task_trace = log.clone();
 
                         // 실제 surface task를 별도 handle로 spawn한다
                         let surface_handle = tokio::spawn(async move {
@@ -3515,7 +3485,13 @@ where
                                     if let Some(focused) =
                                         value.get("focused").and_then(Value::as_bool)
                                     {
-                                        if tx.send(SurfaceCommand::Focus { focused }).await.is_err()
+                                        if tx
+                                            .send(SurfaceCommand::Focus {
+                                                focused,
+                                                cids: cids.clone(),
+                                            })
+                                            .await
+                                            .is_err()
                                         {
                                             break;
                                         }
@@ -3535,6 +3511,7 @@ where
                                                 if tx
                                                     .send(SurfaceCommand::InputKeys {
                                                         keys: vec![key],
+                                                        cids: cids.clone(),
                                                     })
                                                     .await
                                                     .is_err()
@@ -3583,7 +3560,10 @@ where
                                         match base64_decode(bytes_b64) {
                                             Ok(bytes) => {
                                                 if tx
-                                                    .send(SurfaceCommand::Input { bytes })
+                                                    .send(SurfaceCommand::Input {
+                                                        bytes,
+                                                        cids: cids.clone(),
+                                                    })
                                                     .await
                                                     .is_err()
                                                 {
@@ -3624,7 +3604,10 @@ where
                                         )) {
                                             Ok(keys) => {
                                                 if tx
-                                                    .send(SurfaceCommand::InputKeys { keys })
+                                                    .send(SurfaceCommand::InputKeys {
+                                                        keys,
+                                                        cids: cids.clone(),
+                                                    })
                                                     .await
                                                     .is_err()
                                                 {
@@ -3753,6 +3736,7 @@ where
                                     if tx
                                         .send(SurfaceCommand::Paste {
                                             text: text.to_string(),
+                                            cids: cids.clone(),
                                         })
                                         .await
                                         .is_err()
@@ -3820,6 +3804,7 @@ where
                                                 shift,
                                                 alt,
                                                 ctrl,
+                                                cids: cids.clone(),
                                             })
                                             .await
                                             .is_err()
@@ -3909,6 +3894,7 @@ where
                                         lines: lines as i32,
                                         col,
                                         row,
+                                        cids: cids.clone(),
                                     })
                                     .await
                                     .is_err()
@@ -4125,17 +4111,17 @@ where
 /// 것이 없다고 들은 것이다.
 struct PolledReader<R> {
     inner: R,
-    performance: crate::performance::PerformanceTrace,
+    log: Events,
     waiting_since: Option<std::time::Instant>,
     last_poll: std::time::Instant,
     pending_polls: u64,
 }
 
 impl<R> PolledReader<R> {
-    fn new(inner: R, performance: crate::performance::PerformanceTrace) -> Self {
+    fn new(inner: R, log: Events) -> Self {
         Self {
             inner,
-            performance,
+            log,
             waiting_since: None,
             last_poll: std::time::Instant::now(),
             pending_polls: 0,
@@ -4164,9 +4150,10 @@ impl<R: AsyncRead + Unpin> AsyncRead for PolledReader<R> {
                 if let Some(started) = self.waiting_since.take() {
                     let waited = now.duration_since(started);
                     if waited >= std::time::Duration::from_secs(1) {
-                        self.performance.line(
-                            "read_wait",
-                            serde_json::json!({
+                        self.log.emit(
+                            Level::Info,
+                            "sidecar.vt.read_wait",
+                            &serde_json::json!({
                                 "waited_us": waited.as_micros() as u64,
                                 "pending_polls": self.pending_polls,
                                 "since_last_poll_us": since_last_poll.as_micros() as u64,
@@ -4188,7 +4175,7 @@ const OUTPUT_BLOCKED: std::time::Duration = std::time::Duration::from_millis(10)
 async fn run_output_loop<W>(
     mut writer: W,
     mut output_rx: mpsc::Receiver<String>,
-    performance: crate::performance::PerformanceTrace,
+    log: Events,
 ) -> std::io::Result<()>
 where
     W: AsyncWrite + Unpin,
@@ -4201,9 +4188,10 @@ where
         let elapsed = started.elapsed();
         // 출력이 막힌 계기: 상대가 읽지 않으면 이 쓰기가 기다리고, 출력 채널이 차면 표면 작업과 입력 루프가 멈춘다.
         if elapsed >= OUTPUT_BLOCKED {
-            performance.line(
-                "output_blocked",
-                serde_json::json!({"us": elapsed.as_micros() as u64, "bytes": output.len()}),
+            log.emit(
+                Level::Info,
+                "sidecar.vt.output_blocked",
+                &serde_json::json!({"us": elapsed.as_micros() as u64, "bytes": output.len()}),
             );
         }
     }
@@ -4212,7 +4200,7 @@ where
 
 /// 요청 하나의 처리 기록. 입력 루프가 요청을 읽은 때부터 다음 요청을 읽기 전까지의 시간을 남긴다.
 struct RequestTrace<'a> {
-    performance: &'a crate::performance::PerformanceTrace,
+    log: &'a Events,
     started: std::time::Instant,
     /// 이 요청이 도착하기 전 입력 루프가 읽기를 기다린 시간.
     idle: std::time::Duration,
@@ -4222,20 +4210,25 @@ struct RequestTrace<'a> {
     connection: u64,
     operation: String,
     surface: Option<String>,
+    /// The correlation identifiers the request carries, which are those of the inputs it continues.
+    cids: Vec<String>,
     /// 요청 전체. 읽은 그대로이며 JSON 이 아닌 줄은 `{"unparsed": <줄>}` 이다.
     body: Value,
 }
 
 impl Drop for RequestTrace<'_> {
     fn drop(&mut self) {
-        if !self.performance.enabled() {
-            return;
-        }
-        self.performance.line(
-            "request",
-            serde_json::json!({
+        let subject = Subject {
+            surface: self.surface.as_deref(),
+            session: None,
+            cids: &self.cids,
+        };
+        self.log.emit_for(
+            Level::Info,
+            "sidecar.vt.request",
+            subject,
+            &serde_json::json!({
                 "operation": self.operation,
-                "surface": self.surface,
                 "owner": self.owner,
                 "connection": self.connection,
                 "idle_us": self.idle.as_micros() as u64,
@@ -4278,8 +4271,10 @@ pub fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
 }
 
 /// 기본 SessionPort 팩토리를 만든다 (DaemonFinder를 사용)
-pub fn make_default_session_port_factory() -> Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync> {
-    let service = Arc::new(crate::pty::PtyService::new());
+pub fn make_default_session_port_factory(
+    log: Events,
+) -> Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync> {
+    let service = Arc::new(crate::pty::PtyService::new(log));
     Arc::new(move || Arc::new(LocalSessionPort::new(service.clone())) as Arc<dyn SessionPort>)
 }
 
@@ -4334,8 +4329,8 @@ impl SessionPort for LocalSessionPort {
         Ok(session_id)
     }
 
-    async fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
-        self.service.write(session_id, data)
+    async fn write(&self, session_id: &str, data: &[u8], cids: &[String]) -> Result<(), String> {
+        self.service.write(session_id, data, cids)
     }
 
     async fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {

@@ -1,4 +1,7 @@
 use std::fs::OpenOptions;
+#[path = "support/events_test.rs"]
+mod events_test;
+
 use std::os::fd::AsRawFd;
 
 use soksak_sidecar_vt_core::pty::PtyService;
@@ -30,7 +33,7 @@ fn native_pty_test_lock() -> std::fs::File {
 async fn real_sessions_are_independent_and_close_removes_session() {
     let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
-    let service = PtyService::new();
+    let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx_a, mut rx_a) = tokio::sync::mpsc::unbounded_channel();
     let (tx_b, mut rx_b) = tokio::sync::mpsc::unbounded_channel();
     let (a, _) = service
@@ -76,7 +79,7 @@ async fn real_sessions_are_independent_and_close_removes_session() {
     assert!(String::from_utf8_lossy(&output_b).contains('B'));
     service.close(&a).expect("explicit close failed");
     assert!(
-        service.write(&a, b"x").is_err(),
+        service.write(&a, b"x", &[]).is_err(),
         "closed session remained addressable"
     );
 }
@@ -86,7 +89,7 @@ async fn repeated_short_lived_sessions_close_without_process_group_races() {
     let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
     let started = std::time::Instant::now();
-    let service = PtyService::new();
+    let service = PtyService::new(events_test::TestEvents::new().handle());
     for index in 0..20 {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let (session, _) = service
@@ -114,7 +117,7 @@ async fn repeated_short_lived_sessions_close_without_process_group_races() {
 async fn three_real_sessions_reconnect_with_same_pid_and_retained_output() {
     let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
-    let service = PtyService::new();
+    let service = PtyService::new(events_test::TestEvents::new().handle());
     let mut sessions = Vec::new();
     for label in ["A", "B", "C"] {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -175,7 +178,7 @@ async fn three_real_sessions_reconnect_with_same_pid_and_retained_output() {
 async fn pty_measurement_counts_master_written_bytes_a_non_reading_child_has_not_read() {
     let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
-    let service = PtyService::new();
+    let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let (session, _) = service
         .open(
@@ -206,7 +209,7 @@ async fn pty_measurement_counts_master_written_bytes_a_non_reading_child_has_not
     let first = b"pending-probe";
     let second = b"-second";
     service
-        .write(&session, first)
+        .write(&session, first, &[])
         .expect("first production-path write failed");
     assert_eq!(
         service
@@ -217,7 +220,7 @@ async fn pty_measurement_counts_master_written_bytes_a_non_reading_child_has_not
         "a child that reads nothing must leave every written byte pending"
     );
     service
-        .write(&session, second)
+        .write(&session, second, &[])
         .expect("second production-path write failed");
     assert_eq!(
         service
@@ -235,7 +238,7 @@ async fn pty_measurement_counts_master_written_bytes_a_non_reading_child_has_not
 async fn pty_measurement_drains_to_zero_as_the_child_reads() {
     let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
-    let service = PtyService::new();
+    let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let (session, _) = service
         .open(
@@ -267,7 +270,7 @@ async fn pty_measurement_drains_to_zero_as_the_child_reads() {
         "the child never reported its raw mode; output so far: {seen:?}"
     );
     service
-        .write(&session, b"drain-probe")
+        .write(&session, b"drain-probe", &[])
         .expect("production-path write failed");
     let started = std::time::Instant::now();
     loop {
@@ -292,7 +295,7 @@ async fn pty_measurement_drains_to_zero_as_the_child_reads() {
 async fn pty_measurement_rejects_unknown_and_closed_sessions() {
     let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
-    let service = PtyService::new();
+    let service = PtyService::new(events_test::TestEvents::new().handle());
     assert!(
         service.pty_measurement("no-such-session").is_err(),
         "an unknown session must not report a measurement"
@@ -322,7 +325,7 @@ async fn pty_measurement_rejects_unknown_and_closed_sessions() {
 async fn written_output_counts_exact_child_output_bytes() {
     let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
-    let service = PtyService::new();
+    let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let (session, _) = service
         .open(
@@ -384,7 +387,7 @@ async fn written_output_counts_exact_child_output_bytes() {
 async fn child_reads_exact_bytes_written_through_the_production_path() {
     let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
-    let service = PtyService::new();
+    let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let (session, _) = service
         .open(
@@ -415,7 +418,7 @@ async fn child_reads_exact_bytes_written_through_the_production_path() {
     // ?1003 프로그램이 받는 드래그 보고와 같은 SGR 바이트 형태를 쓴다. 행 끝 newline 이 cat 의 읽기를 끝낸다.
     let bytes = b"\x1b[<0;5;2M\x1b[<32;6;2m\x1b[<35;7;2m\x1b[<0;7;2m\n";
     service
-        .write(&session, bytes)
+        .write(&session, bytes, &[])
         .expect("production-path write failed");
     let receipt = timeout(Duration::from_secs(2), async {
         loop {

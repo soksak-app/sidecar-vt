@@ -194,7 +194,7 @@ async fn previous_client_eof_preserves_new_attachment_output() {
             owner_close: None,
             registry: Some(PersistentRegistry::new()),
             owner: "test-owner".to_string(),
-            performance: crate::performance::PerformanceTrace::disabled(),
+            log: crate::events::test_support::TestEvents::new().handle(),
         },
     );
     tokio::pin!(input);
@@ -553,7 +553,7 @@ async fn a_surface_reopened_after_its_closed_notice_is_not_a_stale_attachment() 
             owner_close: None,
             registry: Some(PersistentRegistry::new()),
             owner: "test-owner".to_string(),
-            performance: crate::performance::PerformanceTrace::disabled(),
+            log: crate::events::test_support::TestEvents::new().handle(),
         },
     )
     .await
@@ -598,7 +598,9 @@ async fn a_request_after_retain_closes_pty_sessions_is_handled_at_once() {
     for round in 0..10 {
         let (client, service) = tokio::net::UnixStream::pair().unwrap();
         let (service_read, service_write) = service.into_split();
-        let pty = Arc::new(crate::pty::PtyService::new());
+        let pty = Arc::new(crate::pty::PtyService::new(
+            crate::events::test_support::TestEvents::new().handle(),
+        ));
         let serving = tokio::spawn(serve_with_registry(
             Arc::new(|| Box::new(FakeEngine::new()) as Box<dyn Engine>),
             BufReader::new(service_read),
@@ -610,7 +612,7 @@ async fn a_request_after_retain_closes_pty_sessions_is_handled_at_once() {
                 close: Arc::new(|| Ok(())),
                 registry: PersistentRegistry::new(),
                 owner: "test-owner".to_string(),
-                performance: crate::performance::PerformanceTrace::disabled(),
+                log: crate::events::test_support::TestEvents::new().handle(),
             },
         ));
         let (client_read, mut client_write) = client.into_split();
@@ -658,7 +660,9 @@ async fn close_owner_closes_open_pty_surfaces_without_error() {
     for round in 0..5 {
         let (client, service) = tokio::net::UnixStream::pair().unwrap();
         let (service_read, service_write) = service.into_split();
-        let pty = Arc::new(crate::pty::PtyService::new());
+        let pty = Arc::new(crate::pty::PtyService::new(
+            crate::events::test_support::TestEvents::new().handle(),
+        ));
         let port_pty = Arc::clone(&pty);
         let close_pty = Arc::clone(&pty);
         let serving = tokio::spawn(serve_with_registry(
@@ -675,7 +679,7 @@ async fn close_owner_closes_open_pty_surfaces_without_error() {
                 close: Arc::new(move || close_pty.close_owner("test-owner")),
                 registry: PersistentRegistry::new(),
                 owner: "test-owner".to_string(),
-                performance: crate::performance::PerformanceTrace::disabled(),
+                log: crate::events::test_support::TestEvents::new().handle(),
             },
         ));
         let (client_read, mut client_write) = client.into_split();
@@ -761,7 +765,7 @@ async fn a_surface_reopened_after_its_close_request_is_not_a_stale_attachment() 
             owner_close: None,
             registry: Some(PersistentRegistry::new()),
             owner: "test-owner".to_string(),
-            performance: crate::performance::PerformanceTrace::disabled(),
+            log: crate::events::test_support::TestEvents::new().handle(),
         },
     )
     .await
@@ -796,7 +800,7 @@ async fn assert_closed_answer_follows_the_session_close(registry: Option<Arc<Per
             owner_close: None,
             registry,
             owner: "test-owner".to_string(),
-            performance: crate::performance::PerformanceTrace::disabled(),
+            log: crate::events::test_support::TestEvents::new().handle(),
         },
     );
     tokio::pin!(input);

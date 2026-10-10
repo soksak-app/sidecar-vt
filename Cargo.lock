@@ -701,6 +701,7 @@ dependencies = [
  "libc",
  "serde_json",
  "soksak-sidecar-vt-core",
+ "tempfile",
  "tokio",
 ]
 

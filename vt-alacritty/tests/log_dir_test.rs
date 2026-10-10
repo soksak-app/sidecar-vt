@@ -1,6 +1,6 @@
 //! The service takes the directory of its event files from `--log-dir` and refuses to start without it.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -71,6 +71,21 @@ fn a_service_with_log_dir_writes_log_open_and_flushes_it_when_it_ends() {
         .read_line(&mut ready)
         .expect("read the ready line");
     assert!(ready.contains("\"socket\""), "no ready line: {ready:?}");
+    // A client that authenticates is the event `client_connect` with its owner.
+    let endpoint: serde_json::Value = serde_json::from_str(&ready).expect("ready endpoint");
+    let mut client = std::os::unix::net::UnixStream::connect(endpoint["socket"].as_str().unwrap())
+        .expect("connect to the service");
+    writeln!(
+        client,
+        "{}",
+        serde_json::json!({"operation": "hello", "protocol": 1, "token": endpoint["token"], "client": "owner-x"})
+    )
+    .expect("send the hello");
+    let mut reply = String::new();
+    BufReader::new(&client)
+        .read_line(&mut reply)
+        .expect("read the hello reply");
+    assert!(reply.contains("\"ok\":true"), "{reply}");
     // SAFETY: the test asks the child process it started to end.
     assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }, 0);
     let status = child.wait().expect("wait for the service");
@@ -91,5 +106,19 @@ fn a_service_with_log_dir_writes_log_open_and_flushes_it_when_it_ends() {
     assert_eq!(open["event"], "log.open");
     assert_eq!(open["fields"]["role"], "vt");
     assert_eq!(open["fields"]["pid"], child.id());
+    let events: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("JSON line"))
+        .collect();
+    let start = events
+        .iter()
+        .find(|event| event["event"] == "sidecar.vt.session_start")
+        .expect("the service records its start");
+    assert_eq!(start["level"], "info");
+    let connect = events
+        .iter()
+        .find(|event| event["event"] == "sidecar.vt.client_connect")
+        .expect("the service records the client that connected");
+    assert_eq!(connect["fields"]["owner"], "owner-x");
     std::fs::remove_dir_all(&root).expect("remove the test directory");
 }

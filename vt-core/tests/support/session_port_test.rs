@@ -38,7 +38,7 @@ impl SessionPort for FakeSessionPort {
         Ok(session_id)
     }
 
-    async fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
+    async fn write(&self, session_id: &str, data: &[u8], _cids: &[String]) -> Result<(), String> {
         let mut calls = self.calls.lock().await;
         calls.writes.push((session_id.to_string(), data.to_vec()));
         Ok(())

@@ -6,6 +6,7 @@
 mod engine;
 
 use engine::AlacrittyEngine;
+use soksak_sidecar_vt_core::events::{EventLog, Options};
 use soksak_sidecar_vt_core::pty::PtyService;
 use soksak_sidecar_vt_core::{DaemonEvent, Engine, Screen};
 use std::fs::OpenOptions;
@@ -107,7 +108,16 @@ impl Session {
 fn open(shell: &str, variable: &str, directory: &PathBuf) -> Session {
     let original = std::env::var_os(variable);
     std::env::set_var(variable, directory);
-    let service = PtyService::new();
+    // The writer of the events has a folder of its own; the folder goes away with the test directory of the system.
+    let logs = tempfile::tempdir().expect("create the folder of the events");
+    let events = std::sync::Arc::new(
+        EventLog::start(Options::service(
+            logs.path().to_path_buf(),
+            format!("redraw-{}", std::process::id()),
+        ))
+        .expect("start the writer of the events"),
+    );
+    let service = PtyService::new(events);
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", shell, None, 60, 12, tx);
     match original {
@@ -148,7 +158,7 @@ async fn resize_wrapped_input(mut session: Session) -> Result<(), String> {
     // 프롬프트 바로 위의 출력 행도 크기 변경 뒤 그대로 있어야 한다.
     session
         .service
-        .write(&session.id, b"printf 'ABOVE\\n'\n")
+        .write(&session.id, b"printf 'ABOVE\\n'\n", &[])
         .unwrap();
     session
         .until(|text, _| text.contains("ABOVE") && text.matches("P> ").count() == 2)
@@ -156,7 +166,7 @@ async fn resize_wrapped_input(mut session: Session) -> Result<(), String> {
         .map_err(|screen| format!("no output line: {screen:?}"))?;
     session
         .service
-        .write(&session.id, input.as_bytes())
+        .write(&session.id, input.as_bytes(), &[])
         .unwrap();
     // 각 단계는 크기를 한 번 바꾼다. 셸이 다시 그리기 전에 크기가 다시 바뀌면 readline 이 지난 폭으로 그린다.
     for (step, cols) in [("before", 60u16), ("narrow", 30), ("wide", 60)] {

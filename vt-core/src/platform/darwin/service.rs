@@ -1,5 +1,6 @@
 //! in-process terminal service를 위한 persistent protocol-1 transport이다.
 
+use crate::events::{Events, Level};
 use crate::protocol::{serve_with_registry, LocalSessionPort, PersistentOwner, PersistentRegistry};
 use nix::errno::Errno;
 use serde::{Deserialize, Serialize};
@@ -245,6 +246,7 @@ async fn authenticate(
 pub async fn serve_persistent(
     service_dir: &Path,
     engine_factory: Arc<dyn Fn() -> Box<dyn crate::protocol::Engine> + Send + Sync>,
+    log: Events,
 ) -> Result<(), String> {
     crate::platform::darwin::frame::load_default_font()?;
     let _lock = match service_lock(service_dir) {
@@ -294,10 +296,12 @@ pub async fn serve_persistent(
         .flush()
         .map_err(|e| format!("flush ready endpoint: {e}"))?;
 
-    // 성능 트레이스(V5-104). 플래그가 없으면 아래 두 호출은 아무 파일 작업도 하지 않는다.
-    let performance = crate::performance::PerformanceTrace::from_service_dir(service_dir);
-    performance.line("session_start", serde_json::json!({"role": "vt-core"}));
-    let service = Arc::new(crate::pty::PtyService::new().with_performance(performance.clone()));
+    log.emit(
+        Level::Info,
+        "sidecar.vt.session_start",
+        &serde_json::json!({"role": "vt-core"}),
+    );
+    let service = Arc::new(crate::pty::PtyService::new(log.clone()));
     let registry = PersistentRegistry::new();
     let mut clients = JoinSet::new();
     let mut had_client = false;
@@ -312,15 +316,16 @@ pub async fn serve_persistent(
                 let service = Arc::clone(&service);
                 let engine_factory = Arc::clone(&engine_factory);
                 let registry = Arc::clone(&registry);
-                // The trace of each connection reads the flag of the service directory at each event
-                // (core docs/spec/performance-trace.md).
-                let trace_dir = service_dir.to_path_buf();
+                let log = log.clone();
                 clients.spawn(async move {
             match authenticate(stream, &token).await {
             Err(error) => crate::service_log::log_error("client authentication", error),
             Ok((reader, writer, client)) => {
-                crate::performance::PerformanceTrace::from_service_dir(&trace_dir)
-                    .line("client_connect", serde_json::json!({"owner": client}));
+                log.emit(
+                    Level::Info,
+                    "sidecar.vt.client_connect",
+                    &serde_json::json!({"owner": client}),
+                );
                 let owner = client.clone();
                 let factory_service = Arc::clone(&service);
                 let factory = Arc::new(move || {
@@ -332,9 +337,6 @@ pub async fn serve_persistent(
                 let close_service = Arc::clone(&service);
                 let close_client = client.clone();
                 let close_owner = Arc::new(move || close_service.close_owner(&close_client));
-                // The trace of the connection reaches the surface actors.
-                let connection_trace =
-                    crate::performance::PerformanceTrace::from_service_dir(&trace_dir);
                 if let Err(error) = serve_with_registry(
                     engine_factory,
                     reader,
@@ -344,7 +346,7 @@ pub async fn serve_persistent(
                         close: close_owner,
                         registry,
                         owner: client,
-                        performance: connection_trace,
+                        log,
                     },
                 )
                 .await

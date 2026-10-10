@@ -1,12 +1,14 @@
+#[path = "support/events_test.rs"]
+mod events_test;
 #[path = "support/session_port_test.rs"]
 mod tracked_session_port;
 
 use async_trait::async_trait;
 /// fake daemon을 사용하는 serve contract 통합 테스트
-use soksak_sidecar_vt_core::performance::PerformanceTrace;
 use soksak_sidecar_vt_core::protocol::{
-    serve, serve_with_registry, Cell, Cursor, CursorShape, DaemonEvent, Engine, EngineEvent, Modes,
-    PersistentOwner, PersistentRegistry, Screen, SessionPort, ShellRequest,
+    serve as serve_with_events, serve_with_registry, Cell, Cursor, CursorShape, DaemonEvent,
+    Engine, EngineEvent, Modes, PersistentOwner, PersistentRegistry, Screen, SessionPort,
+    ShellRequest,
 };
 use soksak_sidecar_vt_core::pty::PtyMeasurement;
 use soksak_sidecar_vt_core::{
@@ -16,6 +18,28 @@ use soksak_sidecar_vt_core::{
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
+
+/// The serve loop with a writer of events in a folder of its own, which lives as long as the loop runs.
+async fn serve<R, W>(
+    engine_factory: Arc<dyn Fn() -> Box<dyn Engine> + Send + Sync>,
+    reader: R,
+    writer: W,
+    session_port_factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync>,
+) -> std::io::Result<()>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let events = events_test::TestEvents::new();
+    serve_with_events(
+        engine_factory,
+        reader,
+        writer,
+        session_port_factory,
+        events.handle(),
+    )
+    .await
+}
 
 /// 표시와 함께 오는 화면 줄을 건너뛰고 다음 줄을 읽는다.
 async fn next_line_except_screen<R: tokio::io::AsyncBufRead + Unpin>(
@@ -285,6 +309,8 @@ struct Calls {
     opens: Vec<(u16, u16)>,
     directories: Vec<Option<String>>,
     writes: Vec<(String, Vec<u8>)>,
+    /// The correlation identifiers that came with each write, in the order of `writes`.
+    write_cids: Vec<Vec<String>>,
     resizes: Vec<(String, u16, u16)>,
     detaches: Vec<String>,
     closes: Vec<String>,
@@ -326,12 +352,12 @@ impl SessionPort for FakeSessionPort {
         Ok(self.session_id.clone())
     }
 
-    async fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
-        self.calls
-            .lock()
-            .unwrap()
-            .writes
-            .push((session_id.to_string(), data.to_vec()));
+    async fn write(&self, session_id: &str, data: &[u8], cids: &[String]) -> Result<(), String> {
+        {
+            let mut calls = self.calls.lock().unwrap();
+            calls.writes.push((session_id.to_string(), data.to_vec()));
+            calls.write_cids.push(cids.to_vec());
+        }
         if data == b"\x1b]7;file:///tmp/project\x07" {
             let _ = self.event_tx.send(DaemonEvent::Output {
                 session_id: self.session_id.clone(),
@@ -428,6 +454,55 @@ async fn test_a3_input_calls_write() {
         "session_id mismatch"
     );
     assert_eq!(calls_lock.writes[0].1, b"hi", "write data mismatch");
+}
+
+// The correlation identifiers of a request reach the write to the session that the request caused: input bytes, keys, a
+// paste and an alternate-screen scroll each pass them on, and a request without them passes none.
+#[tokio::test]
+async fn the_cids_of_a_request_reach_the_write_it_causes() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","cids":["b1.1"],"body":{"operation":"input","bytes":"aGk="}}
+{"surface":"s1","cids":["b1.2","b1.3"],"body":{"operation":"input","keys":[{"key":"Up"}]}}
+{"surface":"s1","cids":["b1.4"],"body":{"operation":"paste","text":"one"}}
+{"surface":"s1","cids":["b1.5"],"body":{"operation":"scroll","lines":1,"col":0,"row":0}}
+{"surface":"s1","body":{"operation":"input","bytes":"aGk="}}
+"#;
+    let reader = std::io::Cursor::new(input.as_bytes());
+    let mut writer = Vec::new();
+    let engine_factory = Arc::new(|| {
+        Box::new(MockEngine::with_modes(Modes {
+            alt_screen: true,
+            alternate_scroll: true,
+            ..Modes::default()
+        })) as Box<dyn Engine>
+    });
+    let port_calls = calls.clone();
+    let session_port_factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new("cids".to_string(), port_calls.clone()))
+            as Arc<dyn SessionPort>
+    });
+    let _ = serve(engine_factory, reader, &mut writer, session_port_factory).await;
+    let calls = calls.lock().unwrap();
+    let ids: Vec<Vec<&str>> = calls
+        .write_cids
+        .iter()
+        .map(|cids| cids.iter().map(String::as_str).collect())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            vec!["b1.1"],
+            vec!["b1.2", "b1.3"],
+            vec!["b1.4"],
+            vec!["b1.5"],
+            vec![]
+        ],
+        "{:?} {}",
+        calls.writes,
+        String::from_utf8_lossy(&writer)
+    );
 }
 
 // pty.pending 은 열린 세션의 읽지 않은 입력 바이트 수와 reader 가 읽은 자식 출력 누적 바이트 수를
@@ -4810,7 +4885,7 @@ async fn check_unanswered_transfer(persistent: bool, letting_go: LettingGo, rele
             close: Arc::new(|| Ok(())),
             registry: PersistentRegistry::new(),
             owner: "transfer-owner".to_string(),
-            performance: PerformanceTrace::disabled(),
+            log: events_test::TestEvents::new().handle(),
         };
         tokio::spawn(serve_with_registry(
             engine_factory,

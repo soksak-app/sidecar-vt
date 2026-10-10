@@ -703,3 +703,61 @@ fn write_loop(
         }
     }
 }
+
+/// The fields of an event of bytes: the length, the text (the bytes read as UTF-8, with the replacement character for
+/// bytes that are not) and the same bytes in hexadecimal. An event holds every byte, because a defect of the input is
+/// located from what was written and read.
+pub fn bytes_fields(data: &[u8]) -> serde_json::Value {
+    let hex: String = data.iter().map(|byte| format!("{byte:02x}")).collect();
+    json!({
+        "bytes": data.len(),
+        "text": String::from_utf8_lossy(data),
+        "hex": hex,
+    })
+}
+
+/// A writer in a folder of its own for the tests of this crate; the folder is removed when the value is dropped.
+#[cfg(test)]
+pub mod test_support {
+    use super::*;
+
+    pub struct TestEvents {
+        handle: Events,
+        _directory: tempfile::TempDir,
+    }
+
+    impl Default for TestEvents {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl TestEvents {
+        pub fn new() -> Self {
+            let directory = tempfile::tempdir().expect("create the folder of the events");
+            let mut options = Options::service(directory.path().join("logs"), "test".to_string());
+            options.batch_interval = Duration::from_millis(20);
+            let handle = Arc::new(EventLog::start(options).expect("start the writer"));
+            Self {
+                handle,
+                _directory: directory,
+            }
+        }
+
+        pub fn handle(&self) -> Events {
+            self.handle.clone()
+        }
+
+        /// The events written so far, after the writer put everything it holds on disk.
+        pub fn lines(&self) -> Vec<serde_json::Value> {
+            self.handle
+                .flush(Duration::from_secs(10))
+                .expect("flush the writer");
+            std::fs::read_to_string(self.handle.path())
+                .expect("read the file of the events")
+                .lines()
+                .map(|line| serde_json::from_str(line).expect("every line is one JSON object"))
+                .collect()
+        }
+    }
+}

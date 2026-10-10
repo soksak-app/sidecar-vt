@@ -2,7 +2,7 @@
 // tests/fixtures/log-contract are copies of the fixtures of the contract; a line that the writer produces has the same
 // structure and satisfies the same catalog.
 use serde_json::{json, Value};
-use soksak_sidecar_vt_core::events::{EventLog, Level, Options, Subject};
+use soksak_sidecar_vt_core::events::{bytes_fields, EventLog, Level, Options, Subject};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -296,4 +296,24 @@ fn a_full_file_rotates_and_the_next_file_continues_seq() {
     );
     assert!(dir.join("vt-b1.jsonl.2").exists());
     assert!(!dir.join("vt-b1.jsonl.3").exists());
+}
+
+// An event of bytes holds every byte: nothing is cut, because a defect of the input is located from what was written.
+#[test]
+fn the_fields_of_bytes_hold_every_byte_of_a_long_chunk() {
+    let data: Vec<u8> = (0..8192u32)
+        .map(|index| b'a' + (index % 26) as u8)
+        .collect();
+    let fields = bytes_fields(&data);
+    assert_eq!(fields["bytes"], 8192);
+    assert_eq!(fields["text"].as_str().unwrap().len(), 8192);
+    assert_eq!(fields["hex"].as_str().unwrap().len(), 8192 * 2);
+    assert!(
+        fields.get("truncated").is_none(),
+        "fields that are cut are not the fields of the bytes"
+    );
+    let multibyte = bytes_fields("한a\n".as_bytes());
+    assert_eq!(multibyte["bytes"], 5);
+    assert_eq!(multibyte["text"], "한a\n");
+    assert_eq!(multibyte["hex"], "ed959c610a");
 }

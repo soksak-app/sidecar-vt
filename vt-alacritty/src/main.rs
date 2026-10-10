@@ -21,7 +21,7 @@ async fn main() -> std::io::Result<()> {
     let arguments = arguments::parse(std::env::args().skip(1)).map_err(invalid_input)?;
     let config_dir = canonical_config_dir(&arguments.service_dir).map_err(invalid_input)?;
     let events = EventLog::start_service(&arguments.log_dir).map_err(std::io::Error::other)?;
-    let served = serve_persistent(&config_dir, engine_factory)
+    let served = serve_persistent(&config_dir, engine_factory, events.clone())
         .await
         .map_err(std::io::Error::other);
     // Every exit path puts the queued events on disk before the process ends.

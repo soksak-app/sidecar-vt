@@ -7,7 +7,6 @@ pub mod events;
 pub mod inline_image;
 pub mod locale;
 pub mod palette;
-pub mod performance;
 pub mod platform;
 pub mod protocol;
 pub mod pty;

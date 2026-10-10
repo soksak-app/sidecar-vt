@@ -2,6 +2,9 @@
 // PTY 자식은 UTF-8 locale 로 실행된다. 프로세스 환경을 바꾸는 test 는 이 binary 의 하나뿐이고, 나머지 test 는
 // 프로세스 환경을 읽지 않는다.
 
+#[path = "support/events_test.rs"]
+mod events_test;
+
 use std::ffi::OsStr;
 
 use soksak_sidecar_vt_core::locale::{shell_locale, ShellLocale};
@@ -15,7 +18,7 @@ async fn a_shell_without_locale_variables_runs_in_a_utf8_locale() {
     for name in ["LANG", "LC_ALL", "LC_CTYPE"] {
         std::env::remove_var(name);
     }
-    let service = PtyService::new();
+    let service = PtyService::new(events_test::TestEvents::new().handle());
     let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
     service
         .open(

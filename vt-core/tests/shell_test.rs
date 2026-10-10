@@ -1,4 +1,7 @@
 // 터미널 세션이 여는 셸: 설정 값 login 은 계정의 로그인 셸이고, 셸은 로그인 셸로 시작한다.
+#[path = "support/events_test.rs"]
+mod events_test;
+
 use std::ffi::CStr;
 use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
@@ -54,13 +57,13 @@ fn an_explicit_shell_must_be_an_executable_absolute_path() {
 #[tokio::test]
 async fn a_session_shell_starts_as_a_login_shell() {
     let _lock = native_pty_test_lock();
-    let service = PtyService::new();
+    let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let (session, _) = service
         .open_shell("", "/bin/sh", None, 80, 24, tx)
         .expect("open a login shell session");
     service
-        .write(&session, b"printf 'ARGV0=%s\\n' \"$0\"\n")
+        .write(&session, b"printf 'ARGV0=%s\\n' \"$0\"\n", &[])
         .expect("write to the shell");
     let mut output = String::new();
     let found = timeout(Duration::from_secs(10), async {
@@ -140,7 +143,7 @@ async fn a_zsh_session_reads_the_user_startup_files_and_reports_prompt_and_comma
     );
     // 세션 환경은 명령을 만들 때의 프로세스 환경에서 온다.
     std::env::set_var("ZDOTDIR", &home);
-    let service = PtyService::new();
+    let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", "/bin/zsh", None, 80, 24, tx);
     std::env::remove_var("ZDOTDIR");
@@ -154,6 +157,7 @@ async fn a_zsh_session_reads_the_user_startup_files_and_reports_prompt_and_comma
         .write(
             &session,
             b"print -r -- \"STATE=$ZDOTDIR|$ZSHENV_READ$ZPROFILE_READ$ZSHRC_READ$ZLOGIN_READ|${SOKSAK_ZSH_ZDOTDIR-unset}\"\n",
+            &[],
         )
         .unwrap();
     let state = format!("STATE={}|1111|unset\r\n", home.display());
@@ -169,7 +173,7 @@ async fn a_zsh_session_reads_the_user_startup_files_and_reports_prompt_and_comma
         "zsh did not report {expected:?} in order: {output:?}"
     );
     output.clear();
-    service.write(&session, b"false\n").unwrap();
+    service.write(&session, b"false\n", &[]).unwrap();
     let failed = collect_until(&mut rx, &mut output, |text| {
         in_order(
             text,
@@ -198,7 +202,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
     );
     let original_home = std::env::var_os("HOME");
     std::env::set_var("HOME", &home);
-    let service = PtyService::new();
+    let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", "/bin/bash", None, 80, 24, tx);
     match original_home {
@@ -222,6 +226,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
         .write(
             &session,
             b"printf 'STATE=%s|%s|%s|%s\\n' \"$0\" \"$PROFILE_READ$USER_HOOK_RAN\" \"${SOKSAK_BASH_INTEGRATION-unset}\" \"$(env | grep -c '^PROMPT_COMMAND=')\"\n",
+            &[],
         )
         .unwrap();
     let expected = [
@@ -236,7 +241,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
         "bash did not report {expected:?} in order: {output:?}"
     );
     output.clear();
-    service.write(&session, b"false\n").unwrap();
+    service.write(&session, b"false\n", &[]).unwrap();
     let failed = collect_until(&mut rx, &mut output, |text| {
         in_order(
             text,
@@ -254,9 +259,11 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
     );
     output.clear();
     // 트랩은 앞 명령의 마지막 인수($_)를 바꾸지 않는다.
-    service.write(&session, b"true last-argument\n").unwrap();
     service
-        .write(&session, b"printf 'LAST=%s\\n' \"$_\"\n")
+        .write(&session, b"true last-argument\n", &[])
+        .unwrap();
+    service
+        .write(&session, b"printf 'LAST=%s\\n' \"$_\"\n", &[])
         .unwrap();
     let kept = collect_until(&mut rx, &mut output, |text| {
         in_order(
@@ -268,7 +275,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
     assert!(kept, "the trap changed $_: {output:?}");
     output.clear();
     // 빈 입력 행은 명령이 아니다.
-    service.write(&session, b"\n").unwrap();
+    service.write(&session, b"\n", &[]).unwrap();
     let empty = collect_until(&mut rx, &mut output, |text| {
         text.contains("\x1b]133;A;redraw=last\x07")
     })
@@ -294,7 +301,7 @@ async fn a_bash_debug_trap_from_the_startup_files_is_kept_and_no_marks_are_repor
     );
     let original_home = std::env::var_os("HOME");
     std::env::set_var("HOME", &home);
-    let service = PtyService::new();
+    let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", "/bin/bash", None, 80, 24, tx);
     match original_home {
@@ -303,7 +310,7 @@ async fn a_bash_debug_trap_from_the_startup_files_is_kept_and_no_marks_are_repor
     }
     let (session, _) = opened.expect("open a bash session");
     service
-        .write(&session, b"printf 'TRAP=%s\\n' \"$(trap -p DEBUG)\"\n")
+        .write(&session, b"printf 'TRAP=%s\\n' \"$(trap -p DEBUG)\"\n", &[])
         .unwrap();
     let mut output = String::new();
     let shown = collect_until(&mut rx, &mut output, |text| {
@@ -328,7 +335,7 @@ async fn a_resize_during_bash_startup_does_not_report_a_command_at_the_first_pro
     );
     let original_home = std::env::var_os("HOME");
     std::env::set_var("HOME", &home);
-    let service = PtyService::new();
+    let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", "/bin/bash", None, 80, 24, tx);
     match original_home {
@@ -370,13 +377,13 @@ async fn a_session_starts_in_the_requested_directory() {
     let _lock = native_pty_test_lock();
     let directory = startup_directory("soksak-start-directory-test", &[]);
     let directory = std::fs::canonicalize(&directory).unwrap();
-    let service = PtyService::new();
+    let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let (session, _) = service
         .open_shell("", "/bin/sh", Some(directory.to_str().unwrap()), 80, 24, tx)
         .expect("open a shell session");
     service
-        .write(&session, b"printf 'PWD=%s\\n' \"$(pwd -P)\"\n")
+        .write(&session, b"printf 'PWD=%s\\n' \"$(pwd -P)\"\n", &[])
         .unwrap();
     let mut output = String::new();
     let expected = format!("PWD={}\r\n", directory.display());
@@ -412,7 +419,7 @@ async fn reports_its_directory(shell: &str, variable: &str, files: &[(&str, &str
     let start = std::fs::canonicalize(&start).unwrap();
     let original = std::env::var_os(variable);
     std::env::set_var(variable, &home);
-    let service = PtyService::new();
+    let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", shell, Some(start.to_str().unwrap()), 80, 24, tx);
     match original {
@@ -424,7 +431,7 @@ async fn reports_its_directory(shell: &str, variable: &str, files: &[(&str, &str
     let mut output = String::new();
     let first = collect_until(&mut rx, &mut output, |text| text.contains(&expected)).await;
     // 디렉터리를 바꾸면 다음 프롬프트 전에 새 디렉터리를 알린다.
-    service.write(&session, b"cd /\n").unwrap();
+    service.write(&session, b"cd /\n", &[]).unwrap();
     let changed = collect_until(&mut rx, &mut output, |text| {
         in_order(
             text,

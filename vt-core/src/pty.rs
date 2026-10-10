@@ -4,7 +4,7 @@
 //! 의도적으로 PTY handle로 표현하지 않는다. attachment를 drop하면 그 client로의
 //! 전달만 멈추고, session 종료는 명시적인 close가 담당한다.
 
-use crate::performance::{bytes_fields, PerformanceTrace};
+use crate::events::{bytes_fields, Events, Level, Subject};
 use crate::platform::pty::{
     kill_process_group, pending_input, process_group_leader, wait_for_exit,
 };
@@ -84,20 +84,14 @@ struct Session {
     closed: Mutex<bool>,
     reader: Mutex<Option<thread::JoinHandle<()>>>,
     reaper: Mutex<Option<thread::JoinHandle<()>>>,
-    /// The trace of the service that opened the session, which records each write, each read and the end of the child.
-    performance: PerformanceTrace,
+    /// The writer of the service that opened the session, which records each write, each read and the end of the child.
+    log: Events,
 }
 
 #[derive(Clone)]
 pub struct PtyService {
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
-    performance: PerformanceTrace,
-}
-
-impl Default for PtyService {
-    fn default() -> Self {
-        Self::new()
-    }
+    log: Events,
 }
 
 /// 터미널 locale 규칙을 자식 환경에 적용한다(core docs/spec/terminal-runtime.md). 지역 locale 을 쓸 수 없으면
@@ -125,17 +119,12 @@ fn apply_shell_locale(command: &mut CommandBuilder) {
 }
 
 impl PtyService {
-    pub fn new() -> Self {
+    /// The service whose sessions record every write to and read from the PTY, and their life, in `log`.
+    pub fn new(log: Events) -> Self {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
-            performance: PerformanceTrace::disabled(),
+            log,
         }
-    }
-
-    /// The service with the performance trace that records every write to and read from its sessions.
-    pub fn with_performance(mut self, performance: PerformanceTrace) -> Self {
-        self.performance = performance;
-        self
     }
 
     pub fn open(
@@ -229,7 +218,7 @@ impl PtyService {
             closed: Mutex::new(false),
             reader: Mutex::new(None),
             reaper: Mutex::new(None),
-            performance: self.performance.clone(),
+            log: self.log.clone(),
         });
         session
             .attachments
@@ -241,10 +230,11 @@ impl PtyService {
             .lock()
             .unwrap()
             .insert(session_id.clone(), session.clone());
-        session.performance.line(
-            "session_open",
-            serde_json::json!({
-                "session": session_id,
+        session.log.emit_for(
+            Level::Info,
+            "sidecar.vt.session_open",
+            Subject::session(&session_id, &[]),
+            &serde_json::json!({
                 "owner": owner,
                 "cwd": cwd,
                 "cols": cols,
@@ -326,7 +316,9 @@ impl PtyService {
         Ok(())
     }
 
-    pub fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
+    /// Writes `data` to the session. `cids` are the correlation identifiers of the inputs that caused the write; the
+    /// event of the write carries them.
+    pub fn write(&self, session_id: &str, data: &[u8], cids: &[String]) -> Result<(), String> {
         let session = self.session(session_id)?;
         if *session.closed.lock().unwrap() {
             return Err("session is closed".into());
@@ -339,15 +331,17 @@ impl PtyService {
             .ok_or_else(|| "session writer is closed".to_string())?
             .write_all(data)
             .map_err(|error| format!("write PTY: {error}"));
-        if session.performance.enabled() {
-            let mut fields = bytes_fields(data);
-            fields["session"] = serde_json::json!(session_id);
-            fields["ok"] = serde_json::json!(result.is_ok());
-            if let Err(error) = &result {
-                fields["error"] = serde_json::json!(error);
-            }
-            session.performance.line("pty_write", fields);
+        let mut fields = bytes_fields(data);
+        fields["ok"] = serde_json::json!(result.is_ok());
+        if let Err(error) = &result {
+            fields["error"] = serde_json::json!(error);
         }
+        session.log.emit_for(
+            Level::Info,
+            "sidecar.vt.pty_write",
+            Subject::session(session_id, cids),
+            &fields,
+        );
         result
     }
 
@@ -482,9 +476,12 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => {
-                session
-                    .performance
-                    .line("pty_eof", serde_json::json!({"session": session.id}));
+                session.log.emit_for(
+                    Level::Info,
+                    "sidecar.vt.pty_eof",
+                    Subject::session(&session.id, &[]),
+                    &serde_json::json!({}),
+                );
                 break;
             }
             Ok(size) => {
@@ -496,12 +493,14 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
                     *next += 1;
                     sequence
                 };
-                if session.performance.enabled() {
-                    let mut fields = bytes_fields(&data);
-                    fields["session"] = serde_json::json!(session.id);
-                    fields["sequence"] = serde_json::json!(sequence);
-                    session.performance.line("pty_read", fields);
-                }
+                let mut fields = bytes_fields(&data);
+                fields["sequence"] = serde_json::json!(sequence);
+                session.log.emit_for(
+                    Level::Debug,
+                    "sidecar.vt.pty_read",
+                    Subject::session(&session.id, &[]),
+                    &fields,
+                );
                 {
                     let mut output = session.output.lock().unwrap();
                     output.push_back((sequence, data.clone()));
@@ -520,9 +519,11 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
                 );
             }
             Err(error) => {
-                session.performance.line(
-                    "pty_read_error",
-                    serde_json::json!({"session": session.id, "error": error.to_string()}),
+                session.log.emit_for(
+                    Level::Info,
+                    "sidecar.vt.pty_read_error",
+                    Subject::session(&session.id, &[]),
+                    &serde_json::json!({"error": error.to_string()}),
                 );
                 broadcast(
                     &session,
@@ -569,9 +570,11 @@ fn reap_child(session: Arc<Session>) {
                 .child
                 .wait()
                 .map(|status| {
-                    session.performance.line(
-                        "session_exit",
-                        serde_json::json!({"session": session.id, "status": format!("{status:?}")}),
+                    session.log.emit_for(
+                        Level::Info,
+                        "sidecar.vt.session_exit",
+                        Subject::session(&session.id, &[]),
+                        &serde_json::json!({"status": format!("{status:?}")}),
                     );
                 })
                 .map_err(|error| format!("wait PTY: {error}"))
@@ -632,68 +635,55 @@ mod tests {
         }
     }
 
-    /// The records of the performance trace that the file holds, one JSON object for each line.
-    fn trace_records(log: &std::path::Path) -> Vec<serde_json::Value> {
-        std::fs::read_to_string(log)
-            .unwrap_or_default() // default: the trace file does not exist before the first record
-            .lines()
-            .map(|line| serde_json::from_str(line).expect("every line is one JSON object"))
-            .collect()
-    }
-
     #[tokio::test]
-    async fn the_trace_records_every_write_to_and_read_from_the_pty_with_its_bytes() {
+    async fn the_events_record_every_write_to_and_read_from_the_pty_with_its_bytes() {
         let _test_lock = crate::platform::pty::native_pty_test_lock();
-        let directory =
-            std::env::temp_dir().join(format!("vt-core-pty-trace-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&directory);
-        std::fs::create_dir_all(&directory).unwrap();
-        let log = directory.join("performance.ndjson");
-        std::fs::write(
-            directory.join("performance"),
-            format!("{}\n", log.display()),
-        )
-        .unwrap();
-        let service = PtyService::new().with_performance(
-            crate::performance::PerformanceTrace::from_service_dir(&directory),
-        );
+        let events = crate::events::test_support::TestEvents::new();
+        let service = PtyService::new(events.handle());
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let (session_id, _) = service
             .open("/bin/sh", &["-c".into(), "cat".into()], None, 80, 24, tx)
             .expect("PTY setup failed; environmental PTY errors must fail this test");
-        service.write(&session_id, "한a\n".as_bytes()).unwrap();
-        // The terminal echoes the line, which is the read that the trace must record with the same text.
+        let cids = vec!["b1.5".to_string()];
+        service
+            .write(&session_id, "한a\n".as_bytes(), &cids)
+            .unwrap();
+        // The terminal echoes the line, which is the read that the events must record with the same text.
         let mut seen = String::new();
         while !seen.contains("한a") {
             seen.push_str(&String::from_utf8_lossy(&next_output(&mut rx).await));
         }
         service.close(&session_id).unwrap();
-        let records = trace_records(&log);
-        let written = records
-            .iter()
-            .find(|record| record["event"] == "pty_write")
-            .expect("the write was not recorded");
+        let lines = events.lines();
+        let named = |name: &str| -> Vec<&serde_json::Value> {
+            lines.iter().filter(|line| line["event"] == name).collect()
+        };
+        let writes = named("sidecar.vt.pty_write");
+        assert_eq!(writes.len(), 1, "{writes:?}");
+        let written = writes[0];
         assert_eq!(written["session"], session_id);
-        assert_eq!(written["bytes"], 5);
-        assert_eq!(written["text"], "한a\n");
-        assert_eq!(written["hex"], "ed959c610a");
-        assert_eq!(written["ok"], true);
-        let read = records
+        assert_eq!(written["cids"], serde_json::json!(["b1.5"]));
+        assert_eq!(written["level"], "info");
+        assert_eq!(written["fields"]["bytes"], 5);
+        assert_eq!(written["fields"]["text"], "한a\n");
+        assert_eq!(written["fields"]["hex"], "ed959c610a");
+        assert_eq!(written["fields"]["ok"], true);
+        let reads = named("sidecar.vt.pty_read");
+        assert!(reads.iter().all(|read| read["level"] == "debug"));
+        let read = reads
             .iter()
-            .filter(|record| record["event"] == "pty_read")
-            .map(|record| record["text"].as_str().unwrap().to_string())
+            .map(|record| record["fields"]["text"].as_str().unwrap().to_string())
             .collect::<String>();
         assert!(read.contains("한a"), "the read was not recorded: {read:?}");
-        assert!(records
+        assert!(named("sidecar.vt.session_open")
             .iter()
-            .any(|record| record["event"] == "session_open" && record["session"] == session_id));
-        let _ = std::fs::remove_dir_all(&directory);
+            .any(|record| record["session"] == session_id));
     }
 
     #[tokio::test]
     async fn independent_sessions_have_independent_output() {
         let _test_lock = crate::platform::pty::native_pty_test_lock();
-        let service = PtyService::new();
+        let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
         let (tx_a, mut rx_a) = tokio::sync::mpsc::unbounded_channel();
         let (tx_b, mut rx_b) = tokio::sync::mpsc::unbounded_channel();
         let (session_a, _) = service
@@ -727,7 +717,7 @@ mod tests {
     #[tokio::test]
     async fn explicit_close_kills_the_child_and_drains_exit() {
         let _test_lock = crate::platform::pty::native_pty_test_lock();
-        let service = PtyService::new();
+        let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let (session_id, _) = service
             .open(
@@ -846,7 +836,7 @@ mod tests {
             closed: Mutex::new(false),
             reader: Mutex::new(None),
             reaper: Mutex::new(None),
-            performance: PerformanceTrace::disabled(),
+            log: crate::events::test_support::TestEvents::new().handle(),
         });
         service
             .sessions
@@ -863,7 +853,7 @@ mod tests {
     // close 는 회수 thread 가 자식을 회수한 뒤에 돌아온다(S20, core F61).
     #[test]
     fn close_returns_after_the_reaper_reaps_the_child() {
-        let service = PtyService::new();
+        let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
         let status = observed_session(&service, "reaped", 30, true);
         let closed = service.close("reaped");
         let status_at_return = *status.lock().unwrap();
@@ -880,7 +870,7 @@ mod tests {
     #[test]
     fn close_ends_a_child_that_the_group_signal_missed_while_the_reaper_waits() {
         use std::os::unix::process::ExitStatusExt;
-        let service = PtyService::new();
+        let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
         let status = observed_session(&service, "group-missed", 20, false);
         let closed = service.close("group-missed");
         let status_at_return = *status.lock().unwrap();
@@ -895,7 +885,7 @@ mod tests {
     #[tokio::test]
     async fn attach_replays_retained_output_with_stable_session_id() {
         let _test_lock = crate::platform::pty::native_pty_test_lock();
-        let service = PtyService::new();
+        let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
         let (tx_a, mut rx_a) = tokio::sync::mpsc::unbounded_channel();
         let (session_id, _) = service
             .open(
