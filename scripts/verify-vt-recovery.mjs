@@ -248,7 +248,7 @@ const main = async () => {
   const root = await mkdtemp(join(tmpdir(), "soksak-vt-recovery-"));
   const serviceDirectory = join(root, "services", "vt-alacritty");
   await mkdir(serviceDirectory, { recursive: true, mode: 0o700 });
-  const service = spawn(binary, ["--service-dir", serviceDirectory], {
+  const service = spawn(binary, ["--service-dir", serviceDirectory, "--log-dir", join(root, "logs")], {
     stdio: ["ignore", "pipe", "pipe"],
   });
   let serviceStderr = "";

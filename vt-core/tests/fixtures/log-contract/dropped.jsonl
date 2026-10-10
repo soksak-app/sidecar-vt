@@ -1,0 +1,4 @@
+{"ts_us":1791500000000000,"seq":1,"level":"info","layer":"host","event":"log.open","fields":{"schema":1,"pid":4242,"role":"host","boot":"b1"}}
+{"ts_us":1791500000100000,"seq":2,"level":"info","layer":"native","event":"native.input.key_down","fields":{"keyCode":0,"characters":"a"}}
+{"ts_us":1791500000200000,"seq":3,"level":"warn","layer":"host","event":"log.dropped","fields":{"from_seq":4,"to_seq":6,"count":3}}
+{"ts_us":1791500000300000,"seq":7,"level":"info","layer":"native","event":"native.input.key_down","fields":{"keyCode":11,"characters":"b"}}

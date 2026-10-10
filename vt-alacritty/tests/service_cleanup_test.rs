@@ -55,6 +55,8 @@ fn start(service_dir: &Path) -> (Service, PathBuf) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"))
         .arg("--service-dir")
         .arg(service_dir)
+        .arg("--log-dir")
+        .arg(service_dir.join("logs"))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

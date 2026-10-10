@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "events": {
+    "log.open": { "layer": "host", "class": "lifecycle", "level": "info", "fields": { "schema": "number", "pid": "number", "role": "string", "boot": "string" } },
+    "log.dropped": { "layer": "host", "class": "lifecycle", "level": "warn", "fields": { "from_seq": "number", "to_seq": "number", "count": "number" } },
+    "native.input.key_down": { "layer": "native", "class": "input", "level": "info", "fields": { "keyCode": "number", "characters": "string" } },
+    "page.terminal.send": { "layer": "page", "class": "input", "level": "info", "fields": { "operation": "string" } },
+    "sidecar.vt.pty_write": { "layer": "sidecar", "class": "io", "level": "info", "fields": { "hex": "string", "text": "string" } }
+  },
+  "chains": { "key": ["native.input.key_down", "page.terminal.send", "sidecar.vt.pty_write"] }
+}

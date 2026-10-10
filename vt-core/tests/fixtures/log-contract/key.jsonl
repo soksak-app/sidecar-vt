@@ -1,0 +1,4 @@
+{"ts_us":1791500000000000,"seq":1,"level":"info","layer":"host","event":"log.open","fields":{"schema":1,"pid":4242,"role":"host","boot":"b1"}}
+{"ts_us":1791500000100000,"mono_ns":100000000,"seq":2,"level":"info","layer":"native","event":"native.input.key_down","window":"w1","surface":"tab-x","cids":["b1.1"],"fields":{"keyCode":36,"characters":"\r"}}
+{"ts_us":1791500000200000,"seq":3,"level":"info","layer":"page","event":"page.terminal.send","window":"w1","surface":"tab-x","cids":["b1.1"],"fields":{"operation":"input"}}
+{"ts_us":1791500000300000,"mono_ns":300000000,"seq":4,"level":"info","layer":"sidecar","event":"sidecar.vt.pty_write","surface":"tab-x","cids":["b1.1"],"fields":{"hex":"0d","text":"\r"}}
