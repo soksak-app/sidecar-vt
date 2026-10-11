@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S40.1: event 파일은 schema 2다. `log.open`이 `version`과 `policy`를 담고, `events::read_lines`는 다른 schema의 파일을 파일 이름과 찾은 번호를 담은 오류로 거부하며, golden fixture는 core의 것이다.
 - S39: `sidecar.json`이 필드 `events`로 event catalog `events.json`을 가리키고, catalog는 패키지 `vt-alacritty` 안으로 옮겼으며, 패키지의 `files`가 그것을 담아 릴리스가 catalog를 나른다.
 - S38: `vt-alacritty/events.json`이 service의 event 15개(layer, class, level, 필수 필드와 그 type, 설명)를 선언하고, `tests/events.test.mjs`와 `vt-core/tests/serve_events.rs`가 선언한 event마다 이를 이름 붙인 source가 있는지, source가 이름 붙인 event가 모두 선언되었는지, 실제 session의 event가 catalog를 만족하는지 검사한다.
 - S37: service의 기록은 필드 `where`와 `text`를 가진 event `sidecar.vt.record.error`와 `sidecar.vt.record.info`이고, 표준 오류에는 process나 system이 쓰는 것만 남는다. `service_log`는 없앴고, 실패한 client 인증, 실패한 정리, 설치되지 않은 글꼴 family, 쓸 수 없는 trace 폴더는 event 파일의 기록이다.

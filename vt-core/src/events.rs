@@ -20,7 +20,7 @@ use serde_json::json;
 use serde_json::value::{to_raw_value, RawValue};
 
 /// The schema number of the lines that this writer writes.
-pub const SCHEMA: u64 = 1;
+pub const SCHEMA: u64 = 2;
 
 /// The role of this process in the name of its file and in `log.open`.
 pub const ROLE: &str = "vt";
@@ -30,6 +30,10 @@ const LAYER: &str = "sidecar";
 
 /// The prefix of every event name of this process, except the events of the writer (`log.*`).
 const PREFIX: &str = "sidecar.vt.";
+
+/// The classes whose events the policy stores (core docs/spec/logging.md#classes-and-policy). A process that cannot read the
+/// policy stores `lifecycle`, `input`, `call` and `io`.
+pub const POLICY: [&str; 4] = ["lifecycle", "input", "call", "io"];
 
 /// The level of an event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -276,6 +280,8 @@ impl EventLog {
                 "pid": std::process::id(),
                 "role": ROLE,
                 "boot": options.boot,
+                "version": env!("CARGO_PKG_VERSION"),
+                "policy": POLICY,
             }))
             .map_err(|e| format!("log.open: {e}"))?,
         );
@@ -723,6 +729,42 @@ fn write_loop(
     }
 }
 
+/// Reads the lines of an event file. A file whose first line is not `log.open` of the schema of this writer is rejected with
+/// an error that names the file and what it found; no earlier schema is read.
+pub fn read_lines(path: &Path) -> Result<Vec<serde_json::Value>, String> {
+    let text =
+        std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let mut lines = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let value: serde_json::Value = serde_json::from_str(line).map_err(|error| {
+            format!(
+                "{}:{}: not a JSON object: {error}",
+                path.display(),
+                index + 1
+            )
+        })?;
+        lines.push(value);
+    }
+    let first = lines
+        .first()
+        .ok_or_else(|| format!("{}: the file is empty", path.display()))?;
+    if first["event"] != "log.open" {
+        return Err(format!(
+            "{}: the first line is {}, not log.open",
+            path.display(),
+            first["event"]
+        ));
+    }
+    if first["fields"]["schema"] != SCHEMA {
+        return Err(format!(
+            "{}: schema {} is not {SCHEMA}",
+            path.display(),
+            first["fields"]["schema"]
+        ));
+    }
+    Ok(lines)
+}
+
 /// The fields of an event of bytes: the length, the text (the bytes read as UTF-8, with the replacement character for
 /// bytes that are not) and the same bytes in hexadecimal. An event holds every byte, because a defect of the input is
 /// located from what was written and read.
@@ -772,11 +814,7 @@ pub mod test_support {
             self.handle
                 .flush(Duration::from_secs(10))
                 .expect("flush the writer");
-            std::fs::read_to_string(self.handle.path())
-                .expect("read the file of the events")
-                .lines()
-                .map(|line| serde_json::from_str(line).expect("every line is one JSON object"))
-                .collect()
+            read_lines(self.handle.path()).expect("read the file of the events")
         }
     }
 }

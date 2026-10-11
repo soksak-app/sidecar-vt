@@ -2,7 +2,7 @@
 // tests/fixtures/log-contract are copies of the fixtures of the contract; a line that the writer produces has the same
 // structure and satisfies the same catalog.
 use serde_json::{json, Value};
-use soksak_sidecar_vt_core::events::{bytes_fields, EventLog, Level, Options, Subject};
+use soksak_sidecar_vt_core::events::{bytes_fields, read_lines, EventLog, Level, Options, Subject};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -106,7 +106,12 @@ fn the_first_line_opens_the_file_with_the_schema_the_pid_the_role_and_the_boot()
     assert_eq!(open["event"], "log.open");
     assert_eq!(open["seq"], 1);
     assert_eq!(open["layer"], "sidecar");
-    assert_eq!(open["fields"]["schema"], 1);
+    assert_eq!(open["fields"]["schema"], 2);
+    assert_eq!(open["fields"]["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        open["fields"]["policy"],
+        json!(["lifecycle", "input", "call", "io"])
+    );
     assert_eq!(open["fields"]["pid"], std::process::id());
     assert_eq!(open["fields"]["role"], "vt");
     assert_eq!(open["fields"]["boot"], "b1");
@@ -339,4 +344,30 @@ fn a_record_is_an_event_with_the_place_and_the_text() {
     assert_eq!(info["level"], "info");
     assert_eq!(info["fields"]["where"], "font");
     assert_eq!(info["fields"]["text"], "no listed font is installed");
+}
+
+#[test]
+fn a_reader_rejects_a_file_of_another_schema_and_names_the_file() {
+    let dir = directory("schema");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("vt-old.jsonl");
+    std::fs::write(
+        &path,
+        "{\"ts_us\":1,\"seq\":1,\"level\":\"info\",\"layer\":\"sidecar\",\"event\":\"log.open\",\"fields\":{\"schema\":1,\"pid\":1,\"role\":\"vt\",\"boot\":\"b\"}}\n",
+    )
+    .unwrap();
+    let error = read_lines(&path).unwrap_err();
+    assert!(error.contains(&path.display().to_string()), "{error}");
+    assert!(error.contains("schema 1"), "{error}");
+    assert!(error.contains("2"), "{error}");
+    // A file that does not open with log.open names what it found.
+    let other = dir.join("vt-other.jsonl");
+    std::fs::write(&other, "{\"event\":\"sidecar.vt.frame\"}\n").unwrap();
+    let error = read_lines(&other).unwrap_err();
+    assert!(error.contains(&other.display().to_string()), "{error}");
+    assert!(error.contains("log.open"), "{error}");
+    // The file of this writer is read.
+    let log = EventLog::start(options(&dir.join("current"))).unwrap();
+    log.flush(DEADLINE).unwrap();
+    assert_eq!(read_lines(log.path()).unwrap()[0]["fields"]["schema"], 2);
 }
