@@ -1254,9 +1254,10 @@ const FONT_SIZE_MIN: f64 = 4.0;
 const FONT_SIZE_MAX: f64 = 128.0;
 
 /// The `screen` message of core (docs/spec/terminal-runtime.md#screen-message): the complete screen with the members that the
-/// screen hash covers, so the page hashes the message and compares it with the frame record of the same `sequence`. The
-/// scrollback state and the background color are further members of the service. A screen that cannot be hashed gets no message.
-pub fn screen_message(sequence: u64, screen: &Screen) -> Result<Value, String> {
+/// screen hash covers, so the page hashes the message and compares it with the frame record of the same `segment` and `sequence`.
+/// The scrollback state and the background color are further members of the service. A screen that cannot be hashed gets no
+/// message.
+pub fn screen_message(segment: &str, sequence: u64, screen: &Screen) -> Result<Value, String> {
     if sequence == 0 {
         return Err("screen message: sequence must be an integer from 1".to_string());
     }
@@ -1264,6 +1265,7 @@ pub fn screen_message(sequence: u64, screen: &Screen) -> Result<Value, String> {
     Ok(json!({
         "event": "screen",
         "sequence": sequence,
+        "segment": segment,
         "rows": screen.rows,
         "cols": screen.cols,
         "cursor": screen.cursor,
@@ -1274,8 +1276,13 @@ pub fn screen_message(sequence: u64, screen: &Screen) -> Result<Value, String> {
 }
 
 /// The line of the `screen` message of a surface.
-fn screen_event(surface_id: &str, sequence: u64, screen: &Screen) -> Result<Value, String> {
-    Ok(json!({"surface": surface_id, "body": screen_message(sequence, screen)?}))
+fn screen_event(
+    surface_id: &str,
+    log: &Events,
+    sequence: u64,
+    screen: &Screen,
+) -> Result<Value, String> {
+    Ok(json!({"surface": surface_id, "body": screen_message(log.boot(), sequence, screen)?}))
 }
 
 /// Records the frame record of a screen (core docs/spec/replay.md#records): the sequence of the last input that it includes, its
@@ -1327,7 +1334,7 @@ async fn send_plain_screen(
     log: &Events,
     sequence: u64,
 ) -> bool {
-    let line = match screen_event(surface_id, sequence, screen) {
+    let line = match screen_event(surface_id, log, sequence, screen) {
         Ok(line) => line,
         Err(error) => {
             log.record_error("screen", error);
@@ -1423,7 +1430,7 @@ async fn present_screen(
         Ok(carrier) => state.carrier = carrier,
         Err(()) => return false,
     }
-    match screen_event(surface_id, input_sequence, screen) {
+    match screen_event(surface_id, log, input_sequence, screen) {
         Ok(line) => {
             if output_tx.send(line.to_string()).await.is_err() {
                 return false;
