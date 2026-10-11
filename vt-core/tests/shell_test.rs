@@ -63,7 +63,7 @@ async fn a_session_shell_starts_as_a_login_shell() {
         .open_shell("", "/bin/sh", None, 80, 24, tx)
         .expect("open a login shell session");
     service
-        .write(&session, b"printf 'ARGV0=%s\\n' \"$0\"\n", &[])
+        .write(&session, b"printf 'ARGV0=%s\\n' \"$0\"\n")
         .expect("write to the shell");
     let mut output = String::new();
     let found = timeout(Duration::from_secs(10), async {
@@ -156,8 +156,7 @@ async fn a_zsh_session_reads_the_user_startup_files_and_reports_prompt_and_comma
     service
         .write(
             &session,
-            b"print -r -- \"STATE=$ZDOTDIR|$ZSHENV_READ$ZPROFILE_READ$ZSHRC_READ$ZLOGIN_READ|${SOKSAK_ZSH_ZDOTDIR-unset}\"\n",
-            &[],
+            b"print -r -- \"STATE=$ZDOTDIR|$ZSHENV_READ$ZPROFILE_READ$ZSHRC_READ$ZLOGIN_READ|${SOKSAK_ZSH_ZDOTDIR-unset}\"\n"
         )
         .unwrap();
     let state = format!("STATE={}|1111|unset\r\n", home.display());
@@ -173,7 +172,7 @@ async fn a_zsh_session_reads_the_user_startup_files_and_reports_prompt_and_comma
         "zsh did not report {expected:?} in order: {output:?}"
     );
     output.clear();
-    service.write(&session, b"false\n", &[]).unwrap();
+    service.write(&session, b"false\n").unwrap();
     let failed = collect_until(&mut rx, &mut output, |text| {
         in_order(
             text,
@@ -225,8 +224,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
     service
         .write(
             &session,
-            b"printf 'STATE=%s|%s|%s|%s\\n' \"$0\" \"$PROFILE_READ$USER_HOOK_RAN\" \"${SOKSAK_BASH_INTEGRATION-unset}\" \"$(env | grep -c '^PROMPT_COMMAND=')\"\n",
-            &[],
+            b"printf 'STATE=%s|%s|%s|%s\\n' \"$0\" \"$PROFILE_READ$USER_HOOK_RAN\" \"${SOKSAK_BASH_INTEGRATION-unset}\" \"$(env | grep -c '^PROMPT_COMMAND=')\"\n"
         )
         .unwrap();
     let expected = [
@@ -241,7 +239,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
         "bash did not report {expected:?} in order: {output:?}"
     );
     output.clear();
-    service.write(&session, b"false\n", &[]).unwrap();
+    service.write(&session, b"false\n").unwrap();
     let failed = collect_until(&mut rx, &mut output, |text| {
         in_order(
             text,
@@ -259,11 +257,9 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
     );
     output.clear();
     // 트랩은 앞 명령의 마지막 인수($_)를 바꾸지 않는다.
+    service.write(&session, b"true last-argument\n").unwrap();
     service
-        .write(&session, b"true last-argument\n", &[])
-        .unwrap();
-    service
-        .write(&session, b"printf 'LAST=%s\\n' \"$_\"\n", &[])
+        .write(&session, b"printf 'LAST=%s\\n' \"$_\"\n")
         .unwrap();
     let kept = collect_until(&mut rx, &mut output, |text| {
         in_order(
@@ -275,7 +271,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
     assert!(kept, "the trap changed $_: {output:?}");
     output.clear();
     // 빈 입력 행은 명령이 아니다.
-    service.write(&session, b"\n", &[]).unwrap();
+    service.write(&session, b"\n").unwrap();
     let empty = collect_until(&mut rx, &mut output, |text| {
         text.contains("\x1b]133;A;redraw=last\x07")
     })
@@ -310,7 +306,7 @@ async fn a_bash_debug_trap_from_the_startup_files_is_kept_and_no_marks_are_repor
     }
     let (session, _) = opened.expect("open a bash session");
     service
-        .write(&session, b"printf 'TRAP=%s\\n' \"$(trap -p DEBUG)\"\n", &[])
+        .write(&session, b"printf 'TRAP=%s\\n' \"$(trap -p DEBUG)\"\n")
         .unwrap();
     let mut output = String::new();
     let shown = collect_until(&mut rx, &mut output, |text| {
@@ -383,7 +379,7 @@ async fn a_session_starts_in_the_requested_directory() {
         .open_shell("", "/bin/sh", Some(directory.to_str().unwrap()), 80, 24, tx)
         .expect("open a shell session");
     service
-        .write(&session, b"printf 'PWD=%s\\n' \"$(pwd -P)\"\n", &[])
+        .write(&session, b"printf 'PWD=%s\\n' \"$(pwd -P)\"\n")
         .unwrap();
     let mut output = String::new();
     let expected = format!("PWD={}\r\n", directory.display());
@@ -431,7 +427,7 @@ async fn reports_its_directory(shell: &str, variable: &str, files: &[(&str, &str
     let mut output = String::new();
     let first = collect_until(&mut rx, &mut output, |text| text.contains(&expected)).await;
     // 디렉터리를 바꾸면 다음 프롬프트 전에 새 디렉터리를 알린다.
-    service.write(&session, b"cd /\n", &[]).unwrap();
+    service.write(&session, b"cd /\n").unwrap();
     let changed = collect_until(&mut rx, &mut output, |text| {
         in_order(
             text,

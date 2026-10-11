@@ -935,19 +935,8 @@ pub fn read_lines(path: &Path) -> Result<Vec<serde_json::Value>, String> {
     Ok(lines)
 }
 
-/// The fields of an event of bytes: the length, the text (the bytes read as UTF-8, with the replacement character for
-/// bytes that are not) and the same bytes in hexadecimal. An event holds every byte, because a defect of the input is
-/// located from what was written and read.
-pub fn bytes_fields(data: &[u8]) -> serde_json::Value {
-    json!({
-        "bytes": data.len(),
-        "text": String::from_utf8_lossy(data),
-        "hex": hex(data),
-    })
-}
-
 /// The bytes in lowercase hexadecimal, built in one allocation with a table of the sixteen digits.
-fn hex(data: &[u8]) -> String {
+pub fn hex(data: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut text = Vec::with_capacity(data.len() * 2);
     for byte in data {

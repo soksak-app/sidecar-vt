@@ -111,7 +111,7 @@ impl SessionPort for TracePort {
     ) -> Result<String, String> {
         Ok("perf-session".to_string())
     }
-    async fn write(&self, _session_id: &str, _data: &[u8], _cids: &[String]) -> Result<(), String> {
+    async fn write(&self, _session_id: &str, _data: &[u8]) -> Result<(), String> {
         Ok(())
     }
     async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
@@ -167,6 +167,36 @@ async fn serve_with(
     replies
 }
 
+/// Serves `input` and keeps the connection open until the event `until` is in the file of `events` (the output of a session
+/// reaches the surface task when the task takes it, and nothing tells the test when). The wait has a limit that ends a stalled
+/// test; success is judged by the event.
+async fn serve_until(
+    events: &TestEvents,
+    engine_factory: Arc<dyn Fn() -> Box<dyn Engine> + Send + Sync>,
+    factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync>,
+    input: &[u8],
+    until: &str,
+) {
+    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
+    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let handle = events.handle();
+    let task = tokio::spawn(async move {
+        let _ = serve(engine_factory, serve_in, serve_out, factory, handle).await;
+    });
+    to_serve.write_all(input).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while events.named(until).is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{until} was not stored"));
+    drop(to_serve);
+    let mut lines = BufReader::new(from_serve).lines();
+    while lines.next_line().await.unwrap().is_some() {}
+    task.await.unwrap();
+}
+
 #[tokio::test]
 async fn a_served_surface_records_its_frames_with_reasons() {
     let events = TestEvents::new();
@@ -188,19 +218,16 @@ async fn a_served_surface_records_its_frames_with_reasons() {
             "every frame carries a reason and a draw time: {frame}"
         );
     }
-    // Each frame names its session, its sequence number (consecutive from 1 for a surface) and the size of its screen in
-    // cells; the screen hash waits for the definition of core (docs/features.md, S40.8).
+    // Each frame names its session, the number of its image (consecutive from 1 for a surface), the size of its screen and the
+    // screen hash (the contents of the frame record are checked by the test of the replay records).
     for (index, frame) in frames.iter().enumerate() {
         assert_eq!(frame["session"], "perf-session", "{frame}");
-        assert_eq!(frame["fields"]["sequence"], index as u64 + 1, "{frame}");
+        assert_eq!(frame["fields"]["image"], index as u64 + 1, "{frame}");
         assert!(frame["fields"].get("seq").is_none(), "{frame}");
-        let size = frame["fields"]["size"]
-            .as_str()
-            .expect("the size of the screen");
-        let (cols, rows) = size.split_once('x').expect("columns x rows");
-        assert!(
-            cols.parse::<u32>().unwrap() > 0 && rows.parse::<u32>().unwrap() > 0,
-            "{size}"
+        assert_eq!(
+            frame["fields"]["hash"].as_str().unwrap().len(),
+            64,
+            "{frame}"
         );
     }
     assert!(
@@ -457,7 +484,7 @@ impl SessionPort for OutputPort {
     ) -> Result<String, String> {
         Ok("scripted-session".to_string())
     }
-    async fn write(&self, _session_id: &str, _data: &[u8], _cids: &[String]) -> Result<(), String> {
+    async fn write(&self, _session_id: &str, _data: &[u8]) -> Result<(), String> {
         Ok(())
     }
     async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
@@ -541,6 +568,125 @@ async fn an_inline_image_command_that_cannot_be_applied_is_an_error_record() {
         inline[0]["fields"]["text"],
         "inline image multipart part has no active transfer"
     );
+}
+
+// The inputs of a session are replay inputs (core docs/spec/replay.md#records): the output of the program, the input to it and
+// each resize carry the session, a `sequence` that counts the inputs of the session from 1 without a gap, and the complete
+// bytes as `hex` without a text copy. A frame record carries the sequence of the last input that its screen includes, the size
+// of the screen and the screen hash.
+#[tokio::test]
+async fn the_inputs_and_the_frames_of_a_session_are_replay_records() {
+    let events = TestEvents::new();
+    let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
+    let factory = make_default_session_port_factory(events.handle());
+    serve_until(
+        &events,
+        engine_factory,
+        factory,
+        br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/cat","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","cids":["b1.42"],"body":{"operation":"input","bytes":"7ZWcYQo="}}
+"#,
+        "sidecar.vt.pty_read",
+    )
+    .await;
+    let lines = events.lines();
+    let inputs: Vec<&serde_json::Value> = lines
+        .iter()
+        .filter(|line| {
+            [
+                "sidecar.vt.pty_read",
+                "sidecar.vt.pty_write",
+                "sidecar.vt.resize",
+            ]
+            .contains(&line["event"].as_str().unwrap())
+        })
+        .collect();
+    let session = inputs[0]["session"]
+        .as_str()
+        .expect("an input names its session")
+        .to_string();
+    let mut sequences: Vec<u64> = inputs
+        .iter()
+        .map(|input| {
+            assert_eq!(input["session"], session.as_str(), "{input}");
+            assert!(
+                input["fields"].get("text").is_none(),
+                "no derived copy: {input}"
+            );
+            input["fields"]["sequence"].as_u64().expect("a sequence")
+        })
+        .collect();
+    sequences.sort_unstable();
+    assert_eq!(
+        sequences,
+        (1..=sequences.len() as u64).collect::<Vec<_>>(),
+        "the sequences of a session have no gap"
+    );
+    let resize = inputs
+        .iter()
+        .find(|input| input["event"] == "sidecar.vt.resize")
+        .expect("the resize is an input");
+    assert!(
+        resize["fields"]["rows"].as_u64().unwrap() > 0
+            && resize["fields"]["cols"].as_u64().unwrap() > 0
+    );
+    let write = inputs
+        .iter()
+        .find(|input| input["event"] == "sidecar.vt.pty_write")
+        .expect("the write is an input");
+    assert_eq!(write["fields"]["hex"], "ed959c610a");
+    assert_eq!(write["cids"], serde_json::json!(["b1.42"]));
+    let read = inputs
+        .iter()
+        .find(|input| input["event"] == "sidecar.vt.pty_read")
+        .expect("the echo is an input");
+    assert!(read["fields"]["hex"].as_str().unwrap().len() >= 2);
+    let frames: Vec<_> = lines
+        .iter()
+        .filter(|line| line["event"] == "sidecar.vt.frame")
+        .collect();
+    assert!(!frames.is_empty());
+    for frame in frames {
+        assert_eq!(frame["session"], session.as_str(), "{frame}");
+        let sequence = frame["fields"]["sequence"]
+            .as_u64()
+            .expect("the last input of the frame");
+        assert!(sequence >= 1 && sequence <= inputs.len() as u64, "{frame}");
+        assert!(
+            frame["fields"]["rows"].as_u64().unwrap() > 0
+                && frame["fields"]["cols"].as_u64().unwrap() > 0
+        );
+        let hash = frame["fields"]["hash"].as_str().expect("the screen hash");
+        assert!(
+            hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "{hash}"
+        );
+    }
+}
+
+// The class `io` is stored when the policy lists it: without it the output of the program is not stored, and the inputs that
+// the person made still are.
+#[tokio::test]
+async fn the_output_of_the_program_is_not_stored_when_the_policy_leaves_out_the_class_io() {
+    let events = TestEvents::with_policy(&["lifecycle", "input", "call"]);
+    let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
+    let factory = make_default_session_port_factory(events.handle());
+    serve_with(
+        &events,
+        engine_factory,
+        factory,
+        br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/cat","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","body":{"operation":"input","bytes":"7ZWcYQo="}}
+"#,
+    )
+    .await;
+    assert!(events.named("sidecar.vt.pty_read").is_empty());
+    assert_eq!(events.named("sidecar.vt.pty_write").len(), 1);
 }
 
 // A request line over the bound of an event is recorded by its first 4,096 bytes and its size, and the line is neither cloned
@@ -710,7 +856,7 @@ impl SessionPort for FailingOpenPort {
     ) -> Result<String, String> {
         Err("no shell".to_string())
     }
-    async fn write(&self, _session_id: &str, _data: &[u8], _cids: &[String]) -> Result<(), String> {
+    async fn write(&self, _session_id: &str, _data: &[u8]) -> Result<(), String> {
         Ok(())
     }
     async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
@@ -813,9 +959,8 @@ async fn the_cids_of_an_input_request_reach_the_pty_write_event() {
     assert_eq!(write["cids"], serde_json::json!(["b1.42"]));
     assert_eq!(write["level"], "info");
     assert!(write["session"].is_string(), "{write}");
-    assert_eq!(write["fields"]["bytes"], 5);
     assert_eq!(write["fields"]["hex"], "ed959c610a");
-    assert_eq!(write["fields"]["text"], "한a\n");
+    assert!(write["fields"].get("text").is_none());
     assert_eq!(write["fields"]["ok"], true);
     assert!(write["fields"].get("cids").is_none());
 }

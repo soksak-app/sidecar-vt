@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S40.12: the inputs of a session are replay inputs (`pty_read`, `pty_write`, `resize` with `sequence` and `hex`, without a text copy) and the event `frame` is a frame record with `sequence`, `rows`, `cols` and the screen `hash`.
 - S40.11: `screen_hash` computes the screen hash of core and reproduces its golden vectors.
 - S40.7: a raster without a whole cell, a shell without integration and an inline image command that cannot be applied are recorded.
 - S40.9: tests cause the events `consumed_wait`, `read_wait` and `output_blocked` and check their fields.

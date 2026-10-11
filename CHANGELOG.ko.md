@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S40.12: session의 입력은 replay 입력(`sequence`와 `hex`를 가지고 text 사본이 없는 `pty_read`, `pty_write`, `resize`)이고 event `frame`은 `sequence`, `rows`, `cols`, 화면 `hash`를 가진 frame 기록이다.
 - S40.11: `screen_hash`가 core의 화면 hash를 계산하고 golden vector를 재현한다.
 - S40.7: 칸이 없는 raster, integration이 없는 shell, 적용할 수 없는 inline image 명령을 기록한다.
 - S40.9: test가 event `consumed_wait`, `read_wait`, `output_blocked`를 일으키고 그 필드를 확인한다.

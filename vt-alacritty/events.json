@@ -63,24 +63,22 @@
       "class": "io",
       "level": "info",
       "fields": {
-        "bytes": "number",
-        "text": "string",
+        "sequence": "number",
         "hex": "string",
-        "ok": "boolean"
+        "ok": "boolean",
+        "error?": "string"
       },
-      "description": "Bytes written to the PTY of a session, all of them, with the cids of the inputs that caused the write. error is present when the write failed."
+      "description": "Bytes written to the PTY of a session, all of them as hex, with the cids of the inputs that caused the write. A replay input: sequence counts the inputs of the session from 1 (core docs/spec/replay.md). error is present when the write failed."
     },
     "sidecar.vt.pty_read": {
       "layer": "sidecar",
       "class": "io",
       "level": "debug",
       "fields": {
-        "bytes": "number",
-        "text": "string",
-        "hex": "string",
-        "sequence": "number"
+        "sequence": "number",
+        "hex": "string"
       },
-      "description": "Bytes read from the PTY of a session, all of them."
+      "description": "Bytes of the output of the program that the engine of the session is fed with, all of them as hex. A replay input: sequence counts the inputs of the session from 1."
     },
     "sidecar.vt.request": {
       "layer": "sidecar",
@@ -103,10 +101,13 @@
         "reason": "string",
         "draw_us": "number",
         "raster": "string",
-        "size": "string",
-        "sequence": "number"
+        "image": "number",
+        "sequence": "number",
+        "rows": "number",
+        "cols": "number",
+        "hash": "string"
       },
-      "description": "An image frame of a surface was drawn. The line names the surface and its session. sequence is the number of the frame of the surface, size the screen in cells as <columns>x<rows> and raster the image in pixels. The hash of the screen is not stored yet: core defines no hash of a screen."
+      "description": "A frame of a surface was drawn: a frame record of core (docs/spec/replay.md). sequence is the sequence of the last input of the session that the screen includes, rows and cols the size of the screen, and hash the screen hash. image is the number of the image frame of the surface and raster its size in pixels, reason what caused the frame."
     },
     "sidecar.vt.consumed_wait": {
       "layer": "sidecar",
@@ -230,6 +231,17 @@
         "reason": "string"
       },
       "description": "A buffer of a session refused or removed data. buffer is output ring (the oldest chunk left the ring that serves a client that attaches later) or broadcast (an attachment whose receiver was closed was removed)."
+    },
+    "sidecar.vt.resize": {
+      "layer": "sidecar",
+      "class": "io",
+      "level": "info",
+      "fields": {
+        "sequence": "number",
+        "rows": "number",
+        "cols": "number"
+      },
+      "description": "The engine of a session was resized to rows and cols. A replay input: sequence counts the inputs of the session from 1."
     }
   }
 }

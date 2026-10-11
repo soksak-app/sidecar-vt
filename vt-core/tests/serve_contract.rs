@@ -309,8 +309,6 @@ struct Calls {
     opens: Vec<(u16, u16)>,
     directories: Vec<Option<String>>,
     writes: Vec<(String, Vec<u8>)>,
-    /// The correlation identifiers that came with each write, in the order of `writes`.
-    write_cids: Vec<Vec<String>>,
     resizes: Vec<(String, u16, u16)>,
     detaches: Vec<String>,
     closes: Vec<String>,
@@ -352,11 +350,10 @@ impl SessionPort for FakeSessionPort {
         Ok(self.session_id.clone())
     }
 
-    async fn write(&self, session_id: &str, data: &[u8], cids: &[String]) -> Result<(), String> {
+    async fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
         {
             let mut calls = self.calls.lock().unwrap();
             calls.writes.push((session_id.to_string(), data.to_vec()));
-            calls.write_cids.push(cids.to_vec());
         }
         if data == b"\x1b]7;file:///tmp/project\x07" {
             let _ = self.event_tx.send(DaemonEvent::Output {
@@ -483,12 +480,26 @@ async fn the_cids_of_a_request_reach_the_write_it_causes() {
         Arc::new(FakeSessionPort::new("cids".to_string(), port_calls.clone()))
             as Arc<dyn SessionPort>
     });
-    let _ = serve(engine_factory, reader, &mut writer, session_port_factory).await;
+    let events = events_test::TestEvents::new();
+    let _ = serve_with_events(
+        engine_factory,
+        reader,
+        &mut writer,
+        session_port_factory,
+        events.handle(),
+    )
+    .await;
     let calls = calls.lock().unwrap();
-    let ids: Vec<Vec<&str>> = calls
-        .write_cids
+    // The surface records each write as the event `pty_write` with the identifiers of the request that caused it.
+    let written = events.named("sidecar.vt.pty_write");
+    let ids: Vec<Vec<&str>> = written
         .iter()
-        .map(|cids| cids.iter().map(String::as_str).collect())
+        .map(|write| {
+            write["cids"]
+                .as_array()
+                .map(|cids| cids.iter().map(|cid| cid.as_str().unwrap()).collect())
+                .unwrap_or_default()
+        })
         .collect();
     assert_eq!(
         ids,

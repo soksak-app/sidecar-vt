@@ -158,7 +158,7 @@ async fn resize_wrapped_input(mut session: Session) -> Result<(), String> {
     // 프롬프트 바로 위의 출력 행도 크기 변경 뒤 그대로 있어야 한다.
     session
         .service
-        .write(&session.id, b"printf 'ABOVE\\n'\n", &[])
+        .write(&session.id, b"printf 'ABOVE\\n'\n")
         .unwrap();
     session
         .until(|text, _| text.contains("ABOVE") && text.matches("P> ").count() == 2)
@@ -166,7 +166,7 @@ async fn resize_wrapped_input(mut session: Session) -> Result<(), String> {
         .map_err(|screen| format!("no output line: {screen:?}"))?;
     session
         .service
-        .write(&session.id, input.as_bytes(), &[])
+        .write(&session.id, input.as_bytes())
         .unwrap();
     // 각 단계는 크기를 한 번 바꾼다. 셸이 다시 그리기 전에 크기가 다시 바뀌면 readline 이 지난 폭으로 그린다.
     for (step, cols) in [("before", 60u16), ("narrow", 30), ("wide", 60)] {

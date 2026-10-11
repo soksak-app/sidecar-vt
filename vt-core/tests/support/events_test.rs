@@ -20,8 +20,14 @@ impl Default for TestEvents {
 
 impl TestEvents {
     pub fn new() -> Self {
+        Self::with_policy(&["lifecycle", "input", "call", "io"])
+    }
+
+    /// A writer whose policy stores only the listed classes.
+    pub fn with_policy(policy: &[&str]) -> Self {
         let directory = tempfile::tempdir().expect("create the folder of the events");
         let mut options = Options::service(directory.path().join("logs"), "test".to_string());
+        options.policy = policy.iter().map(|class| class.to_string()).collect();
         options.batch_interval = Duration::from_millis(20);
         let handle = std::sync::Arc::new(EventLog::start(options).expect("start the writer"));
         Self {

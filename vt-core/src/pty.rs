@@ -4,7 +4,7 @@
 //! 의도적으로 PTY handle로 표현하지 않는다. attachment를 drop하면 그 client로의
 //! 전달만 멈추고, session 종료는 명시적인 close가 담당한다.
 
-use crate::events::{bytes_fields, Events, Level, Subject};
+use crate::events::{Events, Level, Subject};
 use crate::platform::pty::{
     kill_process_group, pending_input, process_group_leader, wait_for_exit, KillResult,
 };
@@ -325,9 +325,8 @@ impl PtyService {
         Ok(())
     }
 
-    /// Writes `data` to the session. `cids` are the correlation identifiers of the inputs that caused the write; the
-    /// event of the write carries them.
-    pub fn write(&self, session_id: &str, data: &[u8], cids: &[String]) -> Result<(), String> {
+    /// Writes `data` to the session. The surface that sends it records the write as a replay input.
+    pub fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
         let session = self.session(session_id)?;
         if *session.closed.lock().unwrap() {
             return Err("session is closed".into());
@@ -340,17 +339,6 @@ impl PtyService {
             .ok_or_else(|| "session writer is closed".to_string())?
             .write_all(data)
             .map_err(|error| format!("write PTY: {error}"));
-        let mut fields = bytes_fields(data);
-        fields["ok"] = serde_json::json!(result.is_ok());
-        if let Err(error) = &result {
-            fields["error"] = serde_json::json!(error);
-        }
-        session.log.emit_for(
-            Level::Info,
-            "sidecar.vt.pty_write",
-            Subject::session(session_id, cids),
-            &fields,
-        );
         result
     }
 
@@ -507,16 +495,6 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
                     *next += 1;
                     sequence
                 };
-                if session.log.enabled("io") {
-                    let mut fields = bytes_fields(&data);
-                    fields["sequence"] = serde_json::json!(sequence);
-                    session.log.emit_for(
-                        Level::Debug,
-                        "sidecar.vt.pty_read",
-                        Subject::session(&session.id, &[]),
-                        &fields,
-                    );
-                }
                 {
                     let mut output = session.output.lock().unwrap();
                     output.push_back((sequence, data.clone()));
@@ -695,89 +673,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn the_events_record_every_write_to_and_read_from_the_pty_with_its_bytes() {
-        let _test_lock = crate::platform::pty::native_pty_test_lock();
-        let events = crate::events::test_support::TestEvents::new();
-        let service = PtyService::new(events.handle());
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let (session_id, _) = service
-            .open("/bin/sh", &["-c".into(), "cat".into()], None, 80, 24, tx)
-            .expect("PTY setup failed; environmental PTY errors must fail this test");
-        let cids = vec!["b1.5".to_string()];
-        service
-            .write(&session_id, "한a\n".as_bytes(), &cids)
-            .unwrap();
-        // The terminal echoes the line, which is the read that the events must record with the same text.
-        let mut seen = String::new();
-        while !seen.contains("한a") {
-            seen.push_str(&String::from_utf8_lossy(&next_output(&mut rx).await));
-        }
-        service.close(&session_id).unwrap();
-        let lines = events.lines();
-        let named = |name: &str| -> Vec<&serde_json::Value> {
-            lines.iter().filter(|line| line["event"] == name).collect()
-        };
-        let writes = named("sidecar.vt.pty_write");
-        assert_eq!(writes.len(), 1, "{writes:?}");
-        let written = writes[0];
-        assert_eq!(written["session"], session_id);
-        assert_eq!(written["cids"], serde_json::json!(["b1.5"]));
-        assert_eq!(written["level"], "info");
-        assert_eq!(written["fields"]["bytes"], 5);
-        assert_eq!(written["fields"]["text"], "한a\n");
-        assert_eq!(written["fields"]["hex"], "ed959c610a");
-        assert_eq!(written["fields"]["ok"], true);
-        let reads = named("sidecar.vt.pty_read");
-        assert!(reads.iter().all(|read| read["level"] == "debug"));
-        let read = reads
-            .iter()
-            .map(|record| record["fields"]["text"].as_str().unwrap().to_string())
-            .collect::<String>();
-        assert!(read.contains("한a"), "the read was not recorded: {read:?}");
-        assert!(named("sidecar.vt.session_open")
-            .iter()
-            .any(|record| record["session"] == session_id));
-    }
-
-    #[tokio::test]
-    async fn the_read_of_the_pty_is_not_recorded_when_the_policy_leaves_out_the_class_io() {
-        let _test_lock = crate::platform::pty::native_pty_test_lock();
-        let events =
-            crate::events::test_support::TestEvents::with_policy(&["lifecycle", "input", "call"]);
-        let service = PtyService::new(events.handle());
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let (session_id, _) = service
-            .open(
-                "/bin/sh",
-                &["-c".into(), "printf policy".into()],
-                None,
-                80,
-                24,
-                tx,
-            )
-            .expect("PTY setup failed; environmental PTY errors must fail this test");
-        let mut seen = String::new();
-        while !seen.contains("policy") {
-            seen.push_str(&String::from_utf8_lossy(&next_output(&mut rx).await));
-        }
-        service.close(&session_id).unwrap();
-        let lines = events.lines();
-        assert_eq!(
-            lines[0]["fields"]["policy"],
-            serde_json::json!(["lifecycle", "input", "call"])
-        );
-        assert!(
-            lines
-                .iter()
-                .all(|line| line["event"] != "sidecar.vt.pty_read"),
-            "the class io is not stored: {lines:?}"
-        );
-        assert!(lines
-            .iter()
-            .any(|line| line["event"] == "sidecar.vt.session_open"));
-    }
-
     /// The events of `name` in the file of `events`.
     fn named(
         events: &crate::events::test_support::TestEvents,
@@ -842,7 +737,7 @@ mod tests {
             .expect("PTY setup failed; environmental PTY errors must fail this test");
         for word in ["one", "two", "three", "four"] {
             service
-                .write(&session_id, format!("{word}\n").as_bytes(), &[])
+                .write(&session_id, format!("{word}\n").as_bytes())
                 .unwrap();
             let mut seen = String::new();
             // The terminal echoes the line and cat prints it again: the word is read twice.
@@ -873,7 +768,7 @@ mod tests {
             .open("/bin/sh", &["-c".into(), "cat".into()], None, 80, 24, tx)
             .expect("PTY setup failed; environmental PTY errors must fail this test");
         drop(rx);
-        service.write(&session_id, b"gone\n", &[]).unwrap();
+        service.write(&session_id, b"gone\n").unwrap();
         // The reader thread stores the event when it broadcasts the echo to the attachment whose receiver is gone. No
         // notification reaches this test from that thread, so it asks the file again after a short pause.
         let dropped = timeout(STALL, async {
