@@ -254,8 +254,8 @@ async fn a_persistent_sink_detaches_when_its_client_output_closed_and_a_direct_s
 }
 
 /// 시험 표면 작업의 닫기 처리. 닫기 명령이면 성공으로 답하고 참을 돌려준다.
-fn answer_close(command: SurfaceCommand) -> bool {
-    match command {
+fn answer_close(dispatch: Dispatch) -> bool {
+    match dispatch.command {
         SurfaceCommand::SessionClose { result } => {
             result.send(Ok(())).expect("the close waits for its answer");
             true
@@ -308,7 +308,7 @@ async fn persistent_registry_rejects_stale_owner_and_awaits_actor_close() {
     assert!(!registry.contains("root\0surface").await);
 }
 
-fn closing_actor() -> (mpsc::Sender<SurfaceCommand>, tokio::task::JoinHandle<()>) {
+fn closing_actor() -> (mpsc::Sender<Dispatch>, tokio::task::JoinHandle<()>) {
     let (tx, mut rx) = mpsc::channel(1);
     let actor = tokio::spawn(async move {
         while let Some(command) = rx.recv().await {

@@ -275,6 +275,167 @@ async fn cids_that_are_not_a_list_of_strings_are_rejected_with_an_error() {
     }
 }
 
+/// The lines of `replies` that parse as JSON.
+fn parsed(replies: &[String]) -> Vec<serde_json::Value> {
+    replies
+        .iter()
+        .map(|reply| serde_json::from_str(reply).expect("a reply line is JSON"))
+        .collect()
+}
+
+// A failed request is stated as `error` in the body, the reply line carries the `cids` of the request beside `surface` and
+// `body`, and the reply is the event `sidecar.vt.reply` in the result form of core (docs/spec/logging.md#result-form).
+#[tokio::test]
+async fn an_error_reply_carries_the_cids_of_its_request_and_is_the_event_reply() {
+    let events = TestEvents::new();
+    let replies = serve_lines(
+        &events,
+        br#"{"surface":"s1","root":"/tmp","cids":["b1.9"],"body":{"operation":"nothing"}}
+"#,
+    )
+    .await;
+    let replies = parsed(&replies);
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_eq!(replies[0]["surface"], "s1");
+    assert_eq!(replies[0]["cids"], serde_json::json!(["b1.9"]));
+    assert_eq!(replies[0]["body"]["error"], "Unknown operation: nothing");
+    let recorded = events.named("sidecar.vt.reply");
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    let reply = &recorded[0];
+    assert_eq!(reply["level"], "warn");
+    assert_eq!(reply["surface"], "s1");
+    assert_eq!(reply["cids"], serde_json::json!(["b1.9"]));
+    assert_eq!(reply["fields"]["operation"], "nothing");
+    assert_eq!(reply["fields"]["ok"], false);
+    assert_eq!(
+        reply["fields"]["error"],
+        "-32603: Unknown operation: nothing"
+    );
+    assert!(reply["fields"]["micros"].is_u64(), "{reply}");
+}
+
+// The reply of a command that the surface task answers carries the `cids` of the request that sent the command, and the
+// acknowledgement of an input is a reply with `ok` true.
+#[tokio::test]
+async fn the_replies_of_the_surface_task_carry_the_cids_of_their_requests() {
+    let events = TestEvents::new();
+    let replies = serve_lines(
+        &events,
+        br#"{"surface":"s0","root":"/tmp","cids":["b1.10"],"body":{"operation":"input","bytes":"AA=="}}
+{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","cids":["b1.11"],"body":{"operation":"input","bytes":"AA=="}}
+"#,
+    )
+    .await;
+    let replies = parsed(&replies);
+    let not_open = replies
+        .iter()
+        .find(|reply| reply["surface"] == "s0")
+        .expect("the input of a surface without a session is answered");
+    assert_eq!(not_open["body"]["error"], "Session not open");
+    assert_eq!(not_open["cids"], serde_json::json!(["b1.10"]));
+    let ack = replies
+        .iter()
+        .find(|reply| reply["body"]["ack"] == true)
+        .expect("the input is acknowledged");
+    assert_eq!(ack["cids"], serde_json::json!(["b1.11"]));
+    let recorded = events.named("sidecar.vt.reply");
+    let failed = recorded
+        .iter()
+        .find(|reply| reply["cids"] == serde_json::json!(["b1.10"]))
+        .expect("the failure is a reply event");
+    assert_eq!(failed["fields"]["error"], "-32603: Session not open");
+    assert_eq!(failed["fields"]["operation"], "input");
+    let acknowledged = recorded
+        .iter()
+        .find(|reply| reply["cids"] == serde_json::json!(["b1.11"]))
+        .expect("the acknowledgement is a reply event");
+    assert_eq!(acknowledged["level"], "info");
+    assert_eq!(acknowledged["fields"]["ok"], true);
+    assert!(acknowledged["fields"].get("error").is_none());
+}
+
+// A line that no request asks for (the state, the screen, an image) carries no `cids`, even when the request that caused it
+// had some.
+#[tokio::test]
+async fn an_event_that_a_request_does_not_ask_for_carries_no_cids() {
+    let events = TestEvents::new();
+    let replies = serve_lines(
+        &events,
+        br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","cids":["b1.12"],"body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#,
+    )
+    .await;
+    let replies = parsed(&replies);
+    let events_sent: Vec<_> = replies
+        .iter()
+        .filter(|reply| reply["body"]["event"].is_string() || reply["body"]["image"].is_object())
+        .collect();
+    assert!(!events_sent.is_empty(), "{replies:?}");
+    for line in events_sent {
+        assert!(line.get("cids").is_none(), "{line}");
+    }
+}
+
+/// A port whose session cannot be opened.
+struct FailingOpenPort;
+
+#[async_trait::async_trait]
+impl SessionPort for FailingOpenPort {
+    async fn open(
+        &self,
+        _request: &ShellRequest,
+        _cols: u16,
+        _rows: u16,
+    ) -> Result<String, String> {
+        Err("no shell".to_string())
+    }
+    async fn write(&self, _session_id: &str, _data: &[u8], _cids: &[String]) -> Result<(), String> {
+        Ok(())
+    }
+    async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
+        Ok(())
+    }
+    async fn detach(&self, _session_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+    async fn close(&self, _session_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+    async fn get_events(&self) -> mpsc::Receiver<soksak_sidecar_vt_core::protocol::DaemonEvent> {
+        mpsc::channel(1).1
+    }
+}
+
+// The failure to open a headless session is answered on the surface that asked: a reply without `surface` is a message that
+// the host cannot deliver.
+#[tokio::test]
+async fn the_failure_to_open_a_headless_session_names_the_surface() {
+    let events = TestEvents::new();
+    let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
+    let port = Arc::new(FailingOpenPort);
+    let factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync> =
+        Arc::new(move || port.clone() as Arc<dyn SessionPort>);
+    let replies = serve_with(
+        &events,
+        engine_factory,
+        factory,
+        br#"{"surface":"s1","root":"/tmp","cids":["b1.13"],"body":{"operation":"open","shell":"/bin/sh"}}
+"#,
+    )
+    .await;
+    let replies = parsed(&replies);
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_eq!(replies[0]["surface"], "s1");
+    assert_eq!(replies[0]["cids"], serde_json::json!(["b1.13"]));
+    assert_eq!(
+        replies[0]["body"]["error"],
+        "Failed to open headless session: no shell"
+    );
+}
+
 // A terminal font family that is not installed is not an error of the request: the service records it.
 #[tokio::test]
 async fn a_font_family_that_is_not_installed_is_recorded_as_an_info_record() {

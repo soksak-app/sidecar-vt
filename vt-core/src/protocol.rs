@@ -11,6 +11,106 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant, MissedTickBehavior};
 
+/// A request of a client while the service handles it: what a reply and the request event need. The replies of the request
+/// carry its `cids` beside `surface` and `body`, and each reply is the event `sidecar.vt.reply` in the result form of core
+/// (docs/spec/logging.md#result-form).
+pub(crate) struct Request {
+    cids: Vec<String>,
+    operation: String,
+    surface: Option<String>,
+    started: std::time::Instant,
+    log: Events,
+}
+
+/// The error of a reply line, as `<code>: <text>`, or None for an answer. `-32603` is the internal code of the entrance
+/// (docs/spec/logging.md#result-form). The text is the member `error` of the body, or of the line when it has no body, with
+/// the member `reason` after it; it is cut to 1,024 bytes.
+fn reply_error(line: &Value) -> Option<String> {
+    let holder = match line.get("body") {
+        Some(body) if body.is_object() => body,
+        _ => line,
+    };
+    let error = match holder.get("error")? {
+        Value::Null => return None,
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    let text = match holder.get("reason") {
+        Some(Value::String(reason)) => format!("{error}: {reason}"),
+        _ => error,
+    };
+    Some(format!("-32603: {}", crate::events::head(&text, 1024)))
+}
+
+impl Request {
+    /// Writes the `cids` of the request into the reply line and records the reply.
+    fn answer(&self, line: &mut Value) {
+        let error = reply_error(line);
+        if !self.cids.is_empty() {
+            if let Some(object) = line.as_object_mut() {
+                object.insert("cids".to_string(), json!(self.cids));
+            }
+        }
+        let mut fields = json!({
+            "operation": self.operation,
+            "ok": error.is_none(),
+            "micros": self.started.elapsed().as_micros() as u64,
+        });
+        if let Some(error) = &error {
+            fields["error"] = json!(error);
+        }
+        let subject = Subject {
+            surface: line
+                .get("surface")
+                .and_then(Value::as_str)
+                .or(self.surface.as_deref()),
+            session: None,
+            cids: &self.cids,
+        };
+        let level = if error.is_none() {
+            Level::Info
+        } else {
+            Level::Warn
+        };
+        self.log
+            .emit_for(level, "sidecar.vt.reply", subject, &fields);
+    }
+}
+
+/// A command for a surface task with the request that caused it; the commands that the service sends on its own carry none.
+struct Dispatch {
+    command: SurfaceCommand,
+    request: Option<Arc<Request>>,
+}
+
+impl Dispatch {
+    fn internal(command: SurfaceCommand) -> Self {
+        Self {
+            command,
+            request: None,
+        }
+    }
+
+    fn of(command: SurfaceCommand, request: &Arc<Request>) -> Self {
+        Self {
+            command,
+            request: Some(Arc::clone(request)),
+        }
+    }
+}
+
+/// The sender of a surface task for the commands of one request.
+struct RequestSender {
+    tx: mpsc::Sender<Dispatch>,
+    request: Arc<Request>,
+}
+
+impl RequestSender {
+    async fn send(&self, command: SurfaceCommand) -> Result<(), mpsc::error::SendError<Dispatch>> {
+        self.tx.send(Dispatch::of(command, &self.request)).await
+    }
+}
+
 /// 연결 하나의 출력 송신기와, 그 연결이 나른 전송 이미지 가운데 호스트의 답을 기다리며 남은 것.
 #[derive(Clone)]
 struct Connection {
@@ -89,6 +189,8 @@ struct OutputSink {
     connection: Arc<tokio::sync::Mutex<Option<Connection>>>,
     /// 영속 서비스의 연결이다. 클라이언트의 출력이 닫히면 오류 대신 분리한다.
     detachable: bool,
+    /// The request that the replies of this sink answer; a sink of events has none.
+    request: Option<Arc<Request>>,
 }
 
 impl OutputSink {
@@ -96,6 +198,7 @@ impl OutputSink {
         Self {
             connection: Arc::new(tokio::sync::Mutex::new(Some(connection))),
             detachable: false,
+            request: None,
         }
     }
 
@@ -105,7 +208,25 @@ impl OutputSink {
         Self {
             connection: Arc::new(tokio::sync::Mutex::new(Some(connection))),
             detachable: true,
+            request: None,
         }
+    }
+
+    /// This sink for the replies of `request`. The sink that the registry keeps for events stays unbound.
+    fn bound(&self, request: Arc<Request>) -> OutputSink {
+        OutputSink {
+            request: Some(request),
+            ..self.clone()
+        }
+    }
+
+    /// Sends the reply to the request of this sink: the line gets the `cids` of the request and the reply is recorded before
+    /// it is written.
+    async fn reply(&self, mut line: Value) -> Result<(), ()> {
+        if let Some(request) = &self.request {
+            request.answer(&mut line);
+        }
+        self.send(line.to_string()).await
     }
 
     async fn send(&self, message: String) -> Result<(), ()> {
@@ -153,7 +274,7 @@ impl OutputSink {
 }
 
 struct PersistentEntry {
-    tx: mpsc::Sender<SurfaceCommand>,
+    tx: mpsc::Sender<Dispatch>,
     output: OutputSink,
     actor: tokio::task::JoinHandle<()>,
     epoch: u64,
@@ -172,12 +293,14 @@ const SURFACE_ACTOR_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 /// 정리 답은 이 결과 뒤에 보내므로, 답을 받은 host 는 그 표면의 PTY 자식이 이미 회수되었다고 본다
 /// (core 의 docs/spec/sidecars.md#messages).
 async fn close_surface_actor(
-    tx: &mpsc::Sender<SurfaceCommand>,
+    tx: &mpsc::Sender<Dispatch>,
     actor: Option<tokio::task::JoinHandle<()>>,
     operation: &str,
 ) -> Result<(), String> {
     let (result, answer) = tokio::sync::oneshot::channel();
-    let sent = tx.send(SurfaceCommand::SessionClose { result }).await;
+    let sent = tx
+        .send(Dispatch::internal(SurfaceCommand::SessionClose { result }))
+        .await;
     let closing = async {
         let closed = match sent {
             Ok(()) => match answer.await {
@@ -313,7 +436,7 @@ impl PersistentRegistry {
         key: &str,
         owner: &str,
         output: &OutputSink,
-    ) -> Result<(mpsc::Sender<SurfaceCommand>, u64), String> {
+    ) -> Result<(mpsc::Sender<Dispatch>, u64), String> {
         let mut entries = self.entries.lock().await;
         let entry = entries
             .get_mut(key)
@@ -336,7 +459,7 @@ impl PersistentRegistry {
         &self,
         key: String,
         owner: String,
-        tx: mpsc::Sender<SurfaceCommand>,
+        tx: mpsc::Sender<Dispatch>,
         output: OutputSink,
         actor: tokio::task::JoinHandle<()>,
     ) -> Result<u64, String> {
@@ -1586,11 +1709,11 @@ async fn send_engine_events(
             EngineEvent::PtyWrite(bytes) => {
                 let Some(session_id) = session_id else {
                     let response = json!({"surface": surface_id, "body": {"error": "engine response without session"}});
-                    return output_tx.send(response.to_string()).await.is_ok();
+                    return output_tx.reply(response).await.is_ok();
                 };
                 if let Err(error) = session_port.write(session_id, &bytes, &[]).await {
                     let response = json!({"surface": surface_id, "body": {"error": "engine response write failed", "reason": error}});
-                    return output_tx.send(response.to_string()).await.is_ok();
+                    return output_tx.reply(response).await.is_ok();
                 }
             }
             EngineEvent::Title(title) => {
@@ -1766,6 +1889,7 @@ fn inline_dimension(dimension: &Dimension) -> Value {
 }
 
 async fn open_headless(
+    surface_id: &str,
     shell: &ShellRequest,
     session_id: &mut Option<String>,
     engine: &mut Box<dyn Engine>,
@@ -1782,9 +1906,8 @@ async fn open_headless(
             true
         }
         Err(error) => {
-            let response =
-                json!({"body": {"error": format!("Failed to open headless session: {error}")}});
-            output_tx.send(response.to_string()).await.is_ok()
+            let response = json!({"surface": surface_id, "body": {"error": format!("Failed to open headless session: {error}")}});
+            output_tx.reply(response).await.is_ok()
         }
     }
 }
@@ -1828,7 +1951,7 @@ async fn open_if_configured(
     engine.resize(cols, rows);
     if let Err(error) = set_engine_metrics(engine, state) {
         let response = json!({"surface": surface_id, "body": {"error": "invalid renderer metrics", "reason": error}});
-        return output_tx.send(response.to_string()).await.is_ok();
+        return output_tx.reply(response).await.is_ok();
     }
     match session_port.open(shell, cols, rows).await {
         Ok(sid) => {
@@ -1841,7 +1964,7 @@ async fn open_if_configured(
         }
         Err(error) => {
             let response = json!({"surface": surface_id, "body": {"error": format!("Failed to open: {error}")}});
-            output_tx.send(response.to_string()).await.is_ok()
+            output_tx.reply(response).await.is_ok()
         }
     }
 }
@@ -1875,7 +1998,7 @@ fn retain_keys(value: &Value) -> Result<std::collections::HashSet<String>, Strin
 /// 남기면 같은 표면을 다시 열 때 지운 등록부 항목의 판과 비교되어 낡은 부착으로 거부된다(closed 알림과 close 요청).
 async fn close_connection_surface(
     registry: Option<&Arc<PersistentRegistry>>,
-    surface_txs: &mut HashMap<String, mpsc::Sender<SurfaceCommand>>,
+    surface_txs: &mut HashMap<String, mpsc::Sender<Dispatch>>,
     surface_epochs: &mut HashMap<String, u64>,
     registry_key: &str,
     owner: &str,
@@ -1895,7 +2018,7 @@ async fn close_connection_surface(
 }
 
 fn local_surface_key(
-    surface_txs: &HashMap<String, mpsc::Sender<SurfaceCommand>>,
+    surface_txs: &HashMap<String, mpsc::Sender<Dispatch>>,
     root: Option<&str>,
     surface: &str,
 ) -> String {
@@ -1916,7 +2039,7 @@ async fn surface_task(
     log: Events,
     engine_factory: Arc<dyn Fn() -> Box<dyn Engine> + Send + Sync>,
     session_port: Arc<dyn SessionPort>,
-    mut cmd_rx: mpsc::Receiver<SurfaceCommand>,
+    mut cmd_rx: mpsc::Receiver<Dispatch>,
     output_tx: OutputSink,
 ) {
     let mut engine = engine_factory();
@@ -1996,14 +2119,19 @@ async fn surface_task(
                     }
                 }
             }
-            Some(cmd) = cmd_rx.recv() => {
+            Some(Dispatch { command: cmd, request }) = cmd_rx.recv() => {
+                // The replies of this command answer the request that sent it.
+                let output_tx = match request {
+                    Some(request) => output_tx.bound(request),
+                    None => output_tx.clone(),
+                };
                 match cmd {
                     SurfaceCommand::Open { image, request } => {
                         open_requested = true;
                         requested_image = image;
                         requested_shell = request;
                         headless = requested_image.is_none();
-                        if headless && !open_headless(&requested_shell, &mut session_id, &mut engine, &session_port, &output_tx).await { return; }
+                        if headless && !open_headless(&surface_id, &requested_shell, &mut session_id, &mut engine, &session_port, &output_tx).await { return; }
                         if !open_if_configured(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log }, open_requested, &requested_image, &requested_shell, &mut session_id,
                             &mut engine, &mut image_state).await {
                             return;
@@ -2049,7 +2177,7 @@ async fn surface_task(
                                     "surface": surface_id,
                                     "body": {"error": "image creation failed", "reason": reason}
                                 });
-                                if output_tx.send(response.to_string()).await.is_err() { return; }
+                                if output_tx.reply(response).await.is_err() { return; }
                                 continue;
                             }
                         };
@@ -2075,7 +2203,7 @@ async fn surface_task(
                         engine.resize(cols, rows);
                         if let Err(error) = set_engine_metrics(&mut engine, &new_state) {
                             let response = json!({"surface": surface_id, "body": {"error": "invalid renderer metrics", "reason": error}});
-                            if output_tx.send(response.to_string()).await.is_err() { return; }
+                            if output_tx.reply(response).await.is_err() { return; }
                             continue;
                         }
                         image_state = Some(new_state);
@@ -2084,7 +2212,7 @@ async fn surface_task(
                             if let Err(error) = session_port.resize(sid, cols, rows).await {
                                 let response = json!({"surface": surface_id,
                                     "body": {"error": format!("Resize failed: {error}")}});
-                                if output_tx.send(response.to_string()).await.is_err() { return; }
+                                if output_tx.reply(response).await.is_err() { return; }
                             } else if !send_state(&surface_id, sid, cols, rows, image_state.as_ref().unwrap(), &output_tx).await {
                                 return;
                             }
@@ -2117,7 +2245,7 @@ async fn surface_task(
                                         "surface": surface_id,
                                         "body": {"ack": true}
                                     });
-                                    if output_tx.send(response.to_string()).await.is_err() {
+                                    if output_tx.reply(response).await.is_err() {
                                         return;
                                     }
                                 }
@@ -2126,7 +2254,7 @@ async fn surface_task(
                                         "surface": surface_id,
                                         "body": {"error": format!("Write failed: {}", e)}
                                     });
-                                    if output_tx.send(response.to_string()).await.is_err() {
+                                    if output_tx.reply(response).await.is_err() {
                                         return;
                                     }
                                 }
@@ -2136,7 +2264,7 @@ async fn surface_task(
                                 "surface": surface_id,
                                 "body": {"error": "Session not open"}
                             });
-                            if output_tx.send(response.to_string()).await.is_err() {
+                            if output_tx.reply(response).await.is_err() {
                                 return;
                             }
                         }
@@ -2162,7 +2290,7 @@ async fn surface_task(
                                         "surface": surface_id,
                                         "body": {"error": "invalidParams", "reason": error}
                                     });
-                                    if output_tx.send(response.to_string()).await.is_err() {
+                                    if output_tx.reply(response).await.is_err() {
                                         return;
                                     }
                                     continue;
@@ -2174,7 +2302,7 @@ async fn surface_task(
                                         "surface": surface_id,
                                         "body": {"ack": true, "event": "paste"}
                                     });
-                                    if output_tx.send(response.to_string()).await.is_err() {
+                                    if output_tx.reply(response).await.is_err() {
                                         return;
                                     }
                                 }
@@ -2183,7 +2311,7 @@ async fn surface_task(
                                         "surface": surface_id,
                                         "body": {"error": format!("Paste failed: {error}")}
                                     });
-                                    if output_tx.send(response.to_string()).await.is_err() {
+                                    if output_tx.reply(response).await.is_err() {
                                         return;
                                     }
                                 }
@@ -2193,7 +2321,7 @@ async fn surface_task(
                                 "surface": surface_id,
                                 "body": {"error": "Session not open"}
                             });
-                            if output_tx.send(response.to_string()).await.is_err() {
+                            if output_tx.reply(response).await.is_err() {
                                 return;
                             }
                         }
@@ -2214,7 +2342,7 @@ async fn surface_task(
                                     "modes": {"click": modes.mouse_click, "drag": modes.mouse_drag, "motion": modes.mouse_motion},
                                     "bytes": null, "error": format!("invalidParams: {reason}")
                                 }});
-                                if output_tx.send(response.to_string()).await.is_err() { return; }
+                                if output_tx.reply(response).await.is_err() { return; }
                                 continue;
                             }
                         };
@@ -2257,7 +2385,7 @@ async fn surface_task(
                                     let written = if let Some(ref sid) = session_id {
                                         if let Err(error) = session_port.write(sid, &bytes, &cids).await {
                                             let response = json!({"surface": surface_id, "body": {"error": "mouse write failed", "reason": error}});
-                                            if output_tx.send(response.to_string()).await.is_err() { return; }
+                                            if output_tx.reply(response).await.is_err() { return; }
                                             false
                                         } else { true }
                                     } else { false };
@@ -2276,7 +2404,7 @@ async fn surface_task(
                                         "reported": true, "written": false,
                                         "modes": {"click": modes.mouse_click, "drag": modes.mouse_drag, "motion": modes.mouse_motion},
                                         "bytes": null, "error": reason}});
-                                    if output_tx.send(response.to_string()).await.is_err() { return; }
+                                    if output_tx.reply(response).await.is_err() { return; }
                                 }
                             }
                         } else {
@@ -2295,7 +2423,7 @@ async fn surface_task(
                                 "modes": {"click": modes.mouse_click, "drag": modes.mouse_drag, "motion": modes.mouse_motion},
                                 "bytes": null, "error": null
                             }});
-                            if output_tx.send(response.to_string()).await.is_err() { return; }
+                            if output_tx.reply(response).await.is_err() { return; }
                         }
                     }
                     // 표면의 현재 세션에서 읽지 않은 입력 바이트 수와 reader 가 읽은 자식 출력 누적 바이트
@@ -2309,16 +2437,16 @@ async fn surface_task(
                             },
                             None => json!({"surface": surface_id, "body": {"event": "pty.pending", "error": "Session not open"}}),
                         };
-                        if output_tx.send(response.to_string()).await.is_err() { return; }
+                        if output_tx.reply(response).await.is_err() { return; }
                     }
                     // 마우스 보고 제스처는 글자를 선택하지 않는다. 페이지는 선택 연산의 답을 기다린다.
                     SurfaceCommand::SelectionStart { .. } if mouse_gesture => {
                         let response = json!({"surface": surface_id, "body": {"ack": true, "event": "selection.start"}});
-                        if output_tx.send(response.to_string()).await.is_err() { return; }
+                        if output_tx.reply(response).await.is_err() { return; }
                     }
                     SurfaceCommand::SelectionUpdate { .. } if mouse_gesture => {
                         let response = json!({"surface": surface_id, "body": {"ack": true, "event": "selection.update"}});
-                        if output_tx.send(response.to_string()).await.is_err() { return; }
+                        if output_tx.reply(response).await.is_err() { return; }
                     }
                     SurfaceCommand::SelectionEnd if mouse_gesture => {
                         let response = json!({"surface": surface_id, "body": {"event": "selection.end", "copied": false}});
@@ -2330,7 +2458,7 @@ async fn surface_task(
                             .and_then(|(edge, row)| engine.selection_start(edge, row));
                         if let Err(error) = result {
                             let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": error}});
-                            if output_tx.send(response.to_string()).await.is_err() { return; }
+                            if output_tx.reply(response).await.is_err() { return; }
                         } else {
                             cursor_activity = Instant::now();
                             last_cursor_frame = None;
@@ -2339,7 +2467,7 @@ async fn surface_task(
                                 if !present_screen(&surface_id, &screen, state, &output_tx, "selection", &log).await { return; }
                             }
                             let response = json!({"surface": surface_id, "body": {"ack": true, "event": "selection.start"}});
-                            if output_tx.send(response.to_string()).await.is_err() { return; }
+                            if output_tx.reply(response).await.is_err() { return; }
                         }
                     }
                     SurfaceCommand::SelectionUpdate { x, y } => {
@@ -2348,7 +2476,7 @@ async fn surface_task(
                             .and_then(|(edge, row)| engine.selection_update(edge, row));
                         if let Err(error) = result {
                             let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": error}});
-                            if output_tx.send(response.to_string()).await.is_err() { return; }
+                            if output_tx.reply(response).await.is_err() { return; }
                         } else {
                             cursor_activity = Instant::now();
                             last_cursor_frame = None;
@@ -2357,7 +2485,7 @@ async fn surface_task(
                                 if !present_screen(&surface_id, &screen, state, &output_tx, "selection", &log).await { return; }
                             }
                             let response = json!({"surface": surface_id, "body": {"ack": true, "event": "selection.update"}});
-                            if output_tx.send(response.to_string()).await.is_err() { return; }
+                            if output_tx.reply(response).await.is_err() { return; }
                         }
                     }
                     SurfaceCommand::SelectionEnd => {
@@ -2366,7 +2494,7 @@ async fn surface_task(
                                 "error": "invalidParams",
                                 "reason": "selection presentation is still pending"
                             }});
-                            if output_tx.send(response.to_string()).await.is_err() { return; }
+                            if output_tx.reply(response).await.is_err() { return; }
                             continue;
                         }
                         match engine.selection_end() {
@@ -2391,7 +2519,7 @@ async fn surface_task(
                             }
                             Err(error) => {
                                 let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": error}});
-                                if output_tx.send(response.to_string()).await.is_err() { return; }
+                                if output_tx.reply(response).await.is_err() { return; }
                             }
                         }
                     }
@@ -2416,7 +2544,7 @@ async fn surface_task(
                                 Ok(event) => Some(event.repeat(lines.unsigned_abs() as usize)),
                                 Err(error) => {
                                     let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": error}});
-                                    if output_tx.send(response.to_string()).await.is_err() { return; }
+                                    if output_tx.reply(response).await.is_err() { return; }
                                     continue;
                                 }
                             }
@@ -2427,7 +2555,7 @@ async fn surface_task(
                                 Ok(bytes) => Some(bytes),
                                 Err(error) => {
                                     let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": error}});
-                                    if output_tx.send(response.to_string()).await.is_err() { return; }
+                                    if output_tx.reply(response).await.is_err() { return; }
                                     continue;
                                 }
                             }
@@ -2439,7 +2567,7 @@ async fn surface_task(
                                 if let Some(ref sid) = session_id {
                                     if let Err(error) = session_port.write(sid, &bytes, &cids).await {
                                         let response = json!({"surface": surface_id, "body": {"error": "scroll write failed", "reason": error}});
-                                        if output_tx.send(response.to_string()).await.is_err() { return; }
+                                        if output_tx.reply(response).await.is_err() { return; }
                                     }
                                 }
                             }
@@ -2487,7 +2615,7 @@ async fn surface_task(
                                                     "surface": surface_id,
                                                     "body": {"ack": true}
                                                 });
-                                                if output_tx.send(response.to_string()).await.is_err() {
+                                                if output_tx.reply(response).await.is_err() {
                                                     return;
                                                 }
                                             }
@@ -2496,7 +2624,7 @@ async fn surface_task(
                                                     "surface": surface_id,
                                                     "body": {"error": format!("Write failed: {}", e)}
                                                 });
-                                                if output_tx.send(response.to_string()).await.is_err() {
+                                                if output_tx.reply(response).await.is_err() {
                                                     return;
                                                 }
                                             }
@@ -2506,7 +2634,7 @@ async fn surface_task(
                                             "surface": surface_id,
                                             "body": {"ack": true}
                                         });
-                                        if output_tx.send(response.to_string()).await.is_err() {
+                                        if output_tx.reply(response).await.is_err() {
                                             return;
                                         }
                                     }
@@ -2516,7 +2644,7 @@ async fn surface_task(
                                         "surface": surface_id,
                                         "body": {"error": e}
                                     });
-                                    if output_tx.send(response.to_string()).await.is_err() {
+                                    if output_tx.reply(response).await.is_err() {
                                         return;
                                     }
                                 }
@@ -2526,7 +2654,7 @@ async fn surface_task(
                                 "surface": surface_id,
                                 "body": {"error": "Session not open"}
                             });
-                            if output_tx.send(response.to_string()).await.is_err() {
+                            if output_tx.reply(response).await.is_err() {
                                 return;
                             }
                         }
@@ -2552,7 +2680,7 @@ async fn surface_task(
                             }
                         }
                         let response = json!({"surface": surface_id, "body": {"ack": true}});
-                        if output_tx.send(response.to_string()).await.is_err() { return; }
+                        if output_tx.reply(response).await.is_err() { return; }
                     }
                     SurfaceCommand::Focus { focused: next, cids } => {
                         cursor_activity = Instant::now();
@@ -2563,7 +2691,7 @@ async fn surface_task(
                                 let report: &[u8] = if next { b"\x1b[I" } else { b"\x1b[O" };
                                 if let Err(error) = session_port.write(sid, report, &cids).await {
                                     let response = json!({"surface": surface_id, "body": {"error": "focus report write failed", "reason": error}});
-                                    if output_tx.send(response.to_string()).await.is_err() { return; }
+                                    if output_tx.reply(response).await.is_err() { return; }
                                 }
                             }
                         }
@@ -2573,7 +2701,7 @@ async fn surface_task(
                             if !present_screen(&surface_id, &screen, state, &output_tx, "focus", &log).await { return; }
                         }
                         let response = json!({"surface": surface_id, "body": {"ack": true}});
-                        if output_tx.send(response.to_string()).await.is_err() { return; }
+                        if output_tx.reply(response).await.is_err() { return; }
                     }
                     SurfaceCommand::Theme { theme } => {
                         let theme = *theme;
@@ -2589,14 +2717,14 @@ async fn surface_task(
                             }
                         }
                         let response = json!({"surface": surface_id, "body": {"ack": true, "event": "theme", "mode": theme.mode.name(), "background": format!("#{:02x}{:02x}{:02x}", theme.background[0], theme.background[1], theme.background[2])}});
-                        if output_tx.send(response.to_string()).await.is_err() { return; }
+                        if output_tx.reply(response).await.is_err() { return; }
                     }
                     SurfaceCommand::Font { font, system, skipped, size } => {
                         let family = match font.family() {
                             Ok(family) => family,
                             Err(reason) => {
                                 let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": reason}});
-                                if output_tx.send(response.to_string()).await.is_err() { return; }
+                                if output_tx.reply(response).await.is_err() { return; }
                                 continue;
                             }
                         };
@@ -2606,7 +2734,7 @@ async fn surface_task(
                                 Ok(metrics) => metrics,
                                 Err(reason) => {
                                     let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": reason}});
-                                    if output_tx.send(response.to_string()).await.is_err() { return; }
+                                    if output_tx.reply(response).await.is_err() { return; }
                                     continue;
                                 }
                             };
@@ -2624,7 +2752,7 @@ async fn surface_task(
                             engine.resize(cols, rows);
                             if let Err(error) = set_engine_metrics(&mut engine, state) {
                                 let response = json!({"surface": surface_id, "body": {"error": "invalid renderer metrics", "reason": error}});
-                                if output_tx.send(response.to_string()).await.is_err() { return; }
+                                if output_tx.reply(response).await.is_err() { return; }
                                 continue;
                             }
                             terminal_font = font;
@@ -2633,7 +2761,7 @@ async fn surface_task(
                             if let Some(sid) = session_id.as_ref() {
                                 if let Err(error) = session_port.resize(sid, cols, rows).await {
                                     let response = json!({"surface": surface_id, "body": {"error": format!("Resize failed: {error}")}});
-                                    if output_tx.send(response.to_string()).await.is_err() { return; }
+                                    if output_tx.reply(response).await.is_err() { return; }
                                 } else if !send_state(&surface_id, sid, cols, rows, image_state.as_ref().unwrap(), &output_tx).await {
                                     return;
                                 }
@@ -2650,7 +2778,7 @@ async fn surface_task(
                             terminal_font_size = size;
                         }
                         let response = json!({"surface": surface_id, "body": {"ack": true, "event": "font", "family": family, "system": system, "skipped": skipped, "size": size}});
-                        if output_tx.send(response.to_string()).await.is_err() { return; }
+                        if output_tx.reply(response).await.is_err() { return; }
                     }
                     SurfaceCommand::Cursor { policy } => {
                         cursor_policy = policy;
@@ -2699,12 +2827,12 @@ async fn surface_task(
                                 },
                             }
                         });
-                        if output_tx.send(response.to_string()).await.is_err() { return; }
+                        if output_tx.reply(response).await.is_err() { return; }
                     }
                     SurfaceCommand::ClipboardResolve { request_id, text } => {
                         if let Err(error) = engine.resolve_clipboard(request_id, &text) {
                             let response = json!({"surface": surface_id, "body": {"error": error}});
-                            if output_tx.send(response.to_string()).await.is_err() { return; }
+                            if output_tx.reply(response).await.is_err() { return; }
                         } else if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log }, session_id.as_deref(), &mut engine, true, &mut image_state, &mut multipart).await {
                             return;
                         }
@@ -2712,7 +2840,7 @@ async fn surface_task(
                     SurfaceCommand::ClipboardReject { request_id, reason } => {
                         if let Err(error) = engine.reject_clipboard(request_id, &reason) {
                             let response = json!({"surface": surface_id, "body": {"error": error}});
-                            if output_tx.send(response.to_string()).await.is_err() { return; }
+                            if output_tx.reply(response).await.is_err() { return; }
                         } else {
                             let response = json!({
                                 "surface": surface_id,
@@ -2734,7 +2862,7 @@ async fn surface_task(
                                 "surface": surface_id,
                                 "body": {"error": "imageNotConfigured", "reason": "inline image region is not configured"}
                             });
-                            if output_tx.send(response.to_string()).await.is_err() { return; }
+                            if output_tx.reply(response).await.is_err() { return; }
                             continue;
                         };
                         let Some(index) = state.inline_images.iter().position(|image| image.name == name) else {
@@ -2742,7 +2870,7 @@ async fn surface_task(
                                 "surface": surface_id,
                                 "body": {"error": "imageNotFound", "reason": format!("inline image {name:?} is not owned by this surface")}
                             });
-                            if output_tx.send(response.to_string()).await.is_err() { return; }
+                            if output_tx.reply(response).await.is_err() { return; }
                             continue;
                         };
                         state.inline_images.remove(index);
@@ -2784,7 +2912,7 @@ async fn surface_task(
                                     "surface": surface_id,
                                     "body": {"error": format!("Detach failed: {error}")}
                                 });
-                                if output_tx.send(response.to_string()).await.is_err() {
+                                if output_tx.reply(response).await.is_err() {
                                     return;
                                 }
                             }
@@ -2829,7 +2957,7 @@ async fn surface_task(
                                     Err(reason) => {
                                         let response = json!({"surface": surface_id,
                                             "body": {"error": "image creation failed", "reason": reason}});
-                                        if output_tx.send(response.to_string()).await.is_err() { return; }
+                                        if output_tx.reply(response).await.is_err() { return; }
                                         continue;
                                     }
                                 };
@@ -2849,7 +2977,7 @@ async fn surface_task(
                                 engine.resize(cols, rows);
                                 if let Err(error) = set_engine_metrics(&mut engine, &new_state) {
                                     let response = json!({"surface": surface_id, "body": {"error": "invalid renderer metrics", "reason": error}});
-                                    if output_tx.send(response.to_string()).await.is_err() { return; }
+                                    if output_tx.reply(response).await.is_err() { return; }
                                     continue;
                                 }
                                 image_state = Some(new_state);
@@ -2857,7 +2985,7 @@ async fn surface_task(
                                     if let Err(error) = session_port.resize(sid, cols, rows).await {
                                         let response = json!({"surface": surface_id,
                                             "body": {"error": format!("Resize failed: {error}")}});
-                                        if output_tx.send(response.to_string()).await.is_err() { return; }
+                                        if output_tx.reply(response).await.is_err() { return; }
                                     } else if !send_state(&surface_id, sid, cols, rows, image_state.as_ref().unwrap(), &output_tx).await {
                                         return;
                                     }
@@ -3066,7 +3194,7 @@ where
     // 연결 순번. 같은 소유자의 연결을 trace 에서 구별한다.
     static CONNECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let connection = CONNECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-    let mut surface_txs: HashMap<String, mpsc::Sender<SurfaceCommand>> = HashMap::new();
+    let mut surface_txs: HashMap<String, mpsc::Sender<Dispatch>> = HashMap::new();
     let mut surface_epochs: HashMap<String, u64> = HashMap::new();
     let mut tasks = tokio::task::JoinSet::new();
     let mut line = String::new();
@@ -3088,7 +3216,11 @@ where
             if registry.is_none() {
                 // persistent 가 아닌 연결의 표면 작업은 session 에서 떨어지고 끝난다.
                 for (key, tx) in &surface_txs {
-                    if tx.send(SurfaceCommand::SessionDetach).await.is_err() {
+                    if tx
+                        .send(Dispatch::internal(SurfaceCommand::SessionDetach))
+                        .await
+                        .is_err()
+                    {
                         ended_surfaces.push(key.clone());
                     }
                 }
@@ -3105,13 +3237,7 @@ where
 
         // 이 요청의 처리 기록. 표면 작업으로 넘기는 일까지 포함해, 이번 반복을 떠날 때(다음 요청을 읽기 전) 남긴다.
         let parsed = serde_json::from_str::<Value>(trimmed).ok();
-        let _request = RequestTrace {
-            body: RequestBody::of(trimmed, parsed.is_some()),
-            log: &log,
-            started: std::time::Instant::now(),
-            idle,
-            owner: owner.clone(),
-            connection,
+        let request = Arc::new(Request {
             operation: parsed
                 .as_ref()
                 .map_or_else(|| "unparsed".to_string(), request_operation),
@@ -3126,12 +3252,22 @@ where
                 .and_then(|value| value.get("cids"))
                 .and_then(|cids| serde_json::from_value::<Vec<String>>(cids.clone()).ok())
                 .unwrap_or_default(),
+            started: std::time::Instant::now(),
+            log: log.clone(),
+        });
+        let _trace = RequestTrace {
+            request: Arc::clone(&request),
+            body: RequestBody::of(trimmed, parsed.is_some()),
+            idle,
+            owner: owner.clone(),
+            connection,
         };
+        let reply_tx = output_tx.bound(Arc::clone(&request));
         if let Some(value) = parsed {
             if value.get("operation").and_then(Value::as_str) == Some("close-owner") {
                 let Some(request) = value.get("request").and_then(Value::as_str) else {
                     let reply = json!({"error": "invalidParams", "reason": "the owner request has no request id"});
-                    if output_tx.send(reply.to_string()).await.is_err() {
+                    if reply_tx.reply(reply).await.is_err() {
                         break;
                     }
                     continue;
@@ -3158,7 +3294,7 @@ where
                         json!({"operation": "closed-owner", "request": request, "ok": false, "error": error})
                     }
                 };
-                if output_tx.send(reply.to_string()).await.is_err() {
+                if reply_tx.reply(reply).await.is_err() {
                     break;
                 }
                 continue;
@@ -3166,7 +3302,7 @@ where
             if value.get("operation").and_then(Value::as_str) == Some("retain") {
                 let Some(request) = value.get("request").and_then(Value::as_str) else {
                     let reply = json!({"error": "invalidParams", "reason": "the owner request has no request id"});
-                    if output_tx.send(reply.to_string()).await.is_err() {
+                    if reply_tx.reply(reply).await.is_err() {
                         break;
                     }
                     continue;
@@ -3184,7 +3320,7 @@ where
                         json!({"operation": "retained", "request": request, "ok": false, "error": error})
                     }
                 };
-                if output_tx.send(reply.to_string()).await.is_err() {
+                if reply_tx.reply(reply).await.is_err() {
                     break;
                 }
                 continue;
@@ -3192,7 +3328,7 @@ where
             if value.get("operation").and_then(Value::as_str) == Some("shutdown") {
                 let Some(request) = value.get("request").and_then(Value::as_str) else {
                     let reply = json!({"error": "invalidParams", "reason": "the owner request has no request id"});
-                    if output_tx.send(reply.to_string()).await.is_err() {
+                    if reply_tx.reply(reply).await.is_err() {
                         break;
                     }
                     continue;
@@ -3209,7 +3345,7 @@ where
                         json!({"operation": "shutdown", "request": request, "ok": false, "error": error})
                     }
                 };
-                if output_tx.send(reply.to_string()).await.is_err() {
+                if reply_tx.reply(reply).await.is_err() {
                     break;
                 }
                 break;
@@ -3236,13 +3372,13 @@ where
                     if let Err(error) = close_result {
                         let response =
                             json!({"surface": surface_id, "closed": true, "error": error});
-                        if output_tx.send(response.to_string()).await.is_err() {
+                        if reply_tx.reply(response).await.is_err() {
                             break;
                         }
                         continue;
                     }
                     let response = json!({"surface": surface_id, "closed": true});
-                    if output_tx.send(response.to_string()).await.is_err() {
+                    if reply_tx.reply(response).await.is_err() {
                         // output channel이 닫혔으므로 serve를 끝낸다
                         break;
                     }
@@ -3268,7 +3404,7 @@ where
                             let epoch = surface_epochs.get(&registry_key).copied().unwrap_or(0);
                             if registry.current_epoch(&registry_key, &owner).await != Some(epoch) {
                                 let response = json!({"surface": surface_id, "body": {"error": "stale attachment"}});
-                                if output_tx.send(response.to_string()).await.is_err() {
+                                if reply_tx.reply(response).await.is_err() {
                                     break;
                                 }
                                 continue;
@@ -3279,9 +3415,13 @@ where
                         match registry.attach(&registry_key, &owner, &output_tx).await {
                             Ok((tx, epoch)) => {
                                 surface_epochs.insert(registry_key.clone(), epoch);
-                                if tx.send(SurfaceCommand::Reconnect).await.is_err() {
+                                if tx
+                                    .send(Dispatch::of(SurfaceCommand::Reconnect, &request))
+                                    .await
+                                    .is_err()
+                                {
                                     let response = json!({"surface": surface_id, "body": {"error": "persistent surface actor closed before reconnect"}});
-                                    if output_tx.send(response.to_string()).await.is_err() {
+                                    if reply_tx.reply(response).await.is_err() {
                                         break;
                                     }
                                     continue;
@@ -3290,7 +3430,7 @@ where
                             }
                             Err(error) if registry.contains(&registry_key).await => {
                                 let response = json!({"surface": surface_id, "body": {"error": "persistent attach failed", "reason": error}});
-                                if output_tx.send(response.to_string()).await.is_err() {
+                                if reply_tx.reply(response).await.is_err() {
                                     break;
                                 }
                                 continue;
@@ -3298,7 +3438,7 @@ where
                             Err(error) => {
                                 if error != "session surface not found" {
                                     let response = json!({"surface": surface_id, "body": {"error": "persistent attach failed", "reason": error}});
-                                    if output_tx.send(response.to_string()).await.is_err() {
+                                    if reply_tx.reply(response).await.is_err() {
                                         break;
                                     }
                                     continue;
@@ -3341,7 +3481,7 @@ where
                                     }
                                     Err(insert_error) => {
                                         let response = json!({"surface": surface_id, "body": {"error": "persistent surface creation failed", "reason": insert_error}});
-                                        if output_tx.send(response.to_string()).await.is_err() {
+                                        if reply_tx.reply(response).await.is_err() {
                                             break;
                                         }
                                         continue;
@@ -3402,6 +3542,11 @@ where
                         cmd_tx
                     };
                     surface_txs.insert(registry_key.clone(), tx.clone());
+                    // The commands below answer this request.
+                    let tx = RequestSender {
+                        tx,
+                        request: Arc::clone(&request),
+                    };
 
                     // operation field를 먼저 확인한다(request이다).
                     if let Some(operation) = body.get("operation").and_then(|v| v.as_str()) {
@@ -3422,7 +3567,7 @@ where
                                     .filter(|shell| !shell.is_empty())
                                 else {
                                     let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "open requires a shell"}});
-                                    if output_tx.send(response.to_string()).await.is_err() {
+                                    if reply_tx.reply(response).await.is_err() {
                                         break;
                                     }
                                     continue;
@@ -3436,7 +3581,7 @@ where
                                     }
                                     Some(_) => {
                                         let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "open directory must be an absolute path"}});
-                                        if output_tx.send(response.to_string()).await.is_err() {
+                                        if reply_tx.reply(response).await.is_err() {
                                             break;
                                         }
                                         continue;
@@ -3473,7 +3618,7 @@ where
                                         }
                                         Err(error) => {
                                             let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": format!("compose: {error}")}});
-                                            if output_tx.send(response.to_string()).await.is_err() {
+                                            if reply_tx.reply(response).await.is_err() {
                                                 break;
                                             }
                                         }
@@ -3495,7 +3640,7 @@ where
                                         }
                                     } else {
                                         let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "focus.focused must be boolean"}});
-                                        if output_tx.send(response.to_string()).await.is_err() {
+                                        if reply_tx.reply(response).await.is_err() {
                                             break;
                                         }
                                     }
@@ -3530,7 +3675,7 @@ where
                                         }
                                     } else {
                                         let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "command.selector must be string"}});
-                                        if output_tx.send(response.to_string()).await.is_err() {
+                                        if reply_tx.reply(response).await.is_err() {
                                             break;
                                         }
                                     }
@@ -3547,7 +3692,7 @@ where
                                         "surface": surface_id,
                                         "body": {"error": "invalidParams", "reason": "input requires bytes or keys field"}
                                     });
-                                    if output_tx.send(response.to_string()).await.is_err() {
+                                    if reply_tx.reply(response).await.is_err() {
                                         break;
                                     }
                                 } else {
@@ -3588,7 +3733,7 @@ where
                                             "surface": surface_id,
                                             "body": {"error": "invalidParams", "reason": "bytes must be a string"}
                                         });
-                                        if output_tx.send(response.to_string()).await.is_err() {
+                                        if reply_tx.reply(response).await.is_err() {
                                             break;
                                         }
                                     }
@@ -3632,7 +3777,7 @@ where
                                             "surface": surface_id,
                                             "body": {"error": "invalidParams", "reason": "keys must be an array"}
                                         });
-                                        if output_tx.send(response.to_string()).await.is_err() {
+                                        if reply_tx.reply(response).await.is_err() {
                                             break;
                                         }
                                     }
@@ -3661,7 +3806,7 @@ where
                                     }
                                     Err(reason) => {
                                         let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": reason}});
-                                        if output_tx.send(response.to_string()).await.is_err() {
+                                        if reply_tx.reply(response).await.is_err() {
                                             break;
                                         }
                                     }
@@ -3707,7 +3852,7 @@ where
                                     }
                                     Err(reason) => {
                                         let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": reason, "operation": "font"}});
-                                        if output_tx.send(response.to_string()).await.is_err() {
+                                        if reply_tx.reply(response).await.is_err() {
                                             break;
                                         }
                                     }
@@ -3724,7 +3869,7 @@ where
                                         "surface": surface_id,
                                         "body": {"error": "invalidParams", "reason": reason}
                                     });
-                                    if output_tx.send(response.to_string()).await.is_err() {
+                                    if reply_tx.reply(response).await.is_err() {
                                         break;
                                     }
                                 }
@@ -3747,7 +3892,7 @@ where
                                         "surface": surface_id,
                                         "body": {"error": "invalidParams", "reason": "paste requires text string"}
                                     });
-                                    if output_tx.send(response.to_string()).await.is_err() {
+                                    if reply_tx.reply(response).await.is_err() {
                                         break;
                                     }
                                 }
@@ -3813,7 +3958,7 @@ where
                                     _ => {
                                         let response = json!({"surface": surface_id, "body": {"error": "invalidParams",
                                             "reason": "mouse requires phase down, move, or up, finite x and y, boolean pressed, shift, alt, and ctrl, and non-empty inputId"}});
-                                        if output_tx.send(response.to_string()).await.is_err() {
+                                        if reply_tx.reply(response).await.is_err() {
                                             break;
                                         }
                                     }
@@ -3835,7 +3980,7 @@ where
                                     }
                                     _ => {
                                         let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "selection requires finite x and y"}});
-                                        if output_tx.send(response.to_string()).await.is_err() {
+                                        if reply_tx.reply(response).await.is_err() {
                                             break;
                                         }
                                     }
@@ -3858,7 +4003,7 @@ where
                                     .and_then(|v| u32::try_from(v).ok())
                                 else {
                                     let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "viewport requires a nonnegative integer offset"}});
-                                    if output_tx.send(response.to_string()).await.is_err() {
+                                    if reply_tx.reply(response).await.is_err() {
                                         break;
                                     }
                                     continue;
@@ -3882,7 +4027,7 @@ where
                                     .and_then(|v| u16::try_from(v).ok());
                                 let (Some(lines), Some(col), Some(row)) = (lines, col, row) else {
                                     let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "scroll requires a nonzero integer lines and cell col and row"}});
-                                    if output_tx.send(response.to_string()).await.is_err() {
+                                    if reply_tx.reply(response).await.is_err() {
                                         break;
                                     }
                                     continue;
@@ -3924,7 +4069,7 @@ where
                                     }
                                     _ => {
                                         let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "clipboard.resolve requires requestId and text"}});
-                                        if output_tx.send(response.to_string()).await.is_err() {
+                                        if reply_tx.reply(response).await.is_err() {
                                             break;
                                         }
                                     }
@@ -3951,7 +4096,7 @@ where
                                     }
                                     _ => {
                                         let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "clipboard.reject requires requestId and non-empty reason"}});
-                                        if output_tx.send(response.to_string()).await.is_err() {
+                                        if reply_tx.reply(response).await.is_err() {
                                             break;
                                         }
                                     }
@@ -3976,7 +4121,7 @@ where
                                     }
                                     None => {
                                         let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "image.inline.delete requires a non-empty name"}});
-                                        if output_tx.send(response.to_string()).await.is_err() {
+                                        if reply_tx.reply(response).await.is_err() {
                                             break;
                                         }
                                     }
@@ -4011,7 +4156,7 @@ where
                                     "surface": surface_id,
                                     "body": {"error": format!("Unknown operation: {}", operation)}
                                 });
-                                if output_tx.send(response.to_string()).await.is_err() {
+                                if reply_tx.reply(response).await.is_err() {
                                     break;
                                 }
                             }
@@ -4054,7 +4199,7 @@ where
                             } else {
                                 let response = json!({"surface": surface_id,
                                     "body": {"error": "invalidParams", "reason": "invalid image configure"}});
-                                if output_tx.send(response.to_string()).await.is_err() {
+                                if reply_tx.reply(response).await.is_err() {
                                     break;
                                 }
                             }
@@ -4071,7 +4216,7 @@ where
                             "surface": surface_id,
                             "body": {"error": "unknown operation"}
                         });
-                        if output_tx.send(response.to_string()).await.is_err() {
+                        if reply_tx.reply(response).await.is_err() {
                             break;
                         }
                     }
@@ -4082,7 +4227,7 @@ where
                     "surface": "",
                     "body": {"error": format!("Parse error: {}", e)}
                 });
-                if output_tx.send(response.to_string()).await.is_err() {
+                if reply_tx.reply(response).await.is_err() {
                     // output channel이 닫혔으므로 serve를 끝낸다
                     break;
                 }
@@ -4198,18 +4343,13 @@ where
 
 /// 요청 하나의 처리 기록. 입력 루프가 요청을 읽은 때부터 다음 요청을 읽기 전까지의 시간을 남긴다.
 struct RequestTrace<'a> {
-    log: &'a Events,
-    started: std::time::Instant,
+    request: Arc<Request>,
     /// 이 요청이 도착하기 전 입력 루프가 읽기를 기다린 시간.
     idle: std::time::Duration,
     /// 요청을 보낸 연결의 소유자.
     owner: String,
     /// 이 서비스가 받은 연결의 순번.
     connection: u64,
-    operation: String,
-    surface: Option<String>,
-    /// The correlation identifiers the request carries, which are those of the inputs it continues.
-    cids: Vec<String>,
     /// The request as it arrived.
     body: RequestBody<'a>,
 }
@@ -4276,21 +4416,22 @@ struct RequestFields<'a> {
 
 impl Drop for RequestTrace<'_> {
     fn drop(&mut self) {
+        let request = &self.request;
         let subject = Subject {
-            surface: self.surface.as_deref(),
+            surface: request.surface.as_deref(),
             session: None,
-            cids: &self.cids,
+            cids: &request.cids,
         };
-        self.log.emit_for(
+        request.log.emit_for(
             Level::Info,
             "sidecar.vt.request",
             subject,
             &RequestFields {
-                operation: &self.operation,
+                operation: &request.operation,
                 owner: &self.owner,
                 connection: self.connection,
                 idle_us: self.idle.as_micros() as u64,
-                us: self.started.elapsed().as_micros() as u64,
+                us: request.started.elapsed().as_micros() as u64,
                 body: &self.body,
             },
         );

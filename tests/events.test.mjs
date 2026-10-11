@@ -27,14 +27,14 @@ function sources(directory = join(root, "vt-core/src")) {
 }
 
 test("the catalog declares the layer sidecar and events of the form sidecar.vt.<name>", () => {
-  assert.equal(catalog.schema, 1);
+  assert.equal(catalog.schema, 2);
   assert.deepEqual(catalog.layers, ["sidecar"]);
   assert.ok(Object.keys(catalog.events).length > 0);
   for (const [name, event] of Object.entries(catalog.events)) {
     assert.match(name, /^sidecar\.vt\.[a-z_]+(\.[a-z_]+)*$/, name);
     assert.equal(event.layer, "sidecar", name);
     assert.ok(CLASSES.includes(event.class), `${name}: class ${event.class}`);
-    assert.ok(LEVELS.includes(event.level), `${name}: level ${event.level}`);
+    for (const level of [event.level].flat()) assert.ok(LEVELS.includes(level), `${name}: level ${level}`);
     assert.equal(typeof event.description, "string", name);
     assert.ok(event.description.length > 0, name);
     for (const [field, type] of Object.entries(event.fields)) {

@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S40.3: the reply lines carry the `cids` of their request beside `surface` and `body`, and each reply is the event `sidecar.vt.reply` with `ok`, `micros` and `error` as `<code>: <text>`; the failure to open a headless session names its surface.
 - S40.4: the request event does not clone or serialize the whole request: it borrows the text of the line and records a line over 1,000,000 bytes by its head and size, and the writer stores fields over 1,048,576 bytes by their head with `truncated`.
 - S40.5: the hex of `pty_write` and `pty_read` is built with a lookup table (8211 allocations for a chunk of 8192 bytes before, at most 32 now), and `pty_read` is built and queued only when the policy stores the class `io`; `log.open` states the policy.
 - S40.2: the failures of the event writer are events: each reason of a refusal is its own `log.dropped`, a failed write loses its lines and is stated as `log.dropped` after the next write that succeeds, a failed rotation step and a late flush answer are error records of the place `event writer`.

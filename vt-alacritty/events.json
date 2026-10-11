@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "layers": [
     "sidecar"
   ],
@@ -158,6 +158,22 @@
         "text": "string"
       },
       "description": "A fact that the service reports to its operator."
+    },
+    "sidecar.vt.reply": {
+      "layer": "sidecar",
+      "class": "call",
+      "level": [
+        "info",
+        "warn"
+      ],
+      "result": true,
+      "fields": {
+        "operation": "string",
+        "ok": "boolean",
+        "micros": "number",
+        "error?": "string"
+      },
+      "description": "A reply line that the service sent to the request of a client, in the result form of core: ok, the microseconds since the request was read, and the error as <code>: <text> for a failed request. The line carries the cids of the request."
     }
   }
 }
