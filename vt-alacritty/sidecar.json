@@ -5,6 +5,14 @@
   "events": "events.json",
   "replay": {
     "role": "vt",
-    "executable": "build/soksak-vt-replay"
+    "executable": "build/soksak-vt-replay",
+    "inputs": {
+      "output": "sidecar.vt.pty_read",
+      "write": "sidecar.vt.pty_write",
+      "resize": "sidecar.vt.resize",
+      "selection": "sidecar.vt.selection",
+      "viewport": "sidecar.vt.viewport",
+      "theme": "sidecar.vt.theme"
+    }
   }
 }
