@@ -109,15 +109,15 @@
       "level": "debug",
       "fields": {
         "reason": "string",
-        "draw_us": "number",
-        "raster": "string",
-        "image": "number",
         "sequence": "number",
         "rows": "number",
         "cols": "number",
-        "hash": "string"
+        "hash": "string",
+        "draw_us?": "number",
+        "raster?": "string",
+        "image?": "number"
       },
-      "description": "A frame of a surface was drawn: a frame record of core (docs/spec/replay.md). sequence is the sequence of the last input of the session that the screen includes, rows and cols the size of the screen, and hash the screen hash. image is the number of the image frame of the surface and raster its size in pixels, reason what caused the frame."
+      "description": "A frame of a surface was drawn: a frame record of core (docs/spec/replay.md). sequence is the sequence of the last input of the session that the screen includes, rows and cols the size of the screen, and hash the screen hash. image is the number of the image frame of the surface and raster its size in pixels, reason what caused the frame. A screen sent without a raster is a frame record too, without draw_us, raster and image."
     },
     "sidecar.vt.consumed_wait": {
       "layer": "sidecar",

@@ -1547,22 +1547,17 @@ async fn test_a2_pushed_output_reaches_screen() {
         if let Some(event) = screen_json.get("body").and_then(|b| b.get("event")) {
             if event == "screen" {
                 // screen event를 찾았으므로 어떤 line이 "hi"를 포함하는지 확인한다
-                if let Some(lines_arr) = screen_json.get("body").and_then(|b| b.get("lines")) {
-                    if let Some(lines_vec) = lines_arr.as_array() {
-                        for line in lines_vec {
-                            if let Some(cells) = line.as_array() {
-                                let mut line_text = String::new();
-                                for cell in cells {
-                                    if let Some(ch) = cell.get("ch").and_then(|c| c.as_str()) {
-                                        line_text.push_str(ch);
-                                    }
-                                }
-                                let trimmed = line_text.trim_end();
-                                if trimmed == "hi" {
-                                    found_hi = true;
-                                    break;
-                                }
-                            }
+                let body = &screen_json["body"];
+                if let (Some(cells), Some(cols)) = (body["cells"].as_array(), body["cols"].as_u64())
+                {
+                    for row in cells.chunks(cols as usize) {
+                        let line_text: String = row
+                            .iter()
+                            .filter_map(|cell| cell["grapheme"].as_str())
+                            .collect();
+                        if line_text.trim_end() == "hi" {
+                            found_hi = true;
+                            break;
                         }
                     }
                 }
@@ -4079,12 +4074,11 @@ async fn test_font_size_sets_the_cell_size() {
 /// 화면 이벤트 한 줄의 셀 글자를 이어 붙인다. JSON 에서는 글자마다 셀 객체이므로 문자열 검색으로 찾을 수 없다.
 fn screen_text(line: &str) -> String {
     let value: serde_json::Value = serde_json::from_str(line).expect("screen event JSON");
-    value["body"]["lines"]
+    value["body"]["cells"]
         .as_array()
         .into_iter()
         .flatten()
-        .flat_map(|row| row.as_array().into_iter().flatten())
-        .filter_map(|cell| cell["ch"].as_str())
+        .filter_map(|cell| cell["grapheme"].as_str())
         .collect()
 }
 
@@ -4255,18 +4249,21 @@ async fn the_page_screen_event_carries_only_text_width_links_and_set_attributes(
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), task).await;
     let line = screen.expect("200 screen reads did not show the output");
     let value: serde_json::Value = serde_json::from_str(&line).unwrap();
-    for cell in value["body"]["lines"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|row| row.as_array().unwrap())
-    {
-        for (key, field) in cell.as_object().unwrap() {
+    // Each cell has the members of the screen hash and may have a link; the message has no member of the earlier cell form.
+    for cell in value["body"]["cells"].as_array().unwrap() {
+        for key in cell.as_object().unwrap().keys() {
             assert!(
-                matches!(key.as_str(), "ch" | "width" | "link")
-                    || (matches!(key.as_str(), "bold" | "italic" | "underline" | "inverse")
-                        && field == &serde_json::json!(true)),
-                "the page cell carries {key}: {field} in {line}"
+                matches!(
+                    key.as_str(),
+                    "grapheme" | "width" | "fg" | "bg" | "attributes" | "link"
+                ),
+                "the page cell carries {key} in {line}"
+            );
+        }
+        for key in ["grapheme", "width", "fg", "bg", "attributes"] {
+            assert!(
+                cell.get(key).is_some(),
+                "the page cell lacks {key} in {line}"
             );
         }
     }

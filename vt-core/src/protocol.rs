@@ -1253,59 +1253,89 @@ const DEFAULT_FONT_SIZE: f32 = 13.0;
 const FONT_SIZE_MIN: f64 = 4.0;
 const FONT_SIZE_MAX: f64 = 128.0;
 
-/// 페이지로 보내는 셀. 페이지는 글자, 폭, 링크, 켜진 속성만 쓰고 색은 래스터가 그린다. 기본값 필드를 셀마다
-/// 보내면 글자로 찬 화면 하나가 수백 KB 가 되어 프레임마다 호스트와 페이지를 지난다.
-#[derive(Serialize)]
-struct PageCell<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ch: Option<&'a str>,
-    width: u8,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    bold: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    italic: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    underline: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    inverse: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    link: Option<&'a str>,
+/// The `screen` message of core (docs/spec/terminal-runtime.md#screen-message): the complete screen with the members that the
+/// screen hash covers, so the page hashes the message and compares it with the frame record of the same `sequence`. The
+/// scrollback state and the background color are further members of the service. A screen that cannot be hashed gets no message.
+pub fn screen_message(sequence: u64, screen: &Screen) -> Result<Value, String> {
+    if sequence == 0 {
+        return Err("screen message: sequence must be an integer from 1".to_string());
+    }
+    let cells = crate::screen_hash::message_cells(screen)?;
+    Ok(json!({
+        "event": "screen",
+        "sequence": sequence,
+        "rows": screen.rows,
+        "cols": screen.cols,
+        "cursor": screen.cursor,
+        "cells": cells,
+        "scrollback": screen.scrollback,
+        "background": screen.background,
+    }))
 }
 
-fn page_lines(screen: &Screen) -> Vec<Vec<PageCell<'_>>> {
-    screen
-        .lines
-        .iter()
-        .map(|line| {
-            line.iter()
-                .map(|cell| PageCell {
-                    ch: cell.ch.as_deref(),
-                    width: cell.width,
-                    bold: cell.bold,
-                    italic: cell.italic,
-                    underline: cell.underline,
-                    inverse: cell.inverse,
-                    link: cell.link.as_deref(),
-                })
-                .collect()
-        })
-        .collect()
+/// The line of the `screen` message of a surface.
+fn screen_event(surface_id: &str, sequence: u64, screen: &Screen) -> Result<Value, String> {
+    Ok(json!({"surface": surface_id, "body": screen_message(sequence, screen)?}))
 }
 
-/// 화면 이벤트 본문. 뷰포트의 줄, 커서, 스크롤백 상태를 담는다.
-fn screen_event(surface_id: &str, screen: &Screen) -> Value {
-    json!({
-        "surface": surface_id,
-        "body": {
-            "event": "screen",
-            "cols": screen.cols,
-            "rows": screen.rows,
-            "cursor": screen.cursor,
-            "lines": page_lines(screen),
-            "scrollback": screen.scrollback,
-            "background": screen.background
+/// Records the frame record of a screen (core docs/spec/replay.md#records): the sequence of the last input that it includes, its
+/// size and its hash. A raster adds the time to draw it, its size in pixels and its number.
+fn record_frame(
+    log: &Events,
+    surface_id: &str,
+    session: Option<&str>,
+    screen: &Screen,
+    reason: &str,
+    sequence: u64,
+    raster: Option<(u64, String, u32)>,
+) {
+    let hash = match crate::screen_hash::screen_hash(screen) {
+        Ok(hash) => hash,
+        Err(error) => return log.record_error("frame", error),
+    };
+    let mut fields = serde_json::json!({
+        "reason": reason,
+        "sequence": sequence,
+        "rows": screen.rows,
+        "cols": screen.cols,
+        "hash": hash,
+    });
+    if let Some((draw_us, raster, image)) = raster {
+        fields["draw_us"] = json!(draw_us);
+        fields["raster"] = json!(raster);
+        fields["image"] = json!(image);
+    }
+    log.emit_for(
+        Level::Debug,
+        "sidecar.vt.frame",
+        Subject {
+            surface: Some(surface_id),
+            session,
+            cids: &[],
+        },
+        &fields,
+    );
+}
+
+/// Sends the screen of a surface that has no raster: the frame record, then the message. A screen that cannot be hashed is an
+/// error record and nothing is sent. Returns false when the output is closed.
+async fn send_plain_screen(
+    surface_id: &str,
+    session: Option<&str>,
+    screen: &Screen,
+    output_tx: &OutputSink,
+    log: &Events,
+    sequence: u64,
+) -> bool {
+    let line = match screen_event(surface_id, sequence, screen) {
+        Ok(line) => line,
+        Err(error) => {
+            log.record_error("screen", error);
+            return true;
         }
-    })
+    };
+    record_frame(log, surface_id, session, screen, "screen", sequence, None);
+    output_tx.send(line.to_string()).await.is_ok()
 }
 
 async fn present_screen(
@@ -1348,30 +1378,19 @@ async fn present_screen(
     }
     // 프레임 한 장의 계기(V5-104): 무엇 때문에 그렸는지, 얼마나 걸렸는지, 어떤 래스터에. 프레임 기록(core
     // docs/spec/replay.md#records)은 화면이 포함하는 마지막 입력의 순번과 화면의 크기와 hash 를 담는다.
-    match crate::screen_hash::screen_hash(screen) {
-        Ok(hash) => {
-            log.emit_for(
-                Level::Debug,
-                "sidecar.vt.frame",
-                Subject {
-                    surface: Some(surface_id),
-                    session: state.session.as_deref(),
-                    cids: &[],
-                },
-                &serde_json::json!({
-                    "reason": reason,
-                    "draw_us": draw_started.elapsed().as_micros() as u64,
-                    "raster": format!("{}x{}", state.width_px, state.height_px),
-                    "image": state.sequence + 1,
-                    "sequence": input_sequence,
-                    "rows": screen.rows,
-                    "cols": screen.cols,
-                    "hash": hash,
-                }),
-            );
-        }
-        Err(error) => log.record_error("frame", error),
-    }
+    record_frame(
+        log,
+        surface_id,
+        state.session.as_deref(),
+        screen,
+        reason,
+        input_sequence,
+        Some((
+            draw_started.elapsed().as_micros() as u64,
+            format!("{}x{}", state.width_px, state.height_px),
+            state.sequence + 1,
+        )),
+    );
     state.sequence += 1;
     state.pending_draw = true;
     state.sent_at = Some(std::time::Instant::now());
@@ -1404,12 +1423,13 @@ async fn present_screen(
         Ok(carrier) => state.carrier = carrier,
         Err(()) => return false,
     }
-    if output_tx
-        .send(screen_event(surface_id, screen).to_string())
-        .await
-        .is_err()
-    {
-        return false;
+    match screen_event(surface_id, input_sequence, screen) {
+        Ok(line) => {
+            if output_tx.send(line.to_string()).await.is_err() {
+                return false;
+            }
+        }
+        Err(error) => log.record_error("screen", error),
     }
     for event in std::mem::take(&mut state.presentation_events) {
         if output_tx.send(event).await.is_err() {
@@ -2475,7 +2495,7 @@ async fn surface_task(
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
                                 if let Some(state) = image_state.as_mut() {
                                     if !present_screen(&surface_id, &screen, state, &output_tx, "input", &log, inputs.sequence).await { return; }
-                                } else if output_tx.send(screen_event(&surface_id, &screen).to_string()).await.is_err() { return; }
+                                } else if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, inputs.sequence).await { return; }
                             }
                         }
                         if let Some(ref sid) = session_id {
@@ -2519,7 +2539,7 @@ async fn surface_task(
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
                                 if let Some(state) = image_state.as_mut() {
                                     if !present_screen(&surface_id, &screen, state, &output_tx, "paste", &log, inputs.sequence).await { return; }
-                                } else if output_tx.send(screen_event(&surface_id, &screen).to_string()).await.is_err() { return; }
+                                } else if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, inputs.sequence).await { return; }
                             }
                         }
                         if let Some(ref sid) = session_id {
@@ -2774,7 +2794,7 @@ async fn surface_task(
                         let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
                         if let Some(state) = image_state.as_mut() {
                             if !present_screen(&surface_id, &screen, state, &output_tx, "viewport", &log, inputs.sequence).await { return; }
-                        } else if output_tx.send(screen_event(&surface_id, &screen).to_string()).await.is_err() { return; }
+                        } else if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, inputs.sequence).await { return; }
                     }
                     SurfaceCommand::Scroll { lines, col, row, cids } => {
                         let modes = engine.modes();
@@ -2818,7 +2838,7 @@ async fn surface_task(
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
                                 if let Some(state) = image_state.as_mut() {
                                     if !present_screen(&surface_id, &screen, state, &output_tx, "scroll", &log, inputs.sequence).await { return; }
-                                } else if output_tx.send(screen_event(&surface_id, &screen).to_string()).await.is_err() { return; }
+                                } else if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, inputs.sequence).await { return; }
                             }
                         }
                     }
@@ -2841,7 +2861,7 @@ async fn surface_task(
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
                                 if let Some(state) = image_state.as_mut() {
                                     if !present_screen(&surface_id, &screen, state, &output_tx, "input", &log, inputs.sequence).await { return; }
-                                } else if output_tx.send(screen_event(&surface_id, &screen).to_string()).await.is_err() { return; }
+                                } else if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, inputs.sequence).await { return; }
                             }
                         }
                         if let Some(ref sid) = session_id {
@@ -3093,8 +3113,7 @@ async fn surface_task(
                     }
                     SurfaceCommand::ScreenRead => {
                         let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-                        let response = screen_event(&surface_id, &screen);
-                        if output_tx.send(response.to_string()).await.is_err() {
+                        if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, inputs.sequence).await {
                             return;
                         }
                     }
@@ -3283,8 +3302,7 @@ async fn surface_task(
                                 } }
 
                                 if headless || image_state.is_some() { continue; }
-                                let response = screen_event(&surface_id, &screen);
-                                if output_tx.send(response.to_string()).await.is_err() {
+                                if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, inputs.sequence).await {
                                     return;
                                 }
                             }

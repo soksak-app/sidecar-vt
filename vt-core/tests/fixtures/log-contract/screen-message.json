@@ -1,0 +1,630 @@
+{
+  "vectors": [
+    {
+      "name": "empty one cell",
+      "screen_vector": "empty one cell",
+      "message": {
+        "event": "screen",
+        "sequence": 2,
+        "rows": 1,
+        "cols": 1,
+        "cursor": {
+          "row": 0,
+          "col": 0,
+          "visible": true
+        },
+        "cells": [
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "hash": "0b1b5a155fc09ab5d44c3aab7da1069acfbd4bb865de6831a15f2cfb8f8161a0"
+    },
+    {
+      "name": "ascii with hidden cursor",
+      "screen_vector": "ascii with hidden cursor",
+      "message": {
+        "event": "screen",
+        "sequence": 3,
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false,
+          "shape": "block",
+          "blinking": false
+        },
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0,
+            "link": "https://example.test/"
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "hash": "efa7f5f414cdff34c5fcf5cc26ce14acc4d1da63a2a9aab70c3f5b1e22c80ac7"
+    },
+    {
+      "name": "wide character and its continuation",
+      "screen_vector": "wide character and its continuation",
+      "message": {
+        "event": "screen",
+        "sequence": 4,
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": true
+        },
+        "cells": [
+          {
+            "grapheme": "한",
+            "width": 2,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 0,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "a",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "hash": "ba8ec986c64e9a055d3ec75bae74e1a9fbee0d0bfba585ac0746b682afc630eb"
+    },
+    {
+      "name": "colors and attributes",
+      "screen_vector": "colors and attributes",
+      "message": {
+        "event": "screen",
+        "sequence": 5,
+        "rows": 2,
+        "cols": 2,
+        "cursor": {
+          "row": 1,
+          "col": 0,
+          "visible": true
+        },
+        "cells": [
+          {
+            "grapheme": "a",
+            "width": 1,
+            "fg": 1,
+            "bg": 200,
+            "attributes": 1
+          },
+          {
+            "grapheme": "b",
+            "width": 1,
+            "fg": "#ff8000",
+            "bg": "#000001",
+            "attributes": 160
+          },
+          {
+            "grapheme": "é",
+            "width": 1,
+            "fg": null,
+            "bg": 255,
+            "attributes": 92
+          },
+          {
+            "grapheme": "😀",
+            "width": 2,
+            "fg": 0,
+            "bg": "#abcdef",
+            "attributes": 2
+          }
+        ]
+      },
+      "hash": "d4dda4d28337185b6cd84c7473d3177955f086bfa70f98c1c6d6f44a0e37e39a"
+    },
+    {
+      "name": "scrolled viewport with the cursor outside it",
+      "screen_vector": "scrolled viewport with the cursor outside it",
+      "message": {
+        "event": "screen",
+        "sequence": 6,
+        "rows": 2,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false
+        },
+        "cells": [
+          {
+            "grapheme": "a",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "b",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "c",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "d",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "e",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "f",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "hash": "9ad339506001938b065e2ddb1cf6af35c4a7ce2d3a8f22431801235f06567acf"
+    },
+    {
+      "name": "selected cells with the highlight colors",
+      "screen_vector": "selected cells with the highlight colors",
+      "message": {
+        "event": "screen",
+        "sequence": 7,
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": true
+        },
+        "cells": [
+          {
+            "grapheme": "a",
+            "width": 1,
+            "fg": "#c0c0c0",
+            "bg": "#404080",
+            "attributes": 0
+          },
+          {
+            "grapheme": "b",
+            "width": 1,
+            "fg": "#c0c0c0",
+            "bg": "#404080",
+            "attributes": 0
+          },
+          {
+            "grapheme": "c",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "hash": "f6ffcf1a5bf11275d06f5d9b43e3a66680680b94e5d9eb5078330176d617d521"
+    },
+    {
+      "name": "the same text under another theme",
+      "screen_vector": "the same text under another theme",
+      "message": {
+        "event": "screen",
+        "sequence": 8,
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": true
+        },
+        "cells": [
+          {
+            "grapheme": "a",
+            "width": 1,
+            "fg": "#d0d0d0",
+            "bg": "#204060",
+            "attributes": 0
+          },
+          {
+            "grapheme": "b",
+            "width": 1,
+            "fg": "#d0d0d0",
+            "bg": "#204060",
+            "attributes": 0
+          },
+          {
+            "grapheme": "c",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "hash": "9b2610011c3a00df1cc8fe983650655e86d09bf04f46fcd83870cd44f0f1ad66"
+    }
+  ],
+  "rejected": [
+    {
+      "name": "sequence missing",
+      "message": {
+        "event": "screen",
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false,
+          "shape": "block",
+          "blinking": false
+        },
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0,
+            "link": "https://example.test/"
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "error": "screen message: sequence must be an integer from 1, found undefined"
+    },
+    {
+      "name": "sequence zero",
+      "message": {
+        "event": "screen",
+        "sequence": 0,
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false,
+          "shape": "block",
+          "blinking": false
+        },
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0,
+            "link": "https://example.test/"
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "error": "screen message: sequence must be an integer from 1, found 0"
+    },
+    {
+      "name": "event is not screen",
+      "message": {
+        "event": "state",
+        "sequence": 3,
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false,
+          "shape": "block",
+          "blinking": false
+        },
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0,
+            "link": "https://example.test/"
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "error": "screen message: event must be \"screen\", found \"state\""
+    },
+    {
+      "name": "foreground missing",
+      "message": {
+        "event": "screen",
+        "sequence": 3,
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false,
+          "shape": "block",
+          "blinking": false
+        },
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0,
+            "link": "https://example.test/"
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "error": "screen message: cells[1].fg must be a resolved color (null, an integer from 0 to 255 or \"#rrggbb\"), found undefined"
+    },
+    {
+      "name": "background missing",
+      "message": {
+        "event": "screen",
+        "sequence": 3,
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false,
+          "shape": "block",
+          "blinking": false
+        },
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0,
+            "link": "https://example.test/"
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "error": "screen message: cells[2].bg must be a resolved color (null, an integer from 0 to 255 or \"#rrggbb\"), found undefined"
+    },
+    {
+      "name": "attributes missing",
+      "message": {
+        "event": "screen",
+        "sequence": 3,
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false,
+          "shape": "block",
+          "blinking": false
+        },
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "link": "https://example.test/"
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "error": "screen message: cells[0].attributes must be an integer from 0 to 255, found undefined"
+    },
+    {
+      "name": "cursor missing",
+      "message": {
+        "event": "screen",
+        "sequence": 3,
+        "rows": 1,
+        "cols": 3,
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0,
+            "link": "https://example.test/"
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "error": "screen message: cursor must be an object, found undefined"
+    },
+    {
+      "name": "cells missing",
+      "message": {
+        "event": "screen",
+        "sequence": 3,
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false,
+          "shape": "block",
+          "blinking": false
+        }
+      },
+      "error": "screen message: cells must be an array, found undefined"
+    },
+    {
+      "name": "color outside the forms",
+      "message": {
+        "event": "screen",
+        "sequence": 3,
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false,
+          "shape": "block",
+          "blinking": false
+        },
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0,
+            "link": "https://example.test/"
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": 256,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "error": "screen hash: cells[1].fg must be null, an integer from 0 to 255 or \"#rrggbb\", found 256"
+    }
+  ]
+}
