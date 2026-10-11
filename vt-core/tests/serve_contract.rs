@@ -225,10 +225,14 @@ impl Engine for MockEngine {
                     row.push(cell);
                 }
                 if !row.is_empty() {
+                    row.truncate(usize::from(self.cols));
                     lines.push(row);
                 }
             }
         }
+        // A terminal shows the last `rows` lines; the screen message holds exactly `rows` x `cols` cells.
+        let hidden = lines.len().saturating_sub(usize::from(self.rows));
+        lines.drain(..hidden);
         Screen {
             cols: self.cols,
             rows: self.rows,
@@ -265,7 +269,7 @@ async fn vendor_event_is_emitted_only_with_the_owning_surface_id() {
 {"surface":"owned-surface","body":{"operation":"input","bytes":"G103O2ZpbGU6Ly8vdG1wL3Byb2plY3QH"}}
 "#;
     let (mut to_serve, serve_in) = tokio::io::duplex(16 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
     let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
     let calls_for_factory = calls.clone();
     let session_port_factory = Arc::new(move || {
@@ -1472,8 +1476,8 @@ async fn test_a2_pushed_output_reaches_screen() {
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
     // stdin/stdout에 tokio::io::duplex를 사용한다
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -1583,8 +1587,8 @@ async fn test_inline_image_event_is_explicit_and_base64_encoded() {
     let port = Arc::new(FakeSessionPort::new(fake_session_id.clone(), calls.clone()));
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
 
@@ -1656,7 +1660,7 @@ async fn test_inline_image_delete_is_explicit_for_unowned_names() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
     let (mut to_serve, serve_in) = tokio::io::duplex(16 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
     to_serve
@@ -2037,8 +2041,8 @@ async fn test_open_waits_for_host_raster_configuration() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -2084,8 +2088,8 @@ async fn test_headless_open_creates_one_session_before_configuration() {
     let factory_port = port.clone();
     let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
     let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
-    let (mut input, serve_input) = tokio::io::duplex(64 * 1024);
-    let (serve_output, output) = tokio::io::duplex(64 * 1024);
+    let (mut input, serve_input) = tokio::io::duplex(1 << 20);
+    let (serve_output, output) = tokio::io::duplex(1 << 20);
     let task = tokio::spawn(serve(engine_factory, serve_input, serve_output, factory));
     let mut lines = tokio::io::BufReader::new(output).lines();
     input
@@ -2122,8 +2126,8 @@ async fn test_legacy_op_field_is_rejected_without_fallback() {
     let factory_port = port.clone();
     let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
     let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
-    let (mut input, serve_input) = tokio::io::duplex(64 * 1024);
-    let (serve_output, output) = tokio::io::duplex(64 * 1024);
+    let (mut input, serve_input) = tokio::io::duplex(1 << 20);
+    let (serve_output, output) = tokio::io::duplex(1 << 20);
     let task = tokio::spawn(serve(engine_factory, serve_input, serve_output, factory));
     let mut lines = tokio::io::BufReader::new(output).lines();
 
@@ -2167,8 +2171,8 @@ async fn test_i1_image_envelope_on_output() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -2257,8 +2261,8 @@ async fn test_i2_no_image_envelope_until_consumed() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -2361,8 +2365,8 @@ async fn test_i3_image_response_no_error() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -2523,8 +2527,8 @@ async fn test_configure_with_invalid_width_type() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -2575,8 +2579,8 @@ async fn test_input_without_bytes_or_keys_rejected() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -2639,8 +2643,8 @@ async fn test_input_with_non_string_bytes_rejected() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -2703,8 +2707,8 @@ async fn test_input_with_non_array_keys_rejected() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -2767,8 +2771,8 @@ async fn test_replacement_raster_with_missing_height_is_rejected() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -2835,8 +2839,8 @@ async fn test_cell_dimensions_from_metrics() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -2927,8 +2931,8 @@ async fn test_cell_dimensions_from_metrics() {
     let port_for_factory2 = port2.clone();
     let factory2 = Arc::new(move || port_for_factory2.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve2, serve_in2) = tokio::io::duplex(64 * 1024);
-    let (serve_out2, from_serve2) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve2, serve_in2) = tokio::io::duplex(1 << 20);
+    let (serve_out2, from_serve2) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task2 = tokio::spawn(serve(engine_factory2, serve_in2, serve_out2, factory2));
     let mut lines2 = tokio::io::BufReader::new(from_serve2).lines();
@@ -2993,8 +2997,8 @@ async fn test_zero_sized_configuration_is_rejected() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -3072,8 +3076,8 @@ async fn test_replacement_raster_with_zero_size_is_rejected() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -3163,8 +3167,8 @@ async fn test_too_small_raster_holds_the_open() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -3222,8 +3226,8 @@ async fn test_sub_cell_replacement_holds_the_grid() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -3469,8 +3473,8 @@ async fn test_panicking_surface_reports_error() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -3584,8 +3588,8 @@ async fn test_replacement_raster_waits_for_prior_transfer() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -3666,8 +3670,8 @@ async fn test_no_image_envelope_while_outstanding_after_release() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -3776,8 +3780,8 @@ async fn test_image_error_response_reenables_drawing() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -3856,8 +3860,8 @@ async fn test_replacement_raster_state_has_cell_dimensions() {
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
 
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
 
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
@@ -4020,8 +4024,8 @@ async fn test_font_size_sets_the_cell_size() {
         calls.clone(),
     ));
     let factory = Arc::new(move || port.clone() as Arc<dyn SessionPort>);
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
@@ -4549,8 +4553,8 @@ async fn an_inline_image_event_follows_the_presentation_that_draws_the_image() {
     let port = Arc::new(FakeSessionPort::new(session.clone(), calls));
     let port_for_factory = port.clone();
     let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(1024 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
@@ -4886,8 +4890,8 @@ async fn check_unanswered_transfer(persistent: bool, letting_go: LettingGo, rele
     let factory_port = port.clone();
     let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
     let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
-    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
     let task = if persistent {
         let owner = PersistentOwner {
             close: Arc::new(|| Ok(())),
