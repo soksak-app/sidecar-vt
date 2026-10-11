@@ -1136,6 +1136,14 @@ fn calculate_terminal_size(
     Ok((cols, rows))
 }
 
+/// Records that a raster holds no whole cell, so the grid of the surface stays as it is until a raster with a cell arrives.
+fn record_empty_raster(log: &Events, surface_id: &str, width: u32, height: u32, reason: &str) {
+    log.record_info(
+        "raster",
+        format!("surface {surface_id}: {reason} for {width}x{height} pixels; the grid stays"),
+    );
+}
+
 /// 키 입력을 바이트로 인코딩한다
 fn encode_keys(keys: &[InputKey], modes: &Modes) -> Result<Vec<u8>, String> {
     let mut all_bytes = Vec::new();
@@ -1639,7 +1647,7 @@ async fn send_engine_events(
         surface_id,
         session_port,
         output_tx,
-        ..
+        log,
     } = ports;
     for event in engine.drain_events() {
         match event {
@@ -1648,6 +1656,8 @@ async fn send_engine_events(
                 if let Err(error) =
                     apply_inline_image_command(command, anchor, image_state, multipart)
                 {
+                    // The command is dropped whether or not the page is told, so the service records it.
+                    log.record_error("inline image", &error);
                     if !emit_surface_events {
                         continue;
                     }
@@ -1950,7 +1960,10 @@ async fn open_if_configured(
             // 셀 하나의 공간도 없는 래스터는 끌기 중 카드가 무너지는 과도 상태이다. 여기서
             // 오류를 내면 열기 요청이 사라지고 나중 크기로 다시 열리지 않는다. 열지 않고
             // 기다리면 다음 configure 가 세션을 연다(V5-96-14-6-4-8).
-            Err(_) => return true,
+            Err(reason) => {
+                record_empty_raster(log, surface_id, state.width_px, state.height_px, &reason);
+                return true;
+            }
         };
     crate::engine_trace::record(log, surface_id, || format!("resize {cols} {rows}"));
     engine.resize(cols, rows);
@@ -2201,7 +2214,8 @@ async fn surface_task(
                             // 현재 격자를 유지해 정상 경로를 지나면(같은 크기 재조정은 아무 것도
                             // 바꾸지 않는다) 그리기가 IOSurface 경계로 잘려 들어가고, 프레임이
                             // 표시되므로 호스트의 표시 장벽이 멈추지 않는다(V5-96-14-6-4-8).
-                            Err(_) => {
+                            Err(reason) => {
+                                record_empty_raster(&log, &surface_id, configuration.width, configuration.height, &reason);
                                 let screen = engine.screen();
                                 (screen.cols, screen.rows)
                             }
@@ -2749,7 +2763,8 @@ async fn surface_task(
                                 Ok(size) => size,
                                 // 서브셀 래스터에서 글꼴이 바뀌어도 격자를 유지한다. 다음 유효한
                                 // 래스터가 새 글꼴의 격자로 다시 계산한다(V5-96-14-6-4-8).
-                                Err(_) => {
+                                Err(reason) => {
+                                    record_empty_raster(&log, &surface_id, state.width_px, state.height_px, &reason);
                                     let screen = engine.screen();
                                     (screen.cols, screen.rows)
                                 }
@@ -2976,7 +2991,8 @@ async fn surface_task(
                                     Ok(size) => size,
                                     // Configure 와 같은 유지 규칙: 서브셀 래스터는 현재 격자를
                                     // 유지하고 프레임을 표시한다(V5-96-14-6-4-8).
-                                    Err(_) => {
+                                    Err(reason) => {
+                                        record_empty_raster(&log, &surface_id, configuration.width, configuration.height, &reason);
                                         let screen = engine.screen();
                                         (screen.cols, screen.rows)
                                     }

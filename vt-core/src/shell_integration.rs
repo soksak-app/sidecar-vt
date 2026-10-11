@@ -105,7 +105,11 @@ pub fn install() -> Result<PathBuf, String> {
 }
 
 /// 셸 이름에 맞는 통합 환경을 command 에 더한다. zsh 와 bash 가 아닌 셸은 바꾸지 않는다.
-pub fn apply(shell: &str, command: &mut CommandBuilder) -> Result<(), String> {
+pub fn apply(
+    shell: &str,
+    command: &mut CommandBuilder,
+    log: &crate::events::Events,
+) -> Result<(), String> {
     let name = Path::new(shell)
         .file_name()
         .and_then(|name| name.to_str())
@@ -140,7 +144,10 @@ pub fn apply(shell: &str, command: &mut CommandBuilder) -> Result<(), String> {
             };
             command.env("PROMPT_COMMAND", value);
         }
-        _ => {}
+        other => log.record_info(
+            "shell integration",
+            format!("{other} has no shell integration; the session starts without it"),
+        ),
     }
     Ok(())
 }

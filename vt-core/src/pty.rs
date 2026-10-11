@@ -161,7 +161,7 @@ impl PtyService {
     ) -> Result<(String, String), String> {
         let mut command = CommandBuilder::new_default_prog();
         command.env("SHELL", shell);
-        crate::shell_integration::apply(shell, &mut command)?;
+        crate::shell_integration::apply(shell, &mut command, &self.log)?;
         self.spawn_owned(owner, command, cwd, cols, rows, events)
     }
 
@@ -897,6 +897,29 @@ mod tests {
         assert_eq!(
             drop["fields"]["reason"],
             "the receiver of the attachment was closed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_shell_without_integration_is_recorded_when_its_session_starts() {
+        let _test_lock = crate::platform::pty::native_pty_test_lock();
+        let events = crate::events::test_support::TestEvents::new();
+        let service = PtyService::new(events.handle());
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (session_id, _) = service
+            .open_shell("owner", "/bin/sh", None, 80, 24, tx)
+            .expect("PTY setup failed; environmental PTY errors must fail this test");
+        service.close(&session_id).unwrap();
+        let records = named(&events, "sidecar.vt.record.info");
+        let record = records
+            .iter()
+            .find(|record| record["fields"]["where"] == "shell integration")
+            .unwrap_or_else(|| {
+                panic!("the shell without integration is not recorded: {records:?}")
+            });
+        assert_eq!(
+            record["fields"]["text"],
+            "sh has no shell integration; the session starts without it"
         );
     }
 

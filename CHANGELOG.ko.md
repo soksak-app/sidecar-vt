@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S40.7: 칸이 없는 raster, integration이 없는 shell, 적용할 수 없는 inline image 명령을 기록한다.
 - S40.9: test가 event `consumed_wait`, `read_wait`, `output_blocked`를 일으키고 그 필드를 확인한다.
 - S40.8: event `frame`은 모든 frame마다 표면, session, `sequence`, `size`, `raster`와 함께 저장한다. 화면의 hash는 core의 정의를 기다린다.
 - S40.6: service의 중지와 끝(signal 또는 shutdown 요청을 담은 `session_stop`, `session_end`), 끊긴 client, session의 kill(ESRCH를 포함해 신호가 닿은 결과를 담은 `kill`), 출력 ring에서 나가는 chunk와 broadcast가 제거하는 attachment(`buffer_dropped`)는 event이고, panic한 client task는 오류 기록이다.

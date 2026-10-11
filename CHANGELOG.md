@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S40.7: a raster without a whole cell, a shell without integration and an inline image command that cannot be applied are recorded.
 - S40.9: tests cause the events `consumed_wait`, `read_wait` and `output_blocked` and check their fields.
 - S40.8: the event `frame` is stored for every frame with the surface, the session, `sequence`, `size` and `raster`; the hash of the screen waits for the definition of core.
 - S40.6: the stop and the end of the service (`session_stop` with the signal or the shutdown request, `session_end`), a client that disconnects, the kill of a session (`kill` with what the signal reached, ESRCH included), the chunk that leaves the output ring and the attachment that the broadcast removes (`buffer_dropped`) are events, and a client task that panicked is an error record.

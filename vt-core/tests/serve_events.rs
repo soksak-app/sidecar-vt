@@ -347,6 +347,202 @@ async fn a_write_to_a_client_that_does_not_read_is_the_event_output_blocked() {
     );
 }
 
+// A raster that holds no whole cell is a transient state of a drag: the grid stays and the service records that it did not
+// size the grid to this raster.
+#[tokio::test]
+async fn a_raster_without_a_whole_cell_is_recorded_and_the_grid_stays() {
+    let events = TestEvents::new();
+    serve_lines(
+        &events,
+        br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":2,"height":2,"scale":1.0}}}}
+"#,
+    )
+    .await;
+    let records = events.named("sidecar.vt.record.info");
+    let raster: Vec<_> = records
+        .iter()
+        .filter(|record| record["fields"]["where"] == "raster")
+        .collect();
+    assert!(!raster.is_empty(), "{records:?}");
+    let text = raster[0]["fields"]["text"].as_str().unwrap();
+    assert!(
+        text.contains("surface s1") && text.contains("2x2"),
+        "{text}"
+    );
+}
+
+/// An engine that reports the inline image command it is scripted with when it is fed.
+struct InlineImageEngine {
+    inner: TraceEngine,
+    command: Option<soksak_sidecar_vt_core::inline_image::InlineImageCommand>,
+}
+
+#[async_trait::async_trait]
+impl Engine for InlineImageEngine {
+    fn set_theme(&mut self, theme: soksak_sidecar_vt_core::TerminalTheme) {
+        self.inner.set_theme(theme)
+    }
+    fn resize(&mut self, cols: u16, rows: u16) {
+        self.inner.resize(cols, rows)
+    }
+    fn set_cell_metrics(&mut self, width: u16, height: u16) -> Result<(), String> {
+        self.inner.set_cell_metrics(width, height)
+    }
+    fn feed(&mut self, _bytes: &[u8]) {}
+    fn drain_events(&mut self) -> Vec<EngineEvent> {
+        self.command
+            .take()
+            .map(|command| {
+                vec![EngineEvent::InlineImage {
+                    command,
+                    anchor: Default::default(),
+                }]
+            })
+            .unwrap_or_default()
+    }
+    fn resolve_clipboard(&mut self, id: u64, text: &str) -> Result<(), String> {
+        self.inner.resolve_clipboard(id, text)
+    }
+    fn reject_clipboard(&mut self, id: u64, reason: &str) -> Result<(), String> {
+        self.inner.reject_clipboard(id, reason)
+    }
+    fn selection_start(&mut self, col: u16, row: u16) -> Result<(), String> {
+        self.inner.selection_start(col, row)
+    }
+    fn selection_update(&mut self, col: u16, row: u16) -> Result<(), String> {
+        self.inner.selection_update(col, row)
+    }
+    fn selection_end(&mut self) -> Result<Option<String>, String> {
+        self.inner.selection_end()
+    }
+    fn selection_clear(&mut self) -> bool {
+        self.inner.selection_clear()
+    }
+    fn selection_text(&self) -> Option<String> {
+        self.inner.selection_text()
+    }
+    fn scroll_viewport(&mut self, lines: i32) {
+        self.inner.scroll_viewport(lines)
+    }
+    fn scroll_to_newest(&mut self) -> bool {
+        self.inner.scroll_to_newest()
+    }
+    fn cursor(&self) -> Cursor {
+        self.inner.cursor()
+    }
+    fn screen(&mut self) -> Screen {
+        self.inner.screen()
+    }
+    fn modes(&self) -> Modes {
+        self.inner.modes()
+    }
+    fn reset(&mut self) {
+        self.inner.reset()
+    }
+}
+
+/// A port whose session reports `output` once, which the surface feeds to its engine.
+struct OutputPort(
+    std::sync::Mutex<Option<mpsc::Receiver<soksak_sidecar_vt_core::protocol::DaemonEvent>>>,
+);
+
+#[async_trait::async_trait]
+impl SessionPort for OutputPort {
+    async fn open(
+        &self,
+        _request: &ShellRequest,
+        _cols: u16,
+        _rows: u16,
+    ) -> Result<String, String> {
+        Ok("scripted-session".to_string())
+    }
+    async fn write(&self, _session_id: &str, _data: &[u8], _cids: &[String]) -> Result<(), String> {
+        Ok(())
+    }
+    async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
+        Ok(())
+    }
+    async fn detach(&self, _session_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+    async fn close(&self, _session_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+    async fn get_events(&self) -> mpsc::Receiver<soksak_sidecar_vt_core::protocol::DaemonEvent> {
+        self.0
+            .lock()
+            .unwrap()
+            .take()
+            .expect("the events are taken once")
+    }
+}
+
+// An inline image command that cannot be applied is an error of the page (the event `error` of the surface) and an error
+// record of the service, also for a surface that sends no surface events.
+#[tokio::test]
+async fn an_inline_image_command_that_cannot_be_applied_is_an_error_record() {
+    let events = TestEvents::new();
+    let engine_factory = Arc::new(|| {
+        Box::new(InlineImageEngine {
+            inner: TraceEngine::default(),
+            command: Some(
+                soksak_sidecar_vt_core::inline_image::InlineImageCommand::MultipartPart(vec![1]),
+            ),
+        }) as Box<dyn Engine>
+    });
+    let (sender, receiver) = mpsc::channel(4096);
+    let port = Arc::new(OutputPort(std::sync::Mutex::new(Some(receiver))));
+    let factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync> =
+        Arc::new(move || port.clone() as Arc<dyn SessionPort>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
+    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let handle = events.handle();
+    let task = tokio::spawn(async move {
+        let _ = serve(engine_factory, serve_in, serve_out, factory, handle).await;
+    });
+    to_serve
+        .write_all(b"{\"surface\":\"s1\",\"root\":\"/tmp\",\"body\":{\"operation\":\"open\",\"shell\":\"/bin/sh\"}}\n")
+        .await
+        .unwrap();
+    // The surface task takes the output of its session when it chooses; the connection stays open until the record exists.
+    // No notification reaches this test from the task, so it asks the file again after a short pause.
+    let records = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            // Output that arrives before the open is ignored, so the output is reported again until the session takes it.
+            sender
+                .send(soksak_sidecar_vt_core::protocol::DaemonEvent::Output {
+                    session_id: "scripted-session".to_string(),
+                    data: b"x".to_vec(),
+                    sequence: 0,
+                    truncated: false,
+                })
+                .await
+                .unwrap();
+            let found = events.named("sidecar.vt.record.error");
+            if !found.is_empty() {
+                return found;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the inline image error was not recorded");
+    drop(to_serve);
+    let mut lines = BufReader::new(from_serve).lines();
+    while lines.next_line().await.unwrap().is_some() {}
+    task.await.unwrap();
+    let inline: Vec<_> = records
+        .iter()
+        .filter(|record| record["fields"]["where"] == "inline image")
+        .collect();
+    assert_eq!(inline.len(), 1, "{records:?}");
+    assert_eq!(
+        inline[0]["fields"]["text"],
+        "inline image multipart part has no active transfer"
+    );
+}
+
 // A request line over the bound of an event is recorded by its first 4,096 bytes and its size, and the line is neither cloned
 // nor serialized whole (core docs/spec/logging.md#bounds).
 #[tokio::test]
