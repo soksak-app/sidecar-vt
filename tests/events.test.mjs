@@ -1,6 +1,9 @@
-// Checks the catalog of the events of the service, vt-alacritty/events.json (core docs/spec/logging.md#catalog): its structure, that
-// every declared event is named by a source of vt-core, and that every event a source names is declared.
+// Checks the catalog of the events of the service, vt-alacritty/events.json (core docs/spec/logging.md#catalog): its structure, and
+// the emit sites of the sources against it. When SOKSAK_EVENTS names the command of core (a path to events-check.js of a checkout
+// of core), the command checks the sites that the emitters of census.json declare; otherwise the names are compared, because the
+// @soksak/plugin-api that package.json pins has no soksak-events.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
@@ -38,11 +41,23 @@ test("the catalog declares the layer sidecar and events of the form sidecar.vt.<
     assert.equal(typeof event.description, "string", name);
     assert.ok(event.description.length > 0, name);
     for (const [field, type] of Object.entries(event.fields)) {
-      assert.ok(TYPES.includes(type), `${name}.${field}: type ${type}`);
+      // A type such as string|null accepts each of its parts (core docs/spec/logging.md#catalog).
+      for (const part of type.split("|")) assert.ok(TYPES.includes(part), `${name}.${field}: type ${type}`);
     }
   }
 });
 
+const command = process.env.SOKSAK_EVENTS;
+
+if (command) {
+  test("the command of core finds every emit site of the emitters declared and the catalog complete", () => {
+    const args = ["--census", "census.json", "--catalog", "vt-alacritty/events.json", "."];
+    const run = command.endsWith(".js") ? spawnSync("node", [command, ...args], { cwd: root, encoding: "utf8" })
+      : spawnSync(command, args, { cwd: root, encoding: "utf8" });
+    assert.equal(run.error, undefined, `${command}: ${run.error}`);
+    assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+  });
+} else {
 test("every declared event is named by a source of vt-core", () => {
   const texts = [...sources().values()].join("\n");
   const missing = Object.keys(catalog.events).filter((name) => !texts.includes(`"${name}"`));
@@ -72,3 +87,4 @@ test("the manifest declares the replay executable of the role vt and the release
   assert.deepEqual(manifest.replay, { role: "vt", executable: "build/soksak-vt-replay" });
   assert.ok(packed.includes(manifest.replay.executable), `package.json files ${JSON.stringify(packed)} lack ${manifest.replay.executable}`);
 });
+}

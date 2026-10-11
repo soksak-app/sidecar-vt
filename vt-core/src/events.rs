@@ -490,6 +490,7 @@ impl EventLog {
 
     /// Queues an event that concerns no object. See [`EventLog::emit_for`].
     pub fn emit<T: Serialize>(&self, level: Level, event: &str, fields: &T) -> bool {
+        // events: forwarded
         self.emit_for(level, event, Subject::NONE, fields)
     }
 

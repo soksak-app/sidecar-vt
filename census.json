@@ -1,1 +1,43 @@
-{"exclude": "(^|/)target/", "entrances": {"rs.thread-spawn": ["^vt-core/src/thread\\.rs$"]}, "pending": {}}
+{
+  "exclude": "(^|/)target/",
+  "entrances": {
+    "rs.thread-spawn": [
+      "^vt-core/src/thread\\.rs$"
+    ]
+  },
+  "pending": {},
+  "emitters": {
+    "rs": [
+      {
+        "call": "emit",
+        "level": 0,
+        "event": 1,
+        "fields": 2
+      },
+      {
+        "call": "emit_for",
+        "level": 0,
+        "event": 1,
+        "fields": 3
+      },
+      {
+        "call": "record_error",
+        "fixed": "error",
+        "name": "sidecar.vt.record.error",
+        "event": 0
+      },
+      {
+        "call": "record_info",
+        "fixed": "info",
+        "name": "sidecar.vt.record.info",
+        "event": 0
+      },
+      {
+        "call": "input",
+        "fixed": "info",
+        "event": 1,
+        "only": "^vt-core/src/protocol\\.rs$"
+      }
+    ]
+  }
+}
