@@ -6,14 +6,24 @@ PROFILE ?= debug
 CARGO_PROFILE = $(if $(filter release,$(PROFILE)),--release,)
 SOK ?= sok
 
+# soksak-events of the @soksak/plugin-api that package.json names applies the census of core to the sources
+# (docs/spec/logging.md#census with census.json). Its check of the emit sites against the catalog reads no site of a Rust
+# sidecar yet (its entrances name the functions of the hosts), so tests/events.test.mjs compares the names of the catalog.
+SOKSAK_EVENTS ?= pnpm exec soksak-events
+
+node_modules: package.json
+	pnpm install
+	touch node_modules
+
 # rustfmt, unit tests, the engine trace test of the diagnostics build and clippy without warnings run first; then
 # the built service checks connection recovery (scripts/verify-vt-recovery.mjs) and the protocol inventory is
 # compared with the engine (scripts/check-terminal-protocol-inventory.mjs).
-test: build
+test: build node_modules
 	cargo fmt --all --check
 	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test --workspace
 	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -p soksak-sidecar-vt-core --features diagnostics --test engine_trace_test
 	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo clippy --workspace --all-targets --features diagnostics -- -D warnings
+	$(SOKSAK_EVENTS) --census census.json .
 	node --test tests/
 
 # sidecar.json 이 가리키는 vt-alacritty/build/soksak-vt-alacritty 를 쓴다.

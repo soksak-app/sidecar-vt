@@ -155,6 +155,7 @@ fn parse_x_color(value: &str) -> Option<Rgb> {
         if digits.is_empty() || digits.len() > 4 {
             return None;
         }
+        // silent: a malformed color text is not a color, and the function returns None to its caller.
         let value = u32::from_str_radix(digits, 16).ok()?;
         let max = (1u32 << (4 * digits.len())) - 1;
         Some(((value * 255 + max / 2) / max) as u8)
@@ -238,7 +239,7 @@ fn parse_vendor_osc(selector: &[u8], payload: &[u8]) -> Result<Option<EngineEven
                         return Err("OSC 8 hyperlink id is duplicated".to_string());
                     }
                 }
-                // 기본값: id 가 없는 OSC 8 링크는 빈 id 를 가진다(id 는 선택 인자다).
+                // default: an OSC 8 link without an id has an empty id (the id is an optional parameter).
                 id.unwrap_or_default().to_string()
             };
             Ok(Some(EngineEvent::Hyperlink {
@@ -255,7 +256,7 @@ fn parse_vendor_osc(selector: &[u8], payload: &[u8]) -> Result<Option<EngineEven
             }))
         }
         "133" => {
-            // 기본값: 인자 없는 OSC 133 표시는 인자가 비어 있다.
+            // default: an OSC 133 mark without parameters has empty parameters.
             let (marker, params) = payload.split_once(';').unwrap_or((payload, ""));
             for parameter in params.split(';') {
                 if let Some(value) = parameter.strip_prefix("redraw=") {
@@ -716,7 +717,7 @@ impl AlacrittyEngine {
                 .iter()
                 .position(|byte| *byte == b';')
                 .map(|position| (&body[..position], &body[position + 1..]))
-                // 기본값: ; 가 없는 OSC 는 선택자만 있고 내용이 비어 있다.
+                // default: an OSC without a semicolon has only a selector and an empty body.
                 .unwrap_or((body, &[]));
             let outcome = osc_outcome(selector);
             let bel = self.pending_osc.last() == Some(&b'\x07');
@@ -767,6 +768,7 @@ impl AlacrittyEngine {
         payload: &[u8],
         bel: bool,
     ) -> Option<Option<EngineEvent>> {
+        // silent: a selector that is not UTF-8 is no known selector, and the function returns None.
         let selector = std::str::from_utf8(selector).ok()?;
         let payload = String::from_utf8_lossy(payload);
         let terminator = if bel { "\x07" } else { "\x1b\\" };
@@ -963,7 +965,7 @@ impl AlacrittyEngine {
                     self.processor.advance(&mut self.term, b"\r\n");
                 }
                 self.prompt_start = Some(self.absolute(self.term.grid().cursor.point.line.0));
-                // 기본값: redraw 인자가 없는 A 표시는 redraw=1 이다(docs/spec/terminal-runtime.md).
+                // default: an A mark without a redraw parameter has redraw=1 (docs/spec/terminal-runtime.md).
                 ShellState::Prompt(redraw.unwrap_or(Redraw::Prompt))
             }
             ShellMarker::PromptEnd => match (self.shell, redraw) {
@@ -1234,7 +1236,7 @@ impl AlacrittyEngine {
                 let keep = (1..PREFIX.len())
                     .rev()
                     .find(|length| self.pending_input.ends_with(&PREFIX[..*length]))
-                    // 기본값: 입력 끝이 접두어의 앞부분과 겹치지 않으면 남길 바이트가 없다.
+                    // default: when the end of the input does not overlap the start of the prefix, no byte is kept.
                     .unwrap_or(0);
                 let split = self.pending_input.len().saturating_sub(keep);
                 let plain = self.pending_input[..split].to_vec();
@@ -1797,7 +1799,7 @@ impl Engine for AlacrittyEngine {
                     foreground.or_else(|| self.default_rgb(NamedColor::Foreground).map(hex));
                 cell.bg = Some(hex(self
                     .highlight_background
-                    // 기본값: OSC 17 강조 배경이 없으면 선택 칸은 테마의 선택 배경을 쓴다(docs/spec/terminal-runtime.md).
+                    // default: without the OSC 17 highlight background a selected cell uses the selection background of the theme (docs/spec/terminal-runtime.md).
                     .unwrap_or_else(|| self.theme_rgb(self.theme.selection))));
                 cell.fg = self.highlight_foreground.map(hex).or(foreground);
                 cell.inverse = false;

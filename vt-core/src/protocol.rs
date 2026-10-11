@@ -2159,7 +2159,7 @@ fn local_surface_key(
         .keys()
         .find(|key| key.ends_with(&format!("\0{surface}")))
         .cloned()
-        // 기본값: 루트 없이 온 표면을 등록된 키에서 찾지 못하면 루트 없는 키가 되고, 그 키로 찾는 쪽이 없는 표면으로 알린다.
+        // default: a surface that came without a root and is not found among the registered keys gets a key without a root, which the lookup reports as an unknown surface.
         .unwrap_or_else(|| format!("\0{surface}"))
 }
 
@@ -2317,7 +2317,7 @@ async fn surface_task(
                         new_state.session = session_id.clone();
                         new_state.inline_images = image_state.as_ref()
                             .map(|previous_state| previous_state.inline_images.clone())
-                            // 기본값: 앞 이미지 상태가 없으면 그 사이 보관한 인라인 그림을 이어받는다.
+                            // default: without an earlier image state the surface takes over the inline images that it kept in between.
                             .unwrap_or_else(|| std::mem::take(&mut preserved_inline_images));
                         let (cols, rows) = match calculate_terminal_size(
                             configuration.width, configuration.height, &new_state.metrics) {
@@ -3376,6 +3376,7 @@ where
         }
 
         // 이 요청의 처리 기록. 표면 작업으로 넘기는 일까지 포함해, 이번 반복을 떠날 때(다음 요청을 읽기 전) 남긴다.
+        // silent: a line that is not JSON is recorded as an unparsed request and answered with a parse error below.
         let parsed = serde_json::from_str::<Value>(trimmed).ok();
         let request = Arc::new(Request {
             operation: parsed
@@ -3390,7 +3391,9 @@ where
             cids: parsed
                 .as_ref()
                 .and_then(|value| value.get("cids"))
+                // silent: cids that are not a list of strings are answered with a parse error below, and the request event holds the body.
                 .and_then(|cids| serde_json::from_value::<Vec<String>>(cids.clone()).ok())
+                // default: a request without usable cids has none.
                 .unwrap_or_default(),
             started: std::time::Instant::now(),
             log: log.clone(),
@@ -3421,7 +3424,7 @@ where
                 let owner_closed = owner_close
                     .as_ref()
                     .map(|close| close())
-                    // 기본값: 소유자 닫기가 없는 서비스는 그 요청을 오류로 답한다.
+                    // default: a service without an owner close answers that request with an error.
                     .unwrap_or_else(|| Err("owner close is unavailable".to_string()));
                 let result = match (closed, owner_closed) {
                     (Ok(()), Ok(())) => Ok(()),
@@ -3540,7 +3543,7 @@ where
                         local_surface_key(&surface_txs, env.root.as_deref(), &surface_id);
                     let tx = if let Some(tx) = surface_txs.get(&registry_key) {
                         if let Some(registry) = registry.as_ref() {
-                            // 기본값: 부착 판을 기록하지 않은 표면은 0 이며 등록부의 현재 판과 다르면 낡은 부착으로 거부한다.
+                            // default: a surface that recorded no attachment epoch has epoch 0, and an epoch that differs from the registry is refused as a stale attachment.
                             let epoch = surface_epochs.get(&registry_key).copied().unwrap_or(0);
                             if registry.current_epoch(&registry_key, &owner).await != Some(epoch) {
                                 let response = json!({"surface": surface_id, "body": {"error": "stale attachment"}});
@@ -4140,6 +4143,7 @@ where
                                 let Some(offset) = body
                                     .get("offset")
                                     .and_then(Value::as_u64)
+                                    // silent: a value that does not fit is refused by the invalidParams reply that follows.
                                     .and_then(|v| u32::try_from(v).ok())
                                 else {
                                     let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "viewport requires a nonnegative integer offset"}});
@@ -4160,10 +4164,12 @@ where
                                 let col = body
                                     .get("col")
                                     .and_then(Value::as_u64)
+                                    // silent: a value that does not fit is refused by the invalidParams reply that follows.
                                     .and_then(|v| u16::try_from(v).ok());
                                 let row = body
                                     .get("row")
                                     .and_then(Value::as_u64)
+                                    // silent: a value that does not fit is refused by the invalidParams reply that follows.
                                     .and_then(|v| u16::try_from(v).ok());
                                 let (Some(lines), Some(col), Some(row)) = (lines, col, row) else {
                                     let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "scroll requires a nonzero integer lines and cell col and row"}});
@@ -4309,8 +4315,10 @@ where
                                 let generation = configure.get("generation")?.as_u64()?;
                                 let raster = configure.get("raster")?.as_u64()?;
                                 let width =
+                                    // silent: a width that does not fit u32 makes the configure invalid, which is answered with invalidParams below.
                                     u32::try_from(configure.get("width")?.as_u64()?).ok()?;
                                 let height =
+                                    // silent: a height that does not fit u32 makes the configure invalid, which is answered with invalidParams below.
                                     u32::try_from(configure.get("height")?.as_u64()?).ok()?;
                                 let scale = configure.get("scale")?.as_f64()? as f32;
                                 (generation > 0

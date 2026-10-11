@@ -3,6 +3,16 @@
   "layers": [
     "sidecar"
   ],
+  "chains": {
+    "input": [
+      "native.input.key_down",
+      "host.input.relay",
+      "page.call",
+      "host.sidecar.request",
+      "sidecar.vt.request",
+      "sidecar.vt.pty_write"
+    ]
+  },
   "events": {
     "sidecar.vt.session_start": {
       "layer": "sidecar",

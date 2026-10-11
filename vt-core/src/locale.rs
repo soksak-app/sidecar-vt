@@ -29,7 +29,9 @@ pub fn shell_locale<'a>(
     {
         return ShellLocale::Kept;
     }
+    // default: an unknown language is empty, and the locale name built from it is then not installed.
     let language = language.unwrap_or("");
+    // default: an unknown region is empty, and the locale name built from it is then not installed.
     let region = region.unwrap_or("");
     let name = format!("{language}_{region}.UTF-8");
     if !language.is_empty() && !region.is_empty() && installed(&name) {

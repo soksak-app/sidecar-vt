@@ -67,6 +67,7 @@ fn private_directory(path: &Path) -> Result<(), String> {
 
 /// 내용이 같은 파일은 그대로 두고, 다르거나 없으면 임시 파일에 쓴 뒤 이름을 바꿔 한 번에 바꾼다.
 fn write_file(path: &Path, content: &str) -> Result<(), String> {
+    // silent: a file that cannot be read is written again below, and a failed write is an error.
     if fs::read(path).ok().as_deref() == Some(content.as_bytes()) {
         return Ok(());
     }
@@ -113,7 +114,7 @@ pub fn apply(
     let name = Path::new(shell)
         .file_name()
         .and_then(|name| name.to_str())
-        // 기본값: 이름을 읽지 못한 셸은 zsh 나 bash 가 아니므로 바꾸지 않는다.
+        // default: a shell whose name cannot be read is neither zsh nor bash, so it gets no integration.
         .unwrap_or_default();
     match name {
         "zsh" => {

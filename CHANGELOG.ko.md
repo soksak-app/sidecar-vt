@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S40.10: `make test`와 CI가 `census.json`으로 core의 census를 실행하고, thread의 panic은 오류 기록이며, 모든 이유 주석은 `default:` 또는 `silent:` 형태이고, catalog는 chain `input`을 `pty_write`까지 선언한다.
 - S40.13: service는 `sidecar.json`에 `replay`로 선언한 replay 실행 파일 `soksak-vt-replay`를 낸다. 이 파일은 저장한 입력에서 session의 화면을 다시 만들고 frame 기록마다 hash를 출력한다.
 - S40.12: session의 입력은 replay 입력(`sequence`와 `hex`를 가지고 text 사본이 없는 `pty_read`, `pty_write`, `resize`)이고 event `frame`은 `sequence`, `rows`, `cols`, 화면 `hash`를 가진 frame 기록이다.
 - S40.11: `screen_hash`가 core의 화면 hash를 계산하고 golden vector를 재현한다.

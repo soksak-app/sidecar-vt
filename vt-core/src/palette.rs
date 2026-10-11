@@ -200,7 +200,7 @@ pub fn parse_hex(text: &str) -> Option<[u8; 3]> {
     if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
-    // 기본값: 위에서 16진수 여섯 자리를 확인했으므로 두 자리 변환은 실패하지 않는다.
+    // default: the six hexadecimal digits were checked above, so the two-digit conversion cannot fail.
     let channel = |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).ok();
     Some([channel(0)?, channel(2)?, channel(4)?])
 }

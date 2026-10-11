@@ -251,7 +251,9 @@ impl PtyService {
                 "pid": session.child.lock().unwrap().child.process_id(),
             }),
         );
-        let reader_handle = thread::spawn(move || read_output(session, reader));
+        let reader_handle = crate::thread::start(&self.log, "pty-reader", move || {
+            read_output(session, reader)
+        })?;
         // handle은 session이 게시된 뒤에 설치된다. close는 그 join을
         // request 경로에서 분리하므로 멈춘 PTY reader가 이후의 session open을
         // 막을 수 없다.
@@ -264,7 +266,9 @@ impl PtyService {
             .unwrap();
         *session.reader.lock().unwrap() = Some(reader_handle);
         let session_for_reaper = session.clone();
-        let reaper_handle = thread::spawn(move || reap_child(session_for_reaper));
+        let reaper_handle = crate::thread::start(&self.log, "pty-reaper", move || {
+            reap_child(session_for_reaper)
+        })?;
         *session.reaper.lock().unwrap() = Some(reaper_handle);
 
         Ok((session_id, attachment_id))
@@ -283,7 +287,7 @@ impl PtyService {
             let oldest = output
                 .front()
                 .map(|(sequence, _)| *sequence)
-                // 기본값: 보관한 출력이 없으면 잘린 부분이 없다.
+                // default: without retained output nothing was cut off.
                 .unwrap_or(from);
             let truncated = from < oldest;
             output
@@ -422,18 +426,25 @@ impl PtyService {
         let reader = session.reader.lock().unwrap().take();
         let reaper = session.reaper.lock().unwrap().take();
         let log = session.log.clone();
-        thread::spawn(move || {
-            if let Some(reader) = reader {
-                if reader.join().is_err() {
-                    log.record_error("pty close", "the reader thread panicked");
+        // The threads end without a panic (the entrance records one), so the join fails only when the entrance itself failed.
+        let joined = crate::thread::start(&log, "pty-joiner", {
+            let log = log.clone();
+            move || {
+                if let Some(reader) = reader {
+                    if reader.join().is_err() {
+                        log.record_error("pty close", "the reader thread panicked");
+                    }
                 }
-            }
-            if let Some(reaper) = reaper {
-                if reaper.join().is_err() {
-                    log.record_error("pty close", "the reaper thread panicked");
+                if let Some(reaper) = reaper {
+                    if reaper.join().is_err() {
+                        log.record_error("pty close", "the reaper thread panicked");
+                    }
                 }
             }
         });
+        if let Err(error) = joined {
+            session.log.record_error("pty close", error);
+        }
         self.sessions.lock().unwrap().remove(session_id);
         kill_result
     }
@@ -699,6 +710,7 @@ mod tests {
         let group = kills
             .iter()
             .find(|kill| kill["fields"]["target"] == "process group")
+            // silent: a test; the closure panics with the stored events, which fails the test.
             .unwrap_or_else(|| panic!("the kill of the group is not recorded: {kills:?}"));
         assert_eq!(group["session"], session_id);
         assert_eq!(group["fields"]["signal"], "SIGKILL");
@@ -722,6 +734,7 @@ mod tests {
         let group = kills
             .iter()
             .find(|kill| kill["fields"]["target"] == "process group")
+            // silent: a test; the closure panics with the stored events, which fails the test.
             .unwrap_or_else(|| panic!("the kill of the group is not recorded: {kills:?}"));
         assert_eq!(group["fields"]["result"], "ESRCH");
     }
@@ -809,6 +822,7 @@ mod tests {
         let record = records
             .iter()
             .find(|record| record["fields"]["where"] == "shell integration")
+            // silent: a test; the closure panics with the stored events, which fails the test.
             .unwrap_or_else(|| {
                 panic!("the shell without integration is not recorded: {records:?}")
             });
@@ -983,8 +997,12 @@ mod tests {
             .unwrap()
             .insert(session.id.clone(), Arc::clone(&session));
         let session_for_reaper = Arc::clone(&session);
-        *session.reaper.lock().unwrap() =
-            Some(thread::spawn(move || reap_child(session_for_reaper)));
+        *session.reaper.lock().unwrap() = Some(
+            crate::thread::start(&session.log, "pty-reaper", move || {
+                reap_child(session_for_reaper)
+            })
+            .expect("start the reaper thread"),
+        );
         started.recv().expect("the reaper thread did not start");
         status
     }

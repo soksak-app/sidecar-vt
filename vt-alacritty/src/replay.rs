@@ -25,7 +25,7 @@ enum Input {
 }
 
 fn decode_hex(text: &str, line: usize) -> Result<Vec<u8>, String> {
-    if text.len() % 2 != 0 {
+    if !text.len().is_multiple_of(2) {
         return Err(format!("line {line}: hex has an odd length"));
     }
     (0..text.len())
@@ -47,6 +47,7 @@ fn sequence_of(event: &Value, line: usize) -> Result<u64, String> {
 fn dimension(event: &Value, name: &str, line: usize) -> Result<u16, String> {
     event["fields"][name]
         .as_u64()
+        // silent: a value that does not fit u16 becomes None, and the ok_or_else after the filter reports the field.
         .and_then(|value| u16::try_from(value).ok())
         .filter(|value| *value > 0)
         .ok_or_else(|| format!("line {line}: fields.{name} must be a positive integer"))

@@ -35,6 +35,7 @@ impl Color {
         {
             return None;
         }
+        // default: the six hexadecimal digits were checked above, so the conversion cannot fail.
         let channel = |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).ok();
         Some(Color::True(channel(0)?, channel(2)?, channel(4)?))
     }
@@ -114,6 +115,7 @@ pub fn screen_bytes_json(screen: &Value) -> Result<Vec<u8>, String> {
     let Some(screen) = screen.as_object() else {
         return refuse(format!("screen must be an object, found {screen}"));
     };
+    // default: a member that is absent is null, and the check that follows refuses null with an error that names the member.
     let get = |name: &str| screen.get(name).unwrap_or(&Value::Null);
     let mut sizes = [0u32; 2];
     for (index, name) in ["rows", "cols"].into_iter().enumerate() {
@@ -137,18 +139,21 @@ pub fn screen_bytes_json(screen: &Value) -> Result<Vec<u8>, String> {
     let Some(visible) = cursor.get("visible").and_then(Value::as_bool) else {
         return refuse(format!(
             "cursor.visible must be true or false, found {}",
+            // default: an absent member is null in the text of the error that names it.
             cursor.get("visible").unwrap_or(&Value::Null)
         ));
     };
     let null = Value::Null;
     let row = integer(
         "cursor.row",
+        // default: a member that is absent is null, and the check that follows refuses null with an error that names the member.
         cursor.get("row").unwrap_or(&null),
         0,
         u64::from(rows) - 1,
     )?;
     let col = integer(
         "cursor.col",
+        // default: a member that is absent is null, and the check that follows refuses null with an error that names the member.
         cursor.get("col").unwrap_or(&null),
         0,
         u64::from(cols) - 1,
@@ -175,6 +180,7 @@ pub fn screen_bytes_json(screen: &Value) -> Result<Vec<u8>, String> {
         let Some(cell) = cell.as_object() else {
             return refuse(format!("{at} must be an object, found {cell}"));
         };
+        // default: a member that is absent is null, and the check that follows refuses null with an error that names the member.
         let field = |name: &str| cell.get(name).unwrap_or(&null);
         let Some(grapheme) = field("grapheme").as_str() else {
             return refuse(format!(
@@ -242,8 +248,10 @@ pub fn screen_hash(screen: &Screen) -> Result<String, String> {
                 .lines
                 .get(row)
                 .and_then(|line| line.get(col))
+                // default: a cell that the engine leaves out is a blank cell.
                 .unwrap_or(&blank);
             cells.push(HashCell {
+                // default: a blank cell has no grapheme.
                 grapheme: cell.ch.as_deref().unwrap_or(""),
                 width: cell.width,
                 fg: color(&format!("cell ({row}, {col}) fg"), &cell.fg)?,

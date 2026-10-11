@@ -10,7 +10,7 @@ pub fn host_name() -> Result<String, String> {
     let end = buffer
         .iter()
         .position(|byte| *byte == 0)
-        // 기본값: 이름이 버퍼를 채워 NUL 이 없으면 버퍼 전체가 이름이다.
+        // default: a name that fills the buffer has no NUL, so the whole buffer is the name.
         .unwrap_or(buffer.len());
     String::from_utf8(buffer[..end].to_vec()).map_err(|_| "the host name is not UTF-8".to_string())
 }
@@ -23,6 +23,7 @@ fn decode(path: &str) -> Result<String, String> {
         if bytes[index] == b'%' {
             let hex = path
                 .get(index + 1..index + 3)
+                // silent: a digit pair that does not parse is reported by the ok_or_else that follows.
                 .and_then(|digits| u8::from_str_radix(digits, 16).ok())
                 .ok_or_else(|| format!("OSC 7 path has an invalid percent escape: {path}"))?;
             decoded.push(hex);

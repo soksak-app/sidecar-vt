@@ -1,0 +1,11 @@
+{
+  "name": "@soksak/sidecar-vt",
+  "private": true,
+  "description": "Terminal sidecar: the checks of its sources and catalog use the soksak-events command of core.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@11.24.0",
+  "devDependencies": {
+    "@soksak/plugin-api": "git+https://github.com/soksak-app/core.git#v0.0.8&path:/packages/plugin-api"
+  }
+}

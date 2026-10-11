@@ -528,6 +528,7 @@ impl TerminalFont {
 
     /// 설치된 글꼴 가운데 family 이름이 정확히 같은 글꼴. 없으면 None 이다.
     pub fn installed(family: &str) -> Option<Self> {
+        // silent: a family name with a NUL byte names no installed font, and None says so.
         let name = std::ffi::CString::new(family).ok()?;
         let ptr = unsafe { frame_font_named(name.as_ptr()) };
         (!ptr.is_null()).then_some(Self { ptr })

@@ -13,6 +13,7 @@ pub mod pty;
 pub mod screen_hash;
 pub mod service;
 pub mod shell_integration;
+pub mod thread;
 
 pub use palette::{
     default_terminal_color, parse_hex, TerminalTheme, ThemeMode, DEFAULT_BACKGROUND_HEX,

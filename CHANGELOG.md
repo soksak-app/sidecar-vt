@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S40.10: `make test` and the CI run the census of core with `census.json`, a panic of a thread is an error record, every reason comment has the form `default:` or `silent:`, and the catalog declares the chain `input` down to `pty_write`.
 - S40.13: the service ships the replay executable `soksak-vt-replay`, declared as `replay` in `sidecar.json`, which rebuilds the screens of a session from its stored inputs and prints the hash of each frame record.
 - S40.12: the inputs of a session are replay inputs (`pty_read`, `pty_write`, `resize` with `sequence` and `hex`, without a text copy) and the event `frame` is a frame record with `sequence`, `rows`, `cols` and the screen `hash`.
 - S40.11: `screen_hash` computes the screen hash of core and reproduces its golden vectors.

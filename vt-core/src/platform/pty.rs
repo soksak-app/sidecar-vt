@@ -146,7 +146,7 @@ pub(crate) fn native_pty_test_lock() -> NativePtyTestLock {
     let local = LOCAL
         .get_or_init(|| Mutex::new(()))
         .lock()
-        // 기본값: 검사 전용 잠금이다. 앞선 검사가 잠금을 쥔 채 실패해도 그 실패는 이미 보고되었고 뒤 검사는 계속 돈다.
+        // default: this lock serves the tests only; an earlier test that failed holding it was reported, and the later tests go on.
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     #[cfg(unix)]
     {
