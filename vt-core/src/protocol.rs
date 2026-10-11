@@ -3106,10 +3106,7 @@ where
         // 이 요청의 처리 기록. 표면 작업으로 넘기는 일까지 포함해, 이번 반복을 떠날 때(다음 요청을 읽기 전) 남긴다.
         let parsed = serde_json::from_str::<Value>(trimmed).ok();
         let _request = RequestTrace {
-            // The whole request as it arrived; a line that is not JSON is recorded as text.
-            body: parsed
-                .clone()
-                .unwrap_or_else(|| json!({"unparsed": trimmed})),
+            body: RequestBody::of(trimmed, parsed.is_some()),
             log: &log,
             started: std::time::Instant::now(),
             idle,
@@ -4213,8 +4210,68 @@ struct RequestTrace<'a> {
     surface: Option<String>,
     /// The correlation identifiers the request carries, which are those of the inputs it continues.
     cids: Vec<String>,
-    /// 요청 전체. 읽은 그대로이며 JSON 이 아닌 줄은 `{"unparsed": <줄>}` 이다.
-    body: Value,
+    /// The request as it arrived.
+    body: RequestBody<'a>,
+}
+
+/// The longest line that the request event holds whole. A longer line is recorded by its head and its size, so the cost of
+/// recording does not depend on the size of the request (core docs/spec/logging.md#bounds).
+const REQUEST_BODY_BOUND: usize = 1_000_000;
+
+/// The body of the request event: the text of the line, which is JSON, a line that is not JSON as `{"unparsed": <line>}`,
+/// or a line over the bound as `{"head": <first 4,096 bytes>, "size": <bytes>}`. The text is borrowed from the line.
+enum RequestBody<'a> {
+    Raw(&'a serde_json::value::RawValue),
+    Unparsed(&'a str),
+    Cut { head: &'a str, size: usize },
+}
+
+impl<'a> RequestBody<'a> {
+    /// `json` tells that the line parsed, so it is valid JSON text.
+    fn of(line: &'a str, json: bool) -> Self {
+        if line.len() > REQUEST_BODY_BOUND {
+            return Self::Cut {
+                head: crate::events::head(line, crate::events::HEAD_BYTES),
+                size: line.len(),
+            };
+        }
+        if json {
+            if let Ok(raw) = serde_json::from_str::<&serde_json::value::RawValue>(line) {
+                return Self::Raw(raw);
+            }
+        }
+        Self::Unparsed(line)
+    }
+}
+
+impl Serialize for RequestBody<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        match self {
+            Self::Raw(raw) => raw.serialize(serializer),
+            Self::Unparsed(line) => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("unparsed", line)?;
+                map.end()
+            }
+            Self::Cut { head, size } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("head", head)?;
+                map.serialize_entry("size", size)?;
+                map.end()
+            }
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct RequestFields<'a> {
+    operation: &'a str,
+    owner: &'a str,
+    connection: u64,
+    idle_us: u64,
+    us: u64,
+    body: &'a RequestBody<'a>,
 }
 
 impl Drop for RequestTrace<'_> {
@@ -4228,14 +4285,14 @@ impl Drop for RequestTrace<'_> {
             Level::Info,
             "sidecar.vt.request",
             subject,
-            &serde_json::json!({
-                "operation": self.operation,
-                "owner": self.owner,
-                "connection": self.connection,
-                "idle_us": self.idle.as_micros() as u64,
-                "us": self.started.elapsed().as_micros() as u64,
-                "body": self.body,
-            }),
+            &RequestFields {
+                operation: &self.operation,
+                owner: &self.owner,
+                connection: self.connection,
+                idle_us: self.idle.as_micros() as u64,
+                us: self.started.elapsed().as_micros() as u64,
+                body: &self.body,
+            },
         );
     }
 }

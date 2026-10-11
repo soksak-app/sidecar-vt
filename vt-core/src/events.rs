@@ -35,6 +35,21 @@ const PREFIX: &str = "sidecar.vt.";
 /// policy stores `lifecycle`, `input`, `call` and `io`.
 pub const POLICY: [&str; 4] = ["lifecycle", "input", "call", "io"];
 
+/// The size in bytes of the JSON text of the fields of an event above which the writer stores only their head.
+pub const FIELDS_BOUND: usize = 1_048_576;
+
+/// The bytes of the head that an event over the bound keeps.
+pub const HEAD_BYTES: usize = 4096;
+
+/// The first `bound` bytes of `text`, cut on a character boundary.
+pub fn head(text: &str, bound: usize) -> &str {
+    let mut end = bound.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 /// The level of an event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
@@ -173,6 +188,8 @@ struct Pending {
     cids: Vec<String>,
     /// The fields as JSON text, serialized once by the producer.
     fields: Box<RawValue>,
+    /// The size of the text of the fields before the cut, for an event over `FIELDS_BOUND`.
+    truncated: Option<u64>,
     bytes: usize,
 }
 
@@ -188,6 +205,7 @@ impl Pending {
             session: None,
             cids: Vec::new(),
             fields,
+            truncated: None,
             bytes: 0,
         }
     }
@@ -418,6 +436,15 @@ impl EventLog {
                 return false;
             }
         };
+        // Fields over the bound are stored by their head, and the event states the size they had.
+        let size = fields.get().len();
+        let (fields, truncated) = if size > FIELDS_BOUND {
+            let cut = to_raw_value(&json!({"head": head(fields.get(), HEAD_BYTES)}))
+                .expect("a json value serializes");
+            (cut, Some(size as u64))
+        } else {
+            (fields, None)
+        };
         self.enqueue(Pending {
             ts_us: now_us(),
             mono_ns: mono_ns(),
@@ -427,6 +454,7 @@ impl EventLog {
             session: subject.session.map(str::to_string),
             cids: subject.cids.to_vec(),
             fields,
+            truncated,
             bytes: 0,
         })
     }
@@ -525,7 +553,11 @@ fn line(seq: u64, pending: &Pending) -> String {
             serde_json::to_string(&pending.cids).expect("strings serialize")
         ));
     }
-    line.push_str(&format!(",\"fields\":{}}}", pending.fields.get()));
+    line.push_str(&format!(",\"fields\":{}", pending.fields.get()));
+    if let Some(size) = pending.truncated {
+        line.push_str(&format!(",\"truncated\":{size}"));
+    }
+    line.push('}');
     line
 }
 

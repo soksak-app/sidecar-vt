@@ -386,3 +386,28 @@ fn a_reader_rejects_a_file_of_another_schema_and_names_the_file() {
     log.flush(DEADLINE).unwrap();
     assert_eq!(read_lines(log.path()).unwrap()[0]["fields"]["schema"], 2);
 }
+
+// Fields over 1,048,576 bytes of JSON text are stored as their first 4,096 bytes and the size of the text.
+#[test]
+fn fields_over_the_bound_of_an_event_are_stored_cut_and_marked_truncated() {
+    let dir = directory("bound");
+    let mut large = options(&dir);
+    large.queue_bytes = 8 << 20;
+    let log = EventLog::start(large).unwrap();
+    let text = "한".repeat(400_000);
+    assert!(log.emit(Level::Info, "sidecar.vt.test", &json!({ "text": text })));
+    assert!(log.emit(Level::Info, "sidecar.vt.test", &json!({ "text": "small" })));
+    log.flush(DEADLINE).unwrap();
+    let lines = lines_of(log.path());
+    let cut = &lines[1];
+    let size = serde_json::to_string(&json!({ "text": text }))
+        .unwrap()
+        .len();
+    assert_eq!(cut["truncated"], size);
+    let head = cut["fields"]["head"].as_str().unwrap();
+    assert!(head.len() <= 4096 && head.len() > 4000, "{}", head.len());
+    assert!(head.starts_with("{\"text\":\"한"));
+    assert_eq!(cut["fields"].as_object().unwrap().len(), 1);
+    assert!(lines[2].get("truncated").is_none());
+    assert_eq!(lines[2]["fields"]["text"], "small");
+}

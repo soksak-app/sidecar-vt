@@ -225,6 +225,24 @@ not json at all
     assert_eq!(unparsed["fields"]["body"]["unparsed"], "not json at all");
 }
 
+// A request line over the bound of an event is recorded by its first 4,096 bytes and its size, and the line is neither cloned
+// nor serialized whole (core docs/spec/logging.md#bounds).
+#[tokio::test]
+async fn a_request_line_over_the_bound_is_recorded_by_its_head_and_its_size() {
+    let events = TestEvents::new();
+    let line = format!(
+        "{{\"surface\":\"s1\",\"root\":\"/tmp\",\"body\":{{\"operation\":\"nothing\",\"pad\":\"{}\"}}}}",
+        "x".repeat(1_200_000)
+    );
+    serve_lines(&events, format!("{line}\n").as_bytes()).await;
+    let request = &events.named("sidecar.vt.request")[0];
+    assert_eq!(request["fields"]["operation"], "nothing");
+    let body = &request["fields"]["body"];
+    assert_eq!(body["size"], line.len());
+    assert_eq!(body["head"].as_str().unwrap(), &line[..4096]);
+    assert!(request.get("truncated").is_none());
+}
+
 #[tokio::test]
 async fn a_request_records_the_correlation_identifiers_it_continues() {
     let events = TestEvents::new();

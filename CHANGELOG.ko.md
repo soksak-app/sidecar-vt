@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S40.4: 요청 event는 요청 전체를 복제하거나 직렬화하지 않는다. 줄의 글을 빌려 쓰고 1,000,000 바이트를 넘는 줄은 head와 크기로 기록하며, writer는 1,048,576 바이트를 넘는 fields를 `truncated`와 함께 head로 저장한다.
 - S40.5: `pty_write`와 `pty_read`의 hex는 lookup table로 만든다(8192 바이트 chunk에서 이전 할당 8211회, 지금은 32회 이하). `pty_read`는 policy가 class `io`를 저장할 때만 만들어 queue에 넣고, `log.open`이 policy를 적는다.
 - S40.2: event writer의 실패는 event다. 거절 이유마다 별도의 `log.dropped`가 있고, 실패한 write는 그 줄을 잃은 뒤 다음 write가 성공하면 `log.dropped`로 기록하며, 실패한 rotation 단계와 늦은 flush 답은 위치 `event writer`의 오류 기록이다.
 - S40.1: event 파일은 schema 2다. `log.open`이 `version`과 `policy`를 담고, `events::read_lines`는 다른 schema의 파일을 파일 이름과 찾은 번호를 담은 오류로 거부하며, golden fixture는 core의 것이다.
