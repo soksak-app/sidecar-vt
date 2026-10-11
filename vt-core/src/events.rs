@@ -15,9 +15,12 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use serde_json::json;
 use serde_json::value::{to_raw_value, RawValue};
+
+use crate::policy::{is_being_written, parse_policy, Class, Gate, Policy};
 
 /// The schema number of the lines that this writer writes.
 pub const SCHEMA: u64 = 2;
@@ -31,9 +34,37 @@ const LAYER: &str = "sidecar";
 /// The prefix of every event name of this process, except the events of the writer (`log.*`).
 const PREFIX: &str = "sidecar.vt.";
 
-/// The classes whose events the policy stores (core docs/spec/logging.md#classes-and-policy). A process that cannot read the
-/// policy stores `lifecycle`, `input`, `call` and `io`.
-pub const POLICY: [&str; 4] = ["lifecycle", "input", "call", "io"];
+/// The catalog of the events of this service, which names the class of each event
+/// (core docs/spec/logging.md#classes-and-policy).
+const CATALOG: &str = include_str!("../../vt-alacritty/events.json");
+
+/// The name of the policy file in the parent folder of the log folder (core docs/spec/logging.md#policy-file).
+pub const POLICY_FILE: &str = "log-policy.json";
+
+/// The class that the catalog declares for the event `event`; none for an event that it does not declare.
+fn class_of(event: &str) -> Option<Class> {
+    static CLASSES: std::sync::OnceLock<std::collections::HashMap<String, Class>> =
+        std::sync::OnceLock::new();
+    CLASSES
+        .get_or_init(|| {
+            let catalog: serde_json::Value =
+                serde_json::from_str(CATALOG).expect("the catalog of the service is JSON");
+            catalog["events"]
+                .as_object()
+                .expect("the catalog declares events")
+                .iter()
+                .map(|(name, declaration)| {
+                    let class = declaration["class"].as_str().and_then(Class::from_name);
+                    (
+                        name.clone(),
+                        class.unwrap_or_else(|| panic!("the catalog declares no class for {name}")),
+                    )
+                })
+                .collect()
+        })
+        .get(event)
+        .copied()
+}
 
 /// The size in bytes of the JSON text of the fields of an event above which the writer stores only their head.
 pub const FIELDS_BOUND: usize = 1_048_576;
@@ -51,7 +82,7 @@ pub fn head(text: &str, bound: usize) -> &str {
 }
 
 /// The level of an event.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
     Error,
     Warn,
@@ -61,7 +92,25 @@ pub enum Level {
 }
 
 impl Level {
-    fn name(self) -> &'static str {
+    /// The levels from the most severe to the most verbose.
+    pub const ALL: [Level; 5] = [
+        Level::Error,
+        Level::Warn,
+        Level::Info,
+        Level::Debug,
+        Level::Trace,
+    ];
+
+    /// 1 for `error` to 5 for `trace`; the policy file's `off` is 0.
+    pub fn rank(self) -> u8 {
+        self as u8 + 1
+    }
+
+    pub fn from_name(name: &str) -> Option<Level> {
+        Level::ALL.into_iter().find(|level| level.name() == name)
+    }
+
+    pub fn name(self) -> &'static str {
         match self {
             Level::Error => "error",
             Level::Warn => "warn",
@@ -124,8 +173,9 @@ pub struct Options {
     pub rotate_bytes: u64,
     /// The number of earlier files that are kept (`.1` is the newest); the oldest one is removed.
     pub generations: usize,
-    /// The classes whose events are stored in detail (core docs/spec/logging.md#classes-and-policy); `log.open` states it.
-    pub policy: Vec<String>,
+    /// The policy file that the writer reads when it starts and watches (core docs/spec/logging.md#policy-file); none
+    /// leaves the default policy in force.
+    pub policy_file: Option<PathBuf>,
 }
 
 impl Options {
@@ -140,7 +190,7 @@ impl Options {
             batch_interval: Duration::from_millis(100),
             rotate_bytes: 100 << 20,
             generations: 5,
-            policy: POLICY.iter().map(|class| class.to_string()).collect(),
+            policy_file: None,
         }
     }
 }
@@ -183,6 +233,8 @@ struct Pending {
     mono_ns: u64,
     level: Level,
     event: String,
+    /// The class of the catalog; none for an event that the catalog does not declare.
+    class: Option<Class>,
     surface: Option<String>,
     session: Option<String>,
     cids: Vec<String>,
@@ -194,13 +246,14 @@ struct Pending {
 }
 
 impl Pending {
-    /// An event of the writer itself, which concerns no object.
+    /// An event of the writer itself, which concerns no object. The events `log.*` are of the class `lifecycle`.
     fn of_writer(level: Level, event: &str, fields: Box<RawValue>) -> Self {
         Self {
             ts_us: now_us(),
             mono_ns: mono_ns(),
             level,
             event: event.to_string(),
+            class: class_of(event).or(Some(Class::Lifecycle)),
             surface: None,
             session: None,
             cids: Vec::new(),
@@ -219,6 +272,10 @@ enum Message {
     Flush(SyncSender<()>),
     /// Write everything that is queued, then end.
     Stop,
+    /// The file system reported a change of the policy file: read it and put the policy in force.
+    PolicyChanged,
+    /// The file system events of the policy file failed with this error.
+    PolicyWatchFailed(String),
 }
 
 /// The slots of the queue that only requests use.
@@ -283,8 +340,10 @@ pub struct EventLog {
     queued_bytes: Arc<AtomicUsize>,
     queue_bytes: usize,
     loss: Arc<Loss>,
-    policy: Vec<String>,
+    gate: Arc<Gate>,
     path: PathBuf,
+    /// The watch of the policy file; it ends before the writer does.
+    watcher: Mutex<Option<RecommendedWatcher>>,
     writer: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -292,7 +351,8 @@ pub struct EventLog {
 pub type Events = Arc<EventLog>;
 
 impl EventLog {
-    /// Starts the writer of the service in `directory` with the bounds of the service and the boot of this process.
+    /// Starts the writer of the service in `directory` with the bounds of the service and the boot of this process. The
+    /// policy file is `log-policy.json` in the parent folder of `directory`.
     pub fn start_service(directory: &Path) -> Result<Events, String> {
         if !directory.is_absolute() {
             return Err(format!(
@@ -300,11 +360,15 @@ impl EventLog {
                 directory.display()
             ));
         }
-        EventLog::start(Options::service(
-            directory.to_path_buf(),
-            process_boot().to_string(),
-        ))
-        .map(Arc::new)
+        let parent = directory.parent().ok_or_else(|| {
+            format!(
+                "{}: the log directory has no parent folder for {POLICY_FILE}",
+                directory.display()
+            )
+        })?;
+        let mut options = Options::service(directory.to_path_buf(), process_boot().to_string());
+        options.policy_file = Some(parent.join(POLICY_FILE));
+        EventLog::start(options).map(Arc::new)
     }
 
     /// Creates the folder (mode 0700) and the file (mode 0600), writes `log.open` and starts the writer thread.
@@ -337,6 +401,13 @@ impl EventLog {
         let queued_events = Arc::new(AtomicUsize::new(0));
         let queued_bytes = Arc::new(AtomicUsize::new(0));
         let loss = Arc::new(Loss::new());
+        // The watch starts before the first read, so a change between the two reaches the writer as a notification.
+        let watcher = match &options.policy_file {
+            Some(file) => Some(watch_policy_file(file, &sender)?),
+            None => None,
+        };
+        let policy = PolicyState::start(options.policy_file.clone());
+        let gate = Arc::clone(&policy.gate);
         let open = Pending::of_writer(
             Level::Info,
             "log.open",
@@ -346,7 +417,6 @@ impl EventLog {
                 "role": ROLE,
                 "boot": options.boot,
                 "version": env!("CARGO_PKG_VERSION"),
-                "policy": options.policy,
             }))
             .map_err(|e| format!("log.open: {e}"))?,
         );
@@ -362,7 +432,14 @@ impl EventLog {
                 .name("event-log-writer".into())
                 .spawn(move || {
                     write_loop(
-                        Output::new(file, path_for_writer, rotate_bytes, generations, &open),
+                        Output::new(
+                            file,
+                            path_for_writer,
+                            rotate_bytes,
+                            generations,
+                            &open,
+                            policy,
+                        ),
                         receiver,
                         queued_bytes,
                         queued_events,
@@ -380,15 +457,22 @@ impl EventLog {
             queued_bytes,
             queue_bytes: options.queue_bytes,
             loss,
-            policy: options.policy,
+            gate,
             path,
+            watcher: Mutex::new(watcher),
             writer: Mutex::new(Some(writer)),
         })
     }
 
-    /// Whether the policy stores the events of `class`: one branch, so a producer checks it before it builds fields.
-    pub fn enabled(&self, class: &str) -> bool {
-        self.policy.iter().any(|stored| stored == class)
+    /// Whether the policy stores the events of `class` at `level`: one atomic read, so a producer checks it before it
+    /// builds fields. A refusal is counted, and the writer states the count as `log.gated`.
+    pub fn gate(&self, class: Class, level: Level) -> bool {
+        self.gate.allows(class, level)
+    }
+
+    /// Whether the policy stores the events of `class` at `level`, without counting a refusal.
+    pub fn enabled(&self, class: Class, level: Level) -> bool {
+        self.gate.enabled(class, level)
     }
 
     /// The file this writer writes.
@@ -401,9 +485,10 @@ impl EventLog {
         self.emit_for(level, event, Subject::NONE, fields)
     }
 
-    /// Queues an event. Returns false, and counts the loss, when the queue has no room or the name does not start with
-    /// `sidecar.vt.`; the name is reported on the standard error. It never waits. The fields are serialized once, and
-    /// only after the queue is known to have room for another event.
+    /// Queues an event. Returns false when the policy does not store the class of the event at its level (the refusal is
+    /// counted as a gated event), and false, with the loss counted, when the queue has no room or the name does not start
+    /// with `sidecar.vt.`. It never waits. The fields are serialized once, and only after the queue is known to have room
+    /// for another event.
     pub fn emit_for<T: Serialize>(
         &self,
         level: Level,
@@ -419,6 +504,12 @@ impl EventLog {
                 format!("the event {event:?} does not start with {PREFIX:?}"),
             );
             return false;
+        }
+        let class = class_of(event);
+        if let Some(class) = class {
+            if !self.gate.allows(class, level) {
+                return false;
+            }
         }
         if self.queued_events.load(Ordering::Relaxed) >= self.queue_events {
             self.loss.add(Reason::QueueFull, 1, event.len() as u64);
@@ -450,6 +541,7 @@ impl EventLog {
             mono_ns: mono_ns(),
             level,
             event: event.to_string(),
+            class,
             surface: subject.surface.map(str::to_string),
             session: subject.session.map(str::to_string),
             cids: subject.cids.to_vec(),
@@ -514,6 +606,10 @@ impl EventLog {
 
 impl Drop for EventLog {
     fn drop(&mut self) {
+        // The watch ends first, so no notification is sent to a queue that is being closed.
+        if let Ok(mut watcher) = self.watcher.lock() {
+            watcher.take();
+        }
         // The stop waits for room in the queue: the writer takes events while it runs. A writer that ended can no longer
         // record its own end, so the standard error of the process is the only place left for these two reports.
         if let Err(error) = self.sender.send(Message::Stop) {
@@ -534,13 +630,19 @@ fn line(seq: u64, pending: &Pending) -> String {
     let text = |value: &str| serde_json::to_string(value).expect("a string serializes");
     // The fields are already JSON text, so the line is assembled without parsing them again.
     let mut line = format!(
-        "{{\"ts_us\":{},\"mono_ns\":{},\"seq\":{},\"level\":\"{}\",\"layer\":\"{LAYER}\",\"event\":{}",
+        "{{\"ts_us\":{},\"mono_ns\":{},\"seq\":{},\"level\":\"{}\"",
         pending.ts_us,
         pending.mono_ns,
         seq,
         pending.level.name(),
-        text(&pending.event),
     );
+    if let Some(class) = pending.class {
+        line.push_str(&format!(",\"class\":\"{}\"", class.name()));
+    }
+    line.push_str(&format!(
+        ",\"layer\":\"{LAYER}\",\"event\":{}",
+        text(&pending.event)
+    ));
     if let Some(surface) = &pending.surface {
         line.push_str(&format!(",\"surface\":{}", text(surface)));
     }
@@ -552,6 +654,9 @@ fn line(seq: u64, pending: &Pending) -> String {
             ",\"cids\":{}",
             serde_json::to_string(&pending.cids).expect("strings serialize")
         ));
+    }
+    if pending.class.is_none() {
+        line.push_str(",\"undeclared\":true");
     }
     line.push_str(&format!(",\"fields\":{}", pending.fields.get()));
     if let Some(size) = pending.truncated {
@@ -569,8 +674,105 @@ struct Lost {
     reason: String,
 }
 
+/// What the policy file holds now.
+enum PolicyFile {
+    /// There is no file: the default policy is in force.
+    Absent,
+    /// The file is empty or holds white space: its writer is still writing it.
+    Waiting,
+    Policy(Policy),
+}
+
+/// Reads the policy file. A refusal is the error text of the contract, which names the file and what was found.
+fn read_policy_file(file: &Path) -> Result<PolicyFile, String> {
+    let text = match std::fs::read_to_string(file) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PolicyFile::Absent)
+        }
+        Err(error) => return Err(format!("{}: {error}", file.display())),
+    };
+    if is_being_written(&text) {
+        return Ok(PolicyFile::Waiting);
+    }
+    parse_policy(&file.display().to_string(), &text).map(PolicyFile::Policy)
+}
+
+/// Starts the watch of the policy file: a notification of the file system for the file puts a request to read it in the
+/// queue of the writer. The folder is watched and not the file, because the host replaces the file by a rename and the
+/// file may not exist yet. No timer reads the file. The send waits for room in the queue; it fails only when the writer
+/// has ended.
+fn watch_policy_file(
+    file: &Path,
+    sender: &SyncSender<Message>,
+) -> Result<RecommendedWatcher, String> {
+    let folder = file
+        .parent()
+        .ok_or_else(|| format!("{}: the policy file has no folder", file.display()))?;
+    let name = file
+        .file_name()
+        .ok_or_else(|| format!("{}: the policy file has no name", file.display()))?
+        .to_os_string();
+    let sender = sender.clone();
+    let mut watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+        let message = match result {
+            Ok(event) => {
+                if !event
+                    .paths
+                    .iter()
+                    .any(|path| path.file_name() == Some(&name))
+                {
+                    return;
+                }
+                Message::PolicyChanged
+            }
+            Err(error) => Message::PolicyWatchFailed(error.to_string()),
+        };
+        // silent: the send fails only after the writer ended, when there is no file to record the notification in.
+        let _ = sender.send(message);
+    })
+    .map_err(|error| format!("{}: watch the policy file: {error}", file.display()))?;
+    watcher
+        .watch(folder, RecursiveMode::NonRecursive)
+        .map_err(|error| format!("{}: watch the policy file: {error}", folder.display()))?;
+    Ok(watcher)
+}
+
+/// The policy of the writer: the file it reads, the policy in force and the gate that the producers ask.
+struct PolicyState {
+    file: Option<PathBuf>,
+    gate: Arc<Gate>,
+    current: Policy,
+    /// How the first policy was found, which `log.policy` states when the writer starts.
+    start: Applied,
+}
+
+/// The policy that the writer applied when it started, and the refusal of a file that could not be applied.
+struct Applied {
+    source: &'static str,
+    refused: Option<String>,
+}
+
+impl PolicyState {
+    /// Puts the policy of the file in force, or the default policy when there is no file or it cannot be applied.
+    fn start(file: Option<PathBuf>) -> PolicyState {
+        let (current, source, refused) = match file.as_deref().map(read_policy_file) {
+            Some(Ok(PolicyFile::Policy(policy))) => (policy, "file", None),
+            Some(Err(error)) => (Policy::default(), "default", Some(error)),
+            _ => (Policy::default(), "default", None),
+        };
+        PolicyState {
+            file,
+            gate: Arc::new(Gate::new(&current)),
+            current,
+            start: Applied { source, refused },
+        }
+    }
+}
+
 /// The file of the writer with its batch, its size and the sequence number of the last line.
 struct Output {
+    policy: PolicyState,
     file: File,
     path: PathBuf,
     rotate_bytes: u64,
@@ -599,8 +801,10 @@ impl Output {
         rotate_bytes: u64,
         generations: usize,
         open: &Pending,
+        policy: PolicyState,
     ) -> Output {
         Output {
+            policy,
             file,
             path,
             rotate_bytes,
@@ -631,13 +835,74 @@ impl Output {
 
     /// Records a failure of the writer itself as an error record of the file.
     fn record_failure(&mut self, text: String) {
+        self.record_error("event writer", text);
+    }
+
+    fn record_error(&mut self, place: &str, text: String) {
         let record = Pending::of_writer(
             Level::Error,
             "sidecar.vt.record.error",
-            to_raw_value(&json!({"where": "event writer", "text": text}))
-                .expect("a json value serializes"),
+            to_raw_value(&json!({"where": place, "text": text})).expect("a json value serializes"),
         );
         self.append(&record);
+    }
+
+    /// States the policy that the writer found when it started, and the refusal of its file.
+    fn start_policy(&mut self) {
+        if let Some(error) = self.policy.start.refused.take() {
+            self.record_error("log policy", error);
+        }
+        self.state_policy(self.policy.start.source);
+    }
+
+    /// Stores the event `log.policy` for the policy in force.
+    fn state_policy(&mut self, source: &str) {
+        let event = Pending::of_writer(
+            Level::Info,
+            "log.policy",
+            to_raw_value(&json!({"source": source, "classes": self.policy.current.classes()}))
+                .expect("a json value serializes"),
+        );
+        self.push(&event);
+    }
+
+    /// The file system reported a change of the policy file: the file is read and its policy put in force. A refused file
+    /// is an error record and the policy in force stays, an empty file is waited on, a removed file puts the default in
+    /// force, and the same policy again stores nothing.
+    fn policy_changed(&mut self) {
+        let Some(file) = self.policy.file.clone() else {
+            return;
+        };
+        let (policy, source) = match read_policy_file(&file) {
+            Ok(PolicyFile::Waiting) => return,
+            Ok(PolicyFile::Absent) => (Policy::default(), "default"),
+            Ok(PolicyFile::Policy(policy)) => (policy, "file"),
+            Err(error) => {
+                self.record_error("log policy", error);
+                return;
+            }
+        };
+        if policy == self.policy.current {
+            return;
+        }
+        self.policy.current = policy;
+        self.policy.gate.set(&policy);
+        self.state_policy(source);
+    }
+
+    /// Stores one `log.gated` for each class and level whose events the policy refused since the last report.
+    fn gated(&mut self) {
+        for (class, level, count) in self.policy.gate.take_refused() {
+            let event = Pending::of_writer(
+                Level::Info,
+                "log.gated",
+                to_raw_value(
+                    &json!({"class": class.name(), "level": level.name(), "count": count}),
+                )
+                .expect("a json value serializes"),
+            );
+            self.push(&event);
+        }
     }
 
     /// Adds an event. A file that the line would take past the bound is closed first; the new file opens with
@@ -831,11 +1096,13 @@ fn write_loop(
     open: Pending,
 ) {
     out.push(&open);
+    out.start_policy();
     let record_loss = |out: &mut Output| {
         for reason in Reason::ALL {
             let (events, bytes) = loss.take(reason);
             out.dropped(events, bytes, reason.text());
         }
+        out.gated();
     };
     let take = |out: &mut Output, pending: &Pending| {
         queued_bytes.fetch_sub(pending.bytes, Ordering::Relaxed);
@@ -848,6 +1115,8 @@ fn write_loop(
         while let Ok(message) = receiver.try_recv() {
             match message {
                 Message::Event(pending) => take(out, &pending),
+                Message::PolicyChanged => out.policy_changed(),
+                Message::PolicyWatchFailed(text) => out.record_error("log policy", text),
                 other => {
                     request = Some(other);
                     break;
@@ -895,6 +1164,8 @@ fn write_loop(
                 drain(&mut out);
                 return;
             }
+            Message::PolicyChanged => out.policy_changed(),
+            Message::PolicyWatchFailed(text) => out.record_error("log policy", text),
         }
     }
 }
@@ -964,14 +1235,20 @@ pub mod test_support {
 
     impl TestEvents {
         pub fn new() -> Self {
-            Self::with_policy(&POLICY)
+            Self::with_policy(Policy::default())
         }
 
-        /// A writer whose policy stores only the listed classes.
-        pub fn with_policy(policy: &[&str]) -> Self {
+        /// A writer that reads `policy` from the policy file in the parent of its log folder.
+        pub fn with_policy(policy: Policy) -> Self {
             let directory = tempfile::tempdir().expect("create the folder of the events");
+            let file = directory.path().join(POLICY_FILE);
+            std::fs::write(
+                &file,
+                json!({"schema": 1, "classes": policy.classes()}).to_string(),
+            )
+            .expect("write the policy file");
             let mut options = Options::service(directory.path().join("logs"), "test".to_string());
-            options.policy = policy.iter().map(|class| class.to_string()).collect();
+            options.policy_file = Some(file);
             options.batch_interval = Duration::from_millis(20);
             let handle = Arc::new(EventLog::start(options).expect("start the writer"));
             Self {

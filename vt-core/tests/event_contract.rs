@@ -107,10 +107,7 @@ fn the_first_line_opens_the_file_with_the_schema_the_pid_the_role_and_the_boot()
     assert_eq!(open["layer"], "sidecar");
     assert_eq!(open["fields"]["schema"], 2);
     assert_eq!(open["fields"]["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(
-        open["fields"]["policy"],
-        json!(["lifecycle", "input", "call", "io"])
-    );
+    assert_eq!(open["fields"].get("policy"), None, "log.policy states it");
     assert_eq!(open["fields"]["pid"], std::process::id());
     assert_eq!(open["fields"]["role"], "vt");
     assert_eq!(open["fields"]["boot"], "b1");
@@ -164,7 +161,10 @@ fn an_event_has_the_structure_of_the_golden_line_of_the_sidecar() {
         &golden["fields"],
     ));
     log.flush(DEADLINE).unwrap();
-    let line = lines_of(log.path()).remove(1);
+    let line = lines_of(log.path())
+        .into_iter()
+        .find(|line| line["event"] == golden["event"])
+        .expect("the event of the golden line is written");
     assert_eq!(
         keys(&line),
         keys(&golden),
@@ -172,6 +172,7 @@ fn an_event_has_the_structure_of_the_golden_line_of_the_sidecar() {
     );
     assert_eq!(line["event"], golden["event"]);
     assert_eq!(line["level"], golden["level"]);
+    assert_eq!(line["class"], golden["class"]);
     assert_eq!(line["layer"], golden["layer"]);
     assert_eq!(line["surface"], golden["surface"]);
     assert_eq!(line["cids"], golden["cids"]);
@@ -188,7 +189,7 @@ fn seq_is_consecutive_from_one_and_ts_us_is_in_microseconds() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_micros() as u64;
-    for index in 0..5 {
+    for index in 0..4 {
         assert!(log.emit(Level::Debug, "sidecar.vt.test", &json!({ "index": index })));
     }
     log.flush(DEADLINE).unwrap();
@@ -197,7 +198,11 @@ fn seq_is_consecutive_from_one_and_ts_us_is_in_microseconds() {
         .iter()
         .map(|line| line["seq"].as_u64().unwrap())
         .collect();
-    assert_eq!(seqs, (1..=6).collect::<Vec<u64>>());
+    assert_eq!(
+        seqs,
+        (1..=6).collect::<Vec<u64>>(),
+        "log.open, log.policy and the four events"
+    );
     for line in &lines {
         let ts = line["ts_us"].as_u64().unwrap();
         assert!(
@@ -338,13 +343,13 @@ fn a_record_is_an_event_with_the_place_and_the_text() {
     log.record_info("font", "no listed font is installed");
     log.flush(DEADLINE).unwrap();
     let lines = lines_of(log.path());
-    let error = &lines[1];
+    let error = &lines[2];
     assert_eq!(error["event"], "sidecar.vt.record.error");
     assert_eq!(error["level"], "error");
     assert_eq!(error["layer"], "sidecar");
     assert_eq!(error["fields"]["where"], "surface close");
     assert_eq!(error["fields"]["text"], "first\nsecond");
-    let info = &lines[2];
+    let info = &lines[3];
     assert_eq!(info["event"], "sidecar.vt.record.info");
     assert_eq!(info["level"], "info");
     assert_eq!(info["fields"]["where"], "font");
@@ -389,7 +394,7 @@ fn fields_over_the_bound_of_an_event_are_stored_cut_and_marked_truncated() {
     assert!(log.emit(Level::Info, "sidecar.vt.test", &json!({ "text": "small" })));
     log.flush(DEADLINE).unwrap();
     let lines = lines_of(log.path());
-    let cut = &lines[1];
+    let cut = &lines[2];
     let size = serde_json::to_string(&json!({ "text": text }))
         .unwrap()
         .len();
@@ -398,6 +403,6 @@ fn fields_over_the_bound_of_an_event_are_stored_cut_and_marked_truncated() {
     assert!(head.len() <= 4096 && head.len() > 4000, "{}", head.len());
     assert!(head.starts_with("{\"text\":\"한"));
     assert_eq!(cut["fields"].as_object().unwrap().len(), 1);
-    assert!(lines[2].get("truncated").is_none());
-    assert_eq!(lines[2]["fields"]["text"], "small");
+    assert!(lines[3].get("truncated").is_none());
+    assert_eq!(lines[3]["fields"]["text"], "small");
 }

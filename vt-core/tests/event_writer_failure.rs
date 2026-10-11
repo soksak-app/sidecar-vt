@@ -76,14 +76,15 @@ fn a_failed_write_is_recorded_as_log_dropped_when_writing_works_again() {
         events,
         vec![
             (1, "log.open".to_string()),
-            (3, "sidecar.vt.test".to_string()),
-            (4, "log.dropped".to_string()),
+            (2, "log.policy".to_string()),
+            (4, "sidecar.vt.test".to_string()),
+            (5, "log.dropped".to_string()),
         ]
     );
-    let dropped = &lines[2]["fields"];
+    let dropped = &lines[3]["fields"];
     assert_eq!(
         (dropped["from_seq"].clone(), dropped["to_seq"].clone()),
-        (json!(2), json!(2))
+        (json!(3), json!(3))
     );
     assert_eq!(dropped["count"], 1);
     assert!(dropped["bytes"].as_u64().unwrap() > 1000);

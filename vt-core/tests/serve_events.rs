@@ -9,6 +9,7 @@ mod events_test;
 use events_test::TestEvents;
 
 // 프레임 생산자: 트레이스가 켜진 serve 는 프레임마다 reason 과 그리기 시간을 남긴다.
+use soksak_sidecar_vt_core::policy::{Class, Policy};
 use soksak_sidecar_vt_core::protocol::{
     make_default_session_port_factory, serve, Cursor, CursorShape, Engine, EngineEvent, Modes,
     Screen, SessionPort, ShellRequest,
@@ -668,11 +669,11 @@ async fn the_inputs_and_the_frames_of_a_session_are_replay_records() {
     }
 }
 
-// The class `io` is stored when the policy lists it: without it the output of the program is not stored, and the inputs that
-// the person made still are.
+// The class `io` is stored when the policy stores it: with the class off neither the output of the program nor the bytes
+// written to it are stored (both are declared with the class `io`), and the gate counts what it refused.
 #[tokio::test]
-async fn the_output_of_the_program_is_not_stored_when_the_policy_leaves_out_the_class_io() {
-    let events = TestEvents::with_policy(&["lifecycle", "input", "call"]);
+async fn the_bytes_of_the_program_are_not_stored_when_the_policy_turns_the_class_io_off() {
+    let events = TestEvents::with_policy(Policy::default().with(Class::Io, None));
     let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
     let factory = make_default_session_port_factory(events.handle());
     serve_with(
@@ -686,7 +687,14 @@ async fn the_output_of_the_program_is_not_stored_when_the_policy_leaves_out_the_
     )
     .await;
     assert!(events.named("sidecar.vt.pty_read").is_empty());
-    assert_eq!(events.named("sidecar.vt.pty_write").len(), 1);
+    assert!(events.named("sidecar.vt.pty_write").is_empty());
+    let gated = events.named("log.gated");
+    assert!(
+        gated.iter().any(|line| line["fields"]["class"] == "io"
+            && line["fields"]["level"] == "info"
+            && line["fields"]["count"].as_u64().unwrap() >= 1),
+        "{gated:?}"
+    );
 }
 
 // A request line over the bound of an event is recorded by its first 4,096 bytes and its size, and the line is neither cloned

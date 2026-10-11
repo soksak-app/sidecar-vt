@@ -4,6 +4,7 @@
 
 use serde_json::Value;
 use soksak_sidecar_vt_core::events::{EventLog, Events, Options};
+use soksak_sidecar_vt_core::policy::Policy;
 use std::time::Duration;
 
 /// A writer with its folder. The folder is removed when this value is dropped.
@@ -20,14 +21,20 @@ impl Default for TestEvents {
 
 impl TestEvents {
     pub fn new() -> Self {
-        Self::with_policy(&["lifecycle", "input", "call", "io"])
+        Self::with_policy(Policy::default())
     }
 
-    /// A writer whose policy stores only the listed classes.
-    pub fn with_policy(policy: &[&str]) -> Self {
+    /// A writer that reads `policy` from the policy file in the parent of its log folder.
+    pub fn with_policy(policy: Policy) -> Self {
         let directory = tempfile::tempdir().expect("create the folder of the events");
+        let file = directory.path().join("log-policy.json");
+        std::fs::write(
+            &file,
+            serde_json::json!({"schema": 1, "classes": policy.classes()}).to_string(),
+        )
+        .expect("write the policy file");
         let mut options = Options::service(directory.path().join("logs"), "test".to_string());
-        options.policy = policy.iter().map(|class| class.to_string()).collect();
+        options.policy_file = Some(file);
         options.batch_interval = Duration::from_millis(20);
         let handle = std::sync::Arc::new(EventLog::start(options).expect("start the writer"));
         Self {

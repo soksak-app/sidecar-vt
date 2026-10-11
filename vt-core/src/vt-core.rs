@@ -8,6 +8,7 @@ pub mod inline_image;
 pub mod locale;
 pub mod palette;
 pub mod platform;
+pub mod policy;
 pub mod protocol;
 pub mod pty;
 pub mod screen_hash;

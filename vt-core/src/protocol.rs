@@ -1667,7 +1667,7 @@ impl ReplayInputs {
     /// The output of the program is fed to the engine. It is stored when the policy stores the class `io`.
     fn output(&mut self, session: &str, data: &[u8]) {
         self.sequence += 1;
-        if self.log.enabled("io") {
+        if self.log.gate(crate::policy::Class::Io, Level::Debug) {
             self.log.emit_for(
                 Level::Debug,
                 "sidecar.vt.pty_read",

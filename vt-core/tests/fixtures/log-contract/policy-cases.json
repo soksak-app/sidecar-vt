@@ -1,0 +1,63 @@
+{
+  "description": "Golden cases of the policy file `log-policy.json` (docs/spec/logging.md#policy-file). `valid` texts are accepted and give `classes`; `allows` and `refuses` are the (class, level) pairs that the policy stores and does not store. `invalid` texts are refused with `error`, in which `<file>` is the name the reader was given; a case with `error_prefix` is refused with an error that starts with it, because the text after it is the message of the JSON parser of the language.",
+  "file": "log-policy.json",
+  "schema": 1,
+  "classes": ["lifecycle", "input", "call", "io", "frame"],
+  "values": ["off", "error", "warn", "info", "debug", "trace"],
+  "levels": ["error", "warn", "info", "debug", "trace"],
+  "valid": [
+    {
+      "name": "every class stores every level",
+      "text": "{\"schema\":1,\"classes\":{\"lifecycle\":\"trace\",\"input\":\"trace\",\"call\":\"trace\",\"io\":\"trace\",\"frame\":\"trace\"}}",
+      "classes": { "lifecycle": "trace", "input": "trace", "call": "trace", "io": "trace", "frame": "trace" },
+      "allows": [["lifecycle", "trace"], ["input", "debug"], ["call", "debug"], ["io", "trace"], ["frame", "trace"]],
+      "refuses": []
+    },
+    {
+      "name": "each class stores up to its own level",
+      "text": "{\"schema\":1,\"classes\":{\"lifecycle\":\"trace\",\"input\":\"debug\",\"call\":\"info\",\"io\":\"warn\",\"frame\":\"off\"}}",
+      "classes": { "lifecycle": "trace", "input": "debug", "call": "info", "io": "warn", "frame": "off" },
+      "allows": [["lifecycle", "error"], ["lifecycle", "trace"], ["input", "debug"], ["call", "info"], ["call", "error"], ["io", "warn"], ["io", "error"]],
+      "refuses": [["input", "trace"], ["call", "debug"], ["io", "info"], ["frame", "error"], ["frame", "trace"]]
+    },
+    {
+      "name": "off stores no level of the class and error stores only errors",
+      "text": "{\"classes\":{\"frame\":\"error\",\"io\":\"off\",\"call\":\"off\",\"input\":\"off\",\"lifecycle\":\"off\"},\"schema\":1}",
+      "classes": { "lifecycle": "off", "input": "off", "call": "off", "io": "off", "frame": "error" },
+      "allows": [["frame", "error"]],
+      "refuses": [["frame", "warn"], ["lifecycle", "error"], ["input", "error"], ["call", "error"], ["io", "error"]]
+    },
+    {
+      "name": "white space between the tokens is allowed",
+      "text": "{\n  \"schema\": 1,\n  \"classes\": {\n    \"lifecycle\": \"info\", \"input\": \"info\", \"call\": \"info\", \"io\": \"info\", \"frame\": \"info\"\n  }\n}\n",
+      "classes": { "lifecycle": "info", "input": "info", "call": "info", "io": "info", "frame": "info" },
+      "allows": [["call", "info"]],
+      "refuses": [["call", "debug"]]
+    }
+  ],
+  "invalid": [
+    { "name": "empty text", "text": "", "error_prefix": "<file>: not JSON: " },
+    { "name": "text that is not JSON", "text": "{\"schema\":", "error_prefix": "<file>: not JSON: " },
+    { "name": "a list", "text": "[]", "error_prefix": "<file>: not JSON: " },
+    { "name": "a member other than schema and classes", "text": "{\"schema\":1,\"classes\":{},\"extra\":true}", "error": "<file>: the member extra is not one of schema, classes" },
+    { "name": "the first of several unknown members, in name order", "text": "{\"schema\":1,\"zeta\":1,\"alpha\":1}", "error": "<file>: the member alpha is not one of schema, classes" },
+    { "name": "a missing schema", "text": "{\"classes\":{}}", "error": "<file>: schema must be the number 1, found " },
+    { "name": "a schema that is text", "text": "{\"schema\":\"1\",\"classes\":{}}", "error": "<file>: schema must be the number 1, found \"1\"" },
+    { "name": "a schema that is not an integer", "text": "{\"schema\":1.5,\"classes\":{}}", "error": "<file>: schema must be the number 1, found 1.5" },
+    { "name": "another schema", "text": "{\"schema\":2,\"classes\":{}}", "error": "<file>: schema 2 is not 1" },
+    { "name": "missing classes", "text": "{\"schema\":1}", "error": "<file>: classes must be an object that names every class" },
+    { "name": "classes that is null", "text": "{\"schema\":1,\"classes\":null}", "error": "<file>: classes must be an object that names every class" },
+    { "name": "classes that is a list", "text": "{\"schema\":1,\"classes\":[]}", "error": "<file>: classes must be an object that names every class" },
+    { "name": "a class outside the contract", "text": "{\"schema\":1,\"classes\":{\"lifecycle\":\"trace\",\"input\":\"trace\",\"call\":\"trace\",\"io\":\"trace\",\"frame\":\"trace\",\"audio\":\"trace\"}}", "error": "<file>: the class audio is not one of lifecycle, input, call, io, frame" },
+    { "name": "a missing class", "text": "{\"schema\":1,\"classes\":{\"lifecycle\":\"trace\",\"input\":\"trace\",\"call\":\"trace\",\"io\":\"trace\"}}", "error": "<file>: the class frame is missing" },
+    { "name": "the first missing class, in the order of the contract", "text": "{\"schema\":1,\"classes\":{\"lifecycle\":\"trace\"}}", "error": "<file>: the class input is missing" },
+    { "name": "a level that is not text", "text": "{\"schema\":1,\"classes\":{\"lifecycle\":3,\"input\":\"trace\",\"call\":\"trace\",\"io\":\"trace\",\"frame\":\"trace\"}}", "error": "<file>: the level of the class lifecycle must be text, found 3" },
+    { "name": "a level that is null", "text": "{\"schema\":1,\"classes\":{\"lifecycle\":\"trace\",\"input\":null,\"call\":\"trace\",\"io\":\"trace\",\"frame\":\"trace\"}}", "error": "<file>: the level of the class input must be text, found null" },
+    { "name": "a level outside the six", "text": "{\"schema\":1,\"classes\":{\"lifecycle\":\"trace\",\"input\":\"trace\",\"call\":\"verbose\",\"io\":\"trace\",\"frame\":\"trace\"}}", "error": "<file>: the level \"verbose\" of the class call is not one of off, error, warn, info, debug, trace" },
+    { "name": "a level in capital letters", "text": "{\"schema\":1,\"classes\":{\"lifecycle\":\"Info\",\"input\":\"trace\",\"call\":\"trace\",\"io\":\"trace\",\"frame\":\"trace\"}}", "error": "<file>: the level \"Info\" of the class lifecycle is not one of off, error, warn, info, debug, trace" }
+  ],
+  "unchanged_by_watcher": [
+    { "name": "an empty file is a file that is being written; the watcher waits for the next notification and reports nothing", "text": "" },
+    { "name": "a file of white space only is the same", "text": " \n" }
+  ]
+}
