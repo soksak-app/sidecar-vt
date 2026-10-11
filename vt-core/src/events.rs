@@ -55,10 +55,10 @@ fn class_of(event: &str) -> Option<Class> {
                 .iter()
                 .map(|(name, declaration)| {
                     let class = declaration["class"].as_str().and_then(Class::from_name);
-                    (
-                        name.clone(),
-                        class.unwrap_or_else(|| panic!("the catalog declares no class for {name}")),
-                    )
+                    let Some(class) = class else {
+                        panic!("the catalog declares no class for {name}");
+                    };
+                    (name.clone(), class)
                 })
                 .collect()
         })

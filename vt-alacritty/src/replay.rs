@@ -103,6 +103,7 @@ fn hex_bytes(kind: &str, fields: &Value) -> Result<Vec<u8>, String> {
 }
 
 fn selection_input(fields: &Value) -> Result<Input, String> {
+    // default: a missing or non-text action is the empty text, which the last arm refuses with the value found.
     let action = fields["action"].as_str().unwrap_or_default();
     match action {
         "start" | "update" => {
@@ -140,6 +141,7 @@ fn viewport_input(fields: &Value) -> Result<Input, String> {
         (Some(lines), None) => lines
             .as_i64()
             .filter(|lines| *lines != 0)
+            // silent: a value outside i32 becomes None, and the ok_or_else below refuses it with the value found.
             .and_then(|lines| i32::try_from(lines).ok())
             .map(|lines| Input::Viewport(Viewport::Lines(lines)))
             .ok_or_else(|| {
@@ -169,6 +171,7 @@ fn color_slot<'a>(theme: &'a mut TerminalTheme, name: &str) -> Option<&'a mut [u
         "cursor" => Some(&mut theme.cursor),
         "selection" => Some(&mut theme.selection),
         _ => {
+            // silent: a name that is no number becomes None, which names no slot and which the caller refuses.
             let index: usize = name.strip_prefix("ansi")?.parse().ok()?;
             // A name that is not the canonical decimal form of an index (`ansi07`, `ansi+7`) names no slot.
             (name == format!("ansi{index}")).then_some(())?;
@@ -211,6 +214,7 @@ fn theme_input(fields: &Value) -> Result<Input, String> {
 
 /// The input of an event of the session, or none for an event that is no input.
 fn input_of(event: &Value) -> Result<Option<(u64, Input)>, String> {
+    // default: an event without a name is the empty text, which is no replay input kind and carries no sequence.
     let name = event["event"].as_str().unwrap_or_default();
     let fields = &event["fields"];
     let kind = match name {
