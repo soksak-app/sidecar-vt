@@ -31,6 +31,8 @@ pub struct ImageState {
     pub sent_at: Option<std::time::Instant>,
     /// 답을 기다리는 전송 이미지를 나른 연결의 보관소. 표면이 답 전에 이 상태를 놓으면 전송 이미지를 그곳에 맡긴다.
     pub carrier: Option<std::sync::Arc<crate::protocol::TransferStore>>,
+    /// The session whose screen this raster draws, which the event of a frame names.
+    pub session: Option<String>,
 }
 
 /// 호스트가 configure 로 정한 래스터: 이름, 세대, 래스터 번호, 픽셀 크기, 배율.
@@ -79,6 +81,7 @@ impl ImageState {
             presentation_events: Vec::new(),
             sent_at: None,
             carrier: None,
+            session: None,
         })
     }
 

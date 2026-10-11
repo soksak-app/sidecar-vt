@@ -103,9 +103,10 @@
         "reason": "string",
         "draw_us": "number",
         "raster": "string",
-        "seq": "number"
+        "size": "string",
+        "sequence": "number"
       },
-      "description": "An image frame of a surface was drawn."
+      "description": "An image frame of a surface was drawn. The line names the surface and its session. sequence is the number of the frame of the surface, size the screen in cells as <columns>x<rows> and raster the image in pixels. The hash of the screen is not stored yet: core defines no hash of a screen."
     },
     "sidecar.vt.consumed_wait": {
       "layer": "sidecar",

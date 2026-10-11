@@ -188,6 +188,21 @@ async fn a_served_surface_records_its_frames_with_reasons() {
             "every frame carries a reason and a draw time: {frame}"
         );
     }
+    // Each frame names its session, its sequence number (consecutive from 1 for a surface) and the size of its screen in
+    // cells; the screen hash waits for the definition of core (docs/features.md, S40.8).
+    for (index, frame) in frames.iter().enumerate() {
+        assert_eq!(frame["session"], "perf-session", "{frame}");
+        assert_eq!(frame["fields"]["sequence"], index as u64 + 1, "{frame}");
+        assert!(frame["fields"].get("seq").is_none(), "{frame}");
+        let size = frame["fields"]["size"]
+            .as_str()
+            .expect("the size of the screen");
+        let (cols, rows) = size.split_once('x').expect("columns x rows");
+        assert!(
+            cols.parse::<u32>().unwrap() > 0 && rows.parse::<u32>().unwrap() > 0,
+            "{size}"
+        );
+    }
     assert!(
         frames
             .iter()

@@ -1341,12 +1341,17 @@ async fn present_screen(
     log.emit_for(
         Level::Debug,
         "sidecar.vt.frame",
-        Subject::surface(surface_id),
+        Subject {
+            surface: Some(surface_id),
+            session: state.session.as_deref(),
+            cids: &[],
+        },
         &serde_json::json!({
             "reason": reason,
             "draw_us": draw_started.elapsed().as_micros() as u64,
             "raster": format!("{}x{}", state.width_px, state.height_px),
-            "seq": state.sequence + 1,
+            "size": format!("{}x{}", screen.cols, screen.rows),
+            "sequence": state.sequence + 1,
         }),
     );
     state.sequence += 1;
@@ -1956,6 +1961,7 @@ async fn open_if_configured(
     match session_port.open(shell, cols, rows).await {
         Ok(sid) => {
             *session_id = Some(sid.clone());
+            state.session = Some(sid.clone());
             if !send_state(surface_id, &sid, cols, rows, state, output_tx).await {
                 return false;
             }
@@ -2183,6 +2189,7 @@ async fn surface_task(
                         };
                         let mut new_state = new_state;
                         new_state.theme = current_theme;
+                        new_state.session = session_id.clone();
                         new_state.inline_images = image_state.as_ref()
                             .map(|previous_state| previous_state.inline_images.clone())
                             // 기본값: 앞 이미지 상태가 없으면 그 사이 보관한 인라인 그림을 이어받는다.
@@ -2963,6 +2970,7 @@ async fn surface_task(
                                 };
                                 let mut new_state = new_state;
                                 new_state.theme = current_theme;
+                        new_state.session = session_id.clone();
                                 let (cols, rows) = match calculate_terminal_size(
                                     configuration.width, configuration.height, &new_state.metrics) {
                                     Ok(size) => size,

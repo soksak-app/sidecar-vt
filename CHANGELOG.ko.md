@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S40.8: event `frame`은 모든 frame마다 표면, session, `sequence`, `size`, `raster`와 함께 저장한다. 화면의 hash는 core의 정의를 기다린다.
 - S40.6: service의 중지와 끝(signal 또는 shutdown 요청을 담은 `session_stop`, `session_end`), 끊긴 client, session의 kill(ESRCH를 포함해 신호가 닿은 결과를 담은 `kill`), 출력 ring에서 나가는 chunk와 broadcast가 제거하는 attachment(`buffer_dropped`)는 event이고, panic한 client task는 오류 기록이다.
 - S40.3: 응답 줄은 `surface`, `body` 옆에 요청의 `cids`를 싣고, 각 응답은 `ok`, `micros`, `<code>: <text>` 형태의 `error`를 가진 event `sidecar.vt.reply`다. headless session을 열지 못한 실패는 표면 이름을 가진다.
 - S40.4: 요청 event는 요청 전체를 복제하거나 직렬화하지 않는다. 줄의 글을 빌려 쓰고 1,000,000 바이트를 넘는 줄은 head와 크기로 기록하며, writer는 1,048,576 바이트를 넘는 fields를 `truncated`와 함께 head로 저장한다.
