@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S40.2: the failures of the event writer are events: each reason of a refusal is its own `log.dropped`, a failed write loses its lines and is stated as `log.dropped` after the next write that succeeds, a failed rotation step and a late flush answer are error records of the place `event writer`.
 - S40.1: the event file is schema 2: `log.open` holds `version` and `policy`, `events::read_lines` rejects a file of another schema with an error that names the file and the number found, and the golden fixtures are those of core.
 - S39: `sidecar.json` names the event catalog `events.json` in the member `events`, the catalog moved into the package `vt-alacritty`, and the `files` of the package list it, so the release carries the catalog.
 - S38: `vt-alacritty/events.json` declares the 15 events of the service (layer, class, level, required fields with their types, description), and `tests/events.test.mjs` and `vt-core/tests/serve_events.rs` check that every declared event is named by a source, every event a source names is declared, and the events of a real session satisfy the catalog.

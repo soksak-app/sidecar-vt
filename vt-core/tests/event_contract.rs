@@ -271,7 +271,23 @@ fn an_event_outside_the_namespace_of_the_service_is_refused() {
     assert!(lines
         .iter()
         .all(|line| line["event"] != "host.window.event"));
-    assert!(lines.iter().any(|line| line["event"] == "log.dropped"));
+    let dropped = lines
+        .iter()
+        .find(|line| line["event"] == "log.dropped")
+        .expect("the refused event is counted");
+    assert_eq!(
+        dropped["fields"]["reason"],
+        "an event name outside the namespace of the service"
+    );
+    let record = lines
+        .iter()
+        .find(|line| line["event"] == "sidecar.vt.record.error")
+        .expect("the refusal is an error record that names the event");
+    assert_eq!(record["fields"]["where"], "event writer");
+    assert!(record["fields"]["text"]
+        .as_str()
+        .unwrap()
+        .contains("host.window.event"));
 }
 
 #[test]
