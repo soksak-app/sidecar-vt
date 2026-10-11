@@ -1345,6 +1345,68 @@ async fn send_plain_screen(
     output_tx.send(line.to_string()).await.is_ok()
 }
 
+/// The state of the view that decorates the screen of the engine.
+struct ScreenView<'a> {
+    focused: bool,
+    preedit: &'a Option<Preedit>,
+    policy: &'a CursorPolicy,
+}
+
+/// Ends the selection gesture: the engine copies the selected text, and the event of the release (`selection.copy` or
+/// `selection.end`) is sent, after the raster that shows the end when the surface has one. Returns false when the output is
+/// closed.
+#[allow(clippy::too_many_arguments)]
+async fn end_selection(
+    surface_id: &str,
+    engine: &mut dyn Engine,
+    inputs: &mut ReplayInputs,
+    session_id: Option<&str>,
+    image_state: &mut Option<ImageState>,
+    view: ScreenView<'_>,
+    output_tx: &OutputSink,
+    log: &Events,
+    pending_selection_event: &mut Option<String>,
+) -> bool {
+    match inputs.selection_end(engine, session_id) {
+        Ok(text) => {
+            let body = match text {
+                Some(text) => {
+                    json!({"event": "selection.copy", "text": text, "userInitiated": true})
+                }
+                None => json!({"event": "selection.end", "copied": false}),
+            };
+            if let Some(state) = image_state.as_mut() {
+                let screen =
+                    decorate_screen(engine.screen(), view.focused, view.preedit, view.policy, 0);
+                if !present_screen(
+                    surface_id,
+                    &screen,
+                    state,
+                    output_tx,
+                    "selection",
+                    log,
+                    inputs.sequence,
+                )
+                .await
+                {
+                    return false;
+                }
+                *pending_selection_event =
+                    Some(json!({"surface": surface_id, "body": body}).to_string());
+                return true;
+            }
+            // A surface without a raster reports the release at once.
+            let response = json!({"surface": surface_id, "body": body});
+            output_tx.send(response.to_string()).await.is_ok()
+        }
+        Err(error) => {
+            let response =
+                json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": error}});
+            output_tx.reply(response).await.is_ok()
+        }
+    }
+}
+
 async fn present_screen(
     surface_id: &str,
     screen: &Screen,
@@ -2328,6 +2390,8 @@ async fn surface_task(
     // 그 raster가 consume될 때까지 event를 보류하여, 이전 selection이 화면에 남아 있는 동안
     // client가 copy acknowledgement를 관찰하지 못하게 한다.
     let mut pending_selection_event: Option<String> = None;
+    // A release that arrived while the event of the previous release waited, with the output that answers its request.
+    let mut deferred_selection_end: Option<OutputSink> = None;
     let mut preedit: Option<Preedit> = None;
     let mut current_theme = crate::palette::TerminalTheme::dark();
     // The first input of a session is the theme in force, so a replay starts from it and not from a default of its own.
@@ -2757,38 +2821,15 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::SelectionEnd => {
+                        // The event of the previous release waits for its raster; this release is applied after that event is
+                        // sent, so the two gestures report their ends in order.
                         if pending_selection_event.is_some() {
-                            let response = json!({"surface": surface_id, "body": {
-                                "error": "invalidParams",
-                                "reason": "selection presentation is still pending"
-                            }});
-                            if output_tx.reply(response).await.is_err() { return; }
+                            deferred_selection_end = Some(output_tx.clone());
                             continue;
                         }
-                        match inputs.selection_end(engine.as_mut(), session_id.as_deref()) {
-                            Ok(text) => {
-                                if let Some(state) = image_state.as_mut() {
-                                    let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                                    if !present_screen(&surface_id, &screen, state, &output_tx, "selection", &log, inputs.sequence).await { return; }
-                                    let body = match text {
-                                        Some(text) => json!({"event": "selection.copy", "text": text, "userInitiated": true}),
-                                        None => json!({"event": "selection.end", "copied": false}),
-                                    };
-                                    pending_selection_event = Some(json!({"surface": surface_id, "body": body}).to_string());
-                                    continue;
-                                }
-                                // text가 없는 selection은 아무것도 copy하지 않고 release를 보고한다.
-                                let body = match text {
-                                    Some(text) => json!({"event": "selection.copy", "text": text, "userInitiated": true}),
-                                    None => json!({"event": "selection.end", "copied": false}),
-                                };
-                                let response = json!({"surface": surface_id, "body": body});
-                                if output_tx.send(response.to_string()).await.is_err() { return; }
-                            }
-                            Err(error) => {
-                                let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": error}});
-                                if output_tx.reply(response).await.is_err() { return; }
-                            }
+                        let view = ScreenView { focused, preedit: &preedit, policy: &cursor_policy };
+                        if !end_selection(&surface_id, engine.as_mut(), &mut inputs, session_id.as_deref(), &mut image_state, view, &output_tx, &log, &mut pending_selection_event).await {
+                            return;
                         }
                     }
                     SurfaceCommand::Viewport { offset } => {
@@ -3276,6 +3317,12 @@ async fn surface_task(
                             if image_state.as_ref().is_none_or(|state| !state.pending_draw) {
                                 if let Some(event) = pending_selection_event.take() {
                                     if output_tx.send(event).await.is_err() { return; }
+                                    if let Some(deferred) = deferred_selection_end.take() {
+                                        let view = ScreenView { focused, preedit: &preedit, policy: &cursor_policy };
+                                        if !end_selection(&surface_id, engine.as_mut(), &mut inputs, session_id.as_deref(), &mut image_state, view, &deferred, &log, &mut pending_selection_event).await {
+                                            return;
+                                        }
+                                    }
                                 }
                             }
                         }

@@ -1171,6 +1171,52 @@ async fn test_blank_selection_release_reports_end_without_copy() {
     );
 }
 
+/// A release that arrives while the event of the previous release waits for its raster is applied after that event, not refused:
+/// two gestures in a row each report their end.
+#[tokio::test]
+async fn a_release_during_the_presentation_of_the_previous_release_waits_for_it() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let input = r#"{"surface":"s1","body":{"operation":"open","shell":"/bin/sh"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","body":{"operation":"selection.start","x":700.0,"y":300.0}}
+{"surface":"s1","body":{"operation":"selection.update","x":760.0,"y":300.0}}
+{"surface":"s1","body":{"operation":"selection.end"}}
+{"surface":"s1","body":{"operation":"selection.start","x":700.0,"y":300.0}}
+{"surface":"s1","body":{"operation":"selection.update","x":760.0,"y":300.0}}
+{"surface":"s1","body":{"operation":"selection.end"}}
+{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
+{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":2}}}}
+{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":3}}}}
+{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":4}}}}
+"#;
+    let reader = std::io::Cursor::new(input.as_bytes());
+    let mut writer = Vec::new();
+    let engine_factory = Arc::new(|| {
+        let mut engine = MockEngine::new();
+        engine.selection = None;
+        Box::new(engine) as Box<dyn Engine>
+    });
+    let calls_for_factory = calls.clone();
+    let session_port_factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "unused".to_string(),
+            calls_for_factory.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+    let _ = serve(engine_factory, reader, &mut writer, session_port_factory).await;
+    let output = String::from_utf8(writer).unwrap();
+    assert!(
+        !output.contains("selection presentation is still pending"),
+        "the second release is not refused: {output}"
+    );
+    let ends = output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|message| message["body"]["event"] == "selection.end")
+        .count();
+    assert_eq!(ends, 2, "each gesture reports its end: {output}");
+}
+
 /// Test A-7: close op는 session을 끝낸다(detach가 아니라 close를 호출한다)
 #[tokio::test]
 async fn test_a7_close_op_ends_the_session() {
