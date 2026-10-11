@@ -240,6 +240,113 @@ not json at all
     assert_eq!(unparsed["fields"]["body"]["unparsed"], "not json at all");
 }
 
+// The host answers a frame with `consumed`: the time from sending the frame to the answer is the event `consumed_wait`.
+#[tokio::test]
+async fn the_answer_of_the_host_to_a_frame_is_the_event_consumed_wait() {
+    let events = TestEvents::new();
+    serve_lines(
+        &events,
+        br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","body":{"image":{"consumed":{"name":"view","sequence":1}}}}
+"#,
+    )
+    .await;
+    let waits = events.named("sidecar.vt.consumed_wait");
+    assert_eq!(waits.len(), 1, "{waits:?}");
+    assert_eq!(waits[0]["level"], "debug");
+    assert_eq!(waits[0]["surface"], "s1");
+    assert_eq!(waits[0]["fields"]["answer"], "consumed");
+    assert!(waits[0]["fields"]["wait_us"].is_u64(), "{}", waits[0]);
+}
+
+/// Serves a connection whose output pipe holds `output_capacity` bytes. The sender writes `line` after `before_line`, and the
+/// client reads the replies after `before_reading`; the waits are the condition that the events under test report.
+async fn serve_slowly(
+    events: &TestEvents,
+    output_capacity: usize,
+    before_line: std::time::Duration,
+    line: &[u8],
+    before_reading: std::time::Duration,
+) {
+    let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
+    let port = Arc::new(TracePort);
+    let factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync> =
+        Arc::new(move || port.clone() as Arc<dyn SessionPort>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
+    let (serve_out, from_serve) = tokio::io::duplex(output_capacity);
+    let handle = events.handle();
+    let task = tokio::spawn(async move {
+        let _ = serve(engine_factory, serve_in, serve_out, factory, handle).await;
+    });
+    tokio::time::sleep(before_line).await;
+    to_serve.write_all(line).await.unwrap();
+    drop(to_serve);
+    tokio::time::sleep(before_reading).await;
+    let mut lines = BufReader::new(from_serve).lines();
+    while lines.next_line().await.unwrap().is_some() {}
+    task.await.unwrap();
+}
+
+const NOTHING: &[u8] =
+    b"{\"surface\":\"s1\",\"root\":\"/tmp\",\"body\":{\"operation\":\"nothing\"}}\n";
+
+// A connection that sends nothing for one second and then a line is the event `read_wait`: the read side waited.
+#[tokio::test]
+async fn a_read_that_waited_a_second_is_the_event_read_wait() {
+    let events = TestEvents::new();
+    serve_slowly(
+        &events,
+        64 * 1024,
+        std::time::Duration::from_millis(1200),
+        NOTHING,
+        std::time::Duration::ZERO,
+    )
+    .await;
+    let waits = events.named("sidecar.vt.read_wait");
+    assert_eq!(waits.len(), 1, "{waits:?}");
+    assert_eq!(waits[0]["level"], "info");
+    let fields = &waits[0]["fields"];
+    assert!(
+        fields["waited_us"].as_u64().unwrap() >= 1_000_000,
+        "{fields}"
+    );
+    assert!(fields["pending_polls"].as_u64().unwrap() >= 1, "{fields}");
+    assert!(
+        fields["since_last_poll_us"].is_u64() && fields["bytes"].as_u64().unwrap() > 0,
+        "{fields}"
+    );
+}
+
+// A client that does not read blocks the write of a line: a write that takes 10 milliseconds or more is the event
+// `output_blocked`.
+#[tokio::test]
+async fn a_write_to_a_client_that_does_not_read_is_the_event_output_blocked() {
+    let events = TestEvents::new();
+    // The pipe to the client holds 16 bytes, so the reply cannot be written before the client reads.
+    serve_slowly(
+        &events,
+        16,
+        std::time::Duration::ZERO,
+        NOTHING,
+        std::time::Duration::from_millis(100),
+    )
+    .await;
+    let blocked = events.named("sidecar.vt.output_blocked");
+    assert_eq!(blocked.len(), 1, "{blocked:?}");
+    assert_eq!(blocked[0]["level"], "info");
+    assert!(
+        blocked[0]["fields"]["us"].as_u64().unwrap() >= 10_000,
+        "{}",
+        blocked[0]
+    );
+    assert!(
+        blocked[0]["fields"]["bytes"].as_u64().unwrap() > 16,
+        "{}",
+        blocked[0]
+    );
+}
+
 // A request line over the bound of an event is recorded by its first 4,096 bytes and its size, and the line is neither cloned
 // nor serialized whole (core docs/spec/logging.md#bounds).
 #[tokio::test]
