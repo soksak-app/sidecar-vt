@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S41.2: `census.json`이 Rust source의 writer 진입점을 emitter로 선언하고, `make test`가 `--catalog vt-alacritty/events.json`으로 그 site를 catalog와 대조하며, catalog는 `sidecar.vt.session_open`의 field `cwd`와 `pid`를 선언한다.
 - S41.5: event `screen`이 같은 화면의 frame 기록을 담은 event 파일의 `boot`인 `segment`를 담는다.
 - S41.4: event `screen`이 `ch`와 boolean attribute를 가진 cell의 `lines` 대신 core의 screen message(frame 기록의 `sequence`, `rows`, `cols`, `cursor`, cell마다 `grapheme`, `width`, 해석된 `fg`와 `bg`, `attributes`)를 담고, raster 없이 보낸 화면도 frame 기록을 저장한다.
 - S40.10: `make test`와 CI가 `census.json`으로 core의 census를 실행하고, thread의 panic은 오류 기록이며, 모든 이유 주석은 `default:` 또는 `silent:` 형태이고, catalog는 chain `input`을 `pty_write`까지 선언한다.

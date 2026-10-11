@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S41.2: `census.json` declares the writer entrances of the Rust sources as emitters, and `make test` checks their emit sites against the catalog with `--catalog vt-alacritty/events.json`; the catalog declares the fields `cwd` and `pid` of `sidecar.vt.session_open`.
 - S41.5: the `screen` event carries `segment`, the `boot` of the event file that holds the frame record of the same screen.
 - S41.4: the `screen` event carries the screen message of core (`sequence` of its frame record, `rows`, `cols`, `cursor`, and per cell `grapheme`, `width`, resolved `fg` and `bg`, `attributes`) instead of `lines` of cells with `ch` and boolean attributes, and a screen sent without a raster stores its frame record too.
 - S40.10: `make test` and the CI run the census of core with `census.json`, a panic of a thread is an error record, every reason comment has the form `default:` or `silent:`, and the catalog declares the chain `input` down to `pty_write`.

@@ -38,10 +38,12 @@
       "level": "info",
       "fields": {
         "owner": "string",
+        "cwd": "string|null",
         "cols": "number",
-        "rows": "number"
+        "rows": "number",
+        "pid": "number|null"
       },
-      "description": "A terminal session started; the line names it in session. cwd and pid are present when known."
+      "description": "A terminal session started; the line names it in session. cwd and pid are null when unknown."
     },
     "sidecar.vt.session_exit": {
       "layer": "sidecar",

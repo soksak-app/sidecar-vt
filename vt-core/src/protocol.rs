@@ -1704,6 +1704,7 @@ impl ReplayInputs {
     }
 
     fn record(&self, session: &str, event: &'static str, fields: &Value) {
+        // events: forwarded
         self.log
             .emit_for(Level::Info, event, Subject::session(session, &[]), fields);
     }
