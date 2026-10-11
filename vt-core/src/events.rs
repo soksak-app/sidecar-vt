@@ -109,6 +109,8 @@ pub struct Options {
     pub rotate_bytes: u64,
     /// The number of earlier files that are kept (`.1` is the newest); the oldest one is removed.
     pub generations: usize,
+    /// The classes whose events are stored in detail (core docs/spec/logging.md#classes-and-policy); `log.open` states it.
+    pub policy: Vec<String>,
 }
 
 impl Options {
@@ -123,6 +125,7 @@ impl Options {
             batch_interval: Duration::from_millis(100),
             rotate_bytes: 100 << 20,
             generations: 5,
+            policy: POLICY.iter().map(|class| class.to_string()).collect(),
         }
     }
 }
@@ -262,6 +265,7 @@ pub struct EventLog {
     queued_bytes: Arc<AtomicUsize>,
     queue_bytes: usize,
     loss: Arc<Loss>,
+    policy: Vec<String>,
     path: PathBuf,
     writer: Mutex<Option<JoinHandle<()>>>,
 }
@@ -324,7 +328,7 @@ impl EventLog {
                 "role": ROLE,
                 "boot": options.boot,
                 "version": env!("CARGO_PKG_VERSION"),
-                "policy": POLICY,
+                "policy": options.policy,
             }))
             .map_err(|e| format!("log.open: {e}"))?,
         );
@@ -358,9 +362,15 @@ impl EventLog {
             queued_bytes,
             queue_bytes: options.queue_bytes,
             loss,
+            policy: options.policy,
             path,
             writer: Mutex::new(Some(writer)),
         })
+    }
+
+    /// Whether the policy stores the events of `class`: one branch, so a producer checks it before it builds fields.
+    pub fn enabled(&self, class: &str) -> bool {
+        self.policy.iter().any(|stored| stored == class)
     }
 
     /// The file this writer writes.
@@ -897,12 +907,22 @@ pub fn read_lines(path: &Path) -> Result<Vec<serde_json::Value>, String> {
 /// bytes that are not) and the same bytes in hexadecimal. An event holds every byte, because a defect of the input is
 /// located from what was written and read.
 pub fn bytes_fields(data: &[u8]) -> serde_json::Value {
-    let hex: String = data.iter().map(|byte| format!("{byte:02x}")).collect();
     json!({
         "bytes": data.len(),
         "text": String::from_utf8_lossy(data),
-        "hex": hex,
+        "hex": hex(data),
     })
+}
+
+/// The bytes in lowercase hexadecimal, built in one allocation with a table of the sixteen digits.
+fn hex(data: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut text = Vec::with_capacity(data.len() * 2);
+    for byte in data {
+        text.push(DIGITS[usize::from(byte >> 4)]);
+        text.push(DIGITS[usize::from(byte & 0x0f)]);
+    }
+    String::from_utf8(text).expect("hexadecimal digits are ASCII")
 }
 
 /// A writer in a folder of its own for the tests of this crate; the folder is removed when the value is dropped.
@@ -923,8 +943,14 @@ pub mod test_support {
 
     impl TestEvents {
         pub fn new() -> Self {
+            Self::with_policy(&POLICY)
+        }
+
+        /// A writer whose policy stores only the listed classes.
+        pub fn with_policy(policy: &[&str]) -> Self {
             let directory = tempfile::tempdir().expect("create the folder of the events");
             let mut options = Options::service(directory.path().join("logs"), "test".to_string());
+            options.policy = policy.iter().map(|class| class.to_string()).collect();
             options.batch_interval = Duration::from_millis(20);
             let handle = Arc::new(EventLog::start(options).expect("start the writer"));
             Self {

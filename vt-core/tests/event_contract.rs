@@ -31,13 +31,12 @@ fn directory(name: &str) -> PathBuf {
 
 fn options(directory: &Path) -> Options {
     Options {
-        directory: directory.to_path_buf(),
-        boot: "b1".into(),
         queue_events: 64,
         queue_bytes: 1 << 20,
         batch_interval: Duration::from_millis(20),
         rotate_bytes: 1 << 20,
         generations: 2,
+        ..Options::service(directory.to_path_buf(), "b1".into())
     }
 }
 

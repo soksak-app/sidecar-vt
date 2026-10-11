@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S40.5: the hex of `pty_write` and `pty_read` is built with a lookup table (8211 allocations for a chunk of 8192 bytes before, at most 32 now), and `pty_read` is built and queued only when the policy stores the class `io`; `log.open` states the policy.
 - S40.2: the failures of the event writer are events: each reason of a refusal is its own `log.dropped`, a failed write loses its lines and is stated as `log.dropped` after the next write that succeeds, a failed rotation step and a late flush answer are error records of the place `event writer`.
 - S40.1: the event file is schema 2: `log.open` holds `version` and `policy`, `events::read_lines` rejects a file of another schema with an error that names the file and the number found, and the golden fixtures are those of core.
 - S39: `sidecar.json` names the event catalog `events.json` in the member `events`, the catalog moved into the package `vt-alacritty`, and the `files` of the package list it, so the release carries the catalog.

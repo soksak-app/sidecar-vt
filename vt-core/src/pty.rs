@@ -491,14 +491,16 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
                     *next += 1;
                     sequence
                 };
-                let mut fields = bytes_fields(&data);
-                fields["sequence"] = serde_json::json!(sequence);
-                session.log.emit_for(
-                    Level::Debug,
-                    "sidecar.vt.pty_read",
-                    Subject::session(&session.id, &[]),
-                    &fields,
-                );
+                if session.log.enabled("io") {
+                    let mut fields = bytes_fields(&data);
+                    fields["sequence"] = serde_json::json!(sequence);
+                    session.log.emit_for(
+                        Level::Debug,
+                        "sidecar.vt.pty_read",
+                        Subject::session(&session.id, &[]),
+                        &fields,
+                    );
+                }
                 {
                     let mut output = session.output.lock().unwrap();
                     output.push_back((sequence, data.clone()));
@@ -676,6 +678,44 @@ mod tests {
         assert!(named("sidecar.vt.session_open")
             .iter()
             .any(|record| record["session"] == session_id));
+    }
+
+    #[tokio::test]
+    async fn the_read_of_the_pty_is_not_recorded_when_the_policy_leaves_out_the_class_io() {
+        let _test_lock = crate::platform::pty::native_pty_test_lock();
+        let events =
+            crate::events::test_support::TestEvents::with_policy(&["lifecycle", "input", "call"]);
+        let service = PtyService::new(events.handle());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (session_id, _) = service
+            .open(
+                "/bin/sh",
+                &["-c".into(), "printf policy".into()],
+                None,
+                80,
+                24,
+                tx,
+            )
+            .expect("PTY setup failed; environmental PTY errors must fail this test");
+        let mut seen = String::new();
+        while !seen.contains("policy") {
+            seen.push_str(&String::from_utf8_lossy(&next_output(&mut rx).await));
+        }
+        service.close(&session_id).unwrap();
+        let lines = events.lines();
+        assert_eq!(
+            lines[0]["fields"]["policy"],
+            serde_json::json!(["lifecycle", "input", "call"])
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| line["event"] != "sidecar.vt.pty_read"),
+            "the class io is not stored: {lines:?}"
+        );
+        assert!(lines
+            .iter()
+            .any(|line| line["event"] == "sidecar.vt.session_open"));
     }
 
     #[tokio::test]
