@@ -2,5 +2,9 @@
   "executable": "build/soksak-vt-alacritty",
   "protocol": 1,
   "transport": "persistent",
-  "events": "events.json"
+  "events": "events.json",
+  "replay": {
+    "role": "vt",
+    "executable": "build/soksak-vt-replay"
+  }
 }

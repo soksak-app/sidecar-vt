@@ -10,12 +10,17 @@ publish = false
 name = "soksak-vt-alacritty"
 path = "src/main.rs"
 
+[[bin]]
+name = "soksak-vt-replay"
+path = "src/replay.rs"
+
 [features]
 # 진단 build 의 engine 입력 기록을 vt-core 에서 켠다.
 diagnostics = ["soksak-sidecar-vt-core/diagnostics"]
 
 [dependencies]
 alacritty_terminal = "0.26"
+serde_json = "1"
 soksak-sidecar-vt-core = { path = "../vt-core" }
 tokio = { version = "1", features = ["io-util", "rt-multi-thread", "time", "net", "process", "sync", "macros", "io-std"] }
 

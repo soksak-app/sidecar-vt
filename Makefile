@@ -21,6 +21,7 @@ build:
 	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo build $(CARGO_PROFILE) -p soksak-sidecar-vt-alacritty
 	mkdir -p vt-alacritty/build
 	cp target/$(PROFILE)/soksak-vt-alacritty vt-alacritty/build/soksak-vt-alacritty
+	cp target/$(PROFILE)/soksak-vt-replay vt-alacritty/build/soksak-vt-replay
 
 release: build
 	@test -n "$(OUT)" || { echo "make release OUT=<folder>" >&2; exit 2; }
