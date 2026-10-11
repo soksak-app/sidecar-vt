@@ -342,6 +342,7 @@ pub struct EventLog {
     loss: Arc<Loss>,
     gate: Arc<Gate>,
     path: PathBuf,
+    boot: String,
     /// The watch of the policy file; it ends before the writer does.
     watcher: Mutex<Option<RecommendedWatcher>>,
     writer: Mutex<Option<JoinHandle<()>>>,
@@ -459,6 +460,7 @@ impl EventLog {
             loss,
             gate,
             path,
+            boot: options.boot.clone(),
             watcher: Mutex::new(watcher),
             writer: Mutex::new(Some(writer)),
         })
@@ -478,6 +480,12 @@ impl EventLog {
     /// The file this writer writes.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The identifier of the run in the name of the file, which is the replay segment of its frame records (core
+    /// docs/spec/replay.md#segments).
+    pub fn boot(&self) -> &str {
+        &self.boot
     }
 
     /// Queues an event that concerns no object. See [`EventLog::emit_for`].

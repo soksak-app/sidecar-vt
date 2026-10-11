@@ -743,6 +743,8 @@ async fn the_screen_event_is_the_screen_of_the_frame_record_of_its_sequence() {
             soksak_sidecar_vt_core::screen_hash::screen_hash_json(screen).unwrap(),
             "the hash of the message is the hash of the frame record"
         );
+        // The segment is the boot of the event file that holds the frame record (core docs/spec/replay.md#segments).
+        assert_eq!(screen["segment"], "test", "{screen}");
     }
 }
 

@@ -6,6 +6,7 @@
       "message": {
         "event": "screen",
         "sequence": 2,
+        "segment": "b1",
         "rows": 1,
         "cols": 1,
         "cursor": {
@@ -31,6 +32,7 @@
       "message": {
         "event": "screen",
         "sequence": 3,
+        "segment": "b1",
         "rows": 1,
         "cols": 3,
         "cursor": {
@@ -73,6 +75,7 @@
       "message": {
         "event": "screen",
         "sequence": 4,
+        "segment": "b1",
         "rows": 1,
         "cols": 3,
         "cursor": {
@@ -112,6 +115,7 @@
       "message": {
         "event": "screen",
         "sequence": 5,
+        "segment": "b1",
         "rows": 2,
         "cols": 2,
         "cursor": {
@@ -158,6 +162,7 @@
       "message": {
         "event": "screen",
         "sequence": 6,
+        "segment": "b1",
         "rows": 2,
         "cols": 3,
         "cursor": {
@@ -218,6 +223,7 @@
       "message": {
         "event": "screen",
         "sequence": 7,
+        "segment": "b1",
         "rows": 1,
         "cols": 3,
         "cursor": {
@@ -257,6 +263,7 @@
       "message": {
         "event": "screen",
         "sequence": 8,
+        "segment": "b1",
         "rows": 1,
         "cols": 3,
         "cursor": {
@@ -296,6 +303,7 @@
       "name": "sequence missing",
       "message": {
         "event": "screen",
+        "segment": "b1",
         "rows": 1,
         "cols": 3,
         "cursor": {
@@ -337,6 +345,7 @@
       "message": {
         "event": "screen",
         "sequence": 0,
+        "segment": "b1",
         "rows": 1,
         "cols": 3,
         "cursor": {
@@ -374,10 +383,52 @@
       "error": "screen message: sequence must be an integer from 1, found 0"
     },
     {
+      "name": "segment missing",
+      "message": {
+        "event": "screen",
+        "sequence": 3,
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false,
+          "shape": "block",
+          "blinking": false
+        },
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0,
+            "link": "https://example.test/"
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "error": "screen message: segment must be a non-empty string, found undefined"
+    },
+    {
       "name": "event is not screen",
       "message": {
         "event": "state",
         "sequence": 3,
+        "segment": "b1",
         "rows": 1,
         "cols": 3,
         "cursor": {
@@ -419,6 +470,7 @@
       "message": {
         "event": "screen",
         "sequence": 3,
+        "segment": "b1",
         "rows": 1,
         "cols": 3,
         "cursor": {
@@ -459,6 +511,7 @@
       "message": {
         "event": "screen",
         "sequence": 3,
+        "segment": "b1",
         "rows": 1,
         "cols": 3,
         "cursor": {
@@ -499,6 +552,7 @@
       "message": {
         "event": "screen",
         "sequence": 3,
+        "segment": "b1",
         "rows": 1,
         "cols": 3,
         "cursor": {
@@ -539,6 +593,7 @@
       "message": {
         "event": "screen",
         "sequence": 3,
+        "segment": "b1",
         "rows": 1,
         "cols": 3,
         "cells": [
@@ -573,6 +628,7 @@
       "message": {
         "event": "screen",
         "sequence": 3,
+        "segment": "b1",
         "rows": 1,
         "cols": 3,
         "cursor": {
@@ -590,6 +646,7 @@
       "message": {
         "event": "screen",
         "sequence": 3,
+        "segment": "b1",
         "rows": 1,
         "cols": 3,
         "cursor": {

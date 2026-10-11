@@ -87,10 +87,14 @@ fn the_message_for_the_screen_of_each_vector_has_its_members_and_its_hash() {
         let Some(screen) = screen_of(expected) else {
             continue;
         };
-        let message = screen_message(expected["sequence"].as_u64().unwrap(), &screen)
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let message = screen_message(
+            expected["segment"].as_str().unwrap(),
+            expected["sequence"].as_u64().unwrap(),
+            &screen,
+        )
+        .unwrap_or_else(|error| panic!("{name}: {error}"));
         assert_eq!(message["event"], "screen", "{name}");
-        for member in ["sequence", "rows", "cols"] {
+        for member in ["sequence", "segment", "rows", "cols"] {
             assert_eq!(message[member], expected[member], "{name}: {member}");
         }
         for member in ["visible", "row", "col"] {
@@ -128,6 +132,6 @@ fn the_message_for_the_screen_of_each_vector_has_its_members_and_its_hash() {
 fn a_screen_that_the_hash_refuses_gets_no_message() {
     let mut screen = screen_of(&golden("screen-message.json")["vectors"][1]["message"]).unwrap();
     screen.cursor.row = 5;
-    let error = screen_message(3, &screen).unwrap_err();
+    let error = screen_message("b1", 3, &screen).unwrap_err();
     assert!(error.contains("outside the screen"), "{error}");
 }
