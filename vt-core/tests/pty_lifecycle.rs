@@ -480,7 +480,10 @@ fn a_process_group_of_only_zombies_is_already_terminated() {
     );
     let result = soksak_sidecar_vt_core::platform::pty::kill_process_group(Some(group));
     child.wait().expect("the shell must be reaped");
-    assert_eq!(result, Ok(()));
+    assert_eq!(
+        result,
+        Ok(soksak_sidecar_vt_core::platform::pty::KillResult::Ending)
+    );
 }
 
 #[test]
@@ -578,5 +581,9 @@ fn a_process_group_whose_members_are_exiting_is_already_terminated() {
     let result = soksak_sidecar_vt_core::platform::pty::kill_process_group(Some(group));
     drop(master);
     child.wait().expect("the shell must be reaped");
-    assert_eq!(result, Ok(()), "members while exiting: {exiting:?}");
+    assert_eq!(
+        result,
+        Ok(soksak_sidecar_vt_core::platform::pty::KillResult::Ending),
+        "members while exiting: {exiting:?}"
+    );
 }

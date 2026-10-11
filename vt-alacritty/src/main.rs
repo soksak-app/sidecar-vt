@@ -3,7 +3,7 @@ pub mod engine;
 use engine::AlacrittyEngine;
 use soksak_sidecar_vt_core::arguments;
 use soksak_sidecar_vt_core::events::EventLog;
-use soksak_sidecar_vt_core::service::{canonical_config_dir, serve_persistent};
+use soksak_sidecar_vt_core::service::{canonical_config_dir, record_end, serve_persistent};
 use soksak_sidecar_vt_core::Engine;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,6 +24,7 @@ async fn main() -> std::io::Result<()> {
     let served = serve_persistent(&config_dir, engine_factory, events.clone())
         .await
         .map_err(std::io::Error::other);
+    record_end(&events, &served);
     // Every exit path puts the queued events on disk before the process ends.
     events
         .flush(FLUSH_DEADLINE)

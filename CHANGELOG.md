@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S40.6: the stop and the end of the service (`session_stop` with the signal or the shutdown request, `session_end`), a client that disconnects, the kill of a session (`kill` with what the signal reached, ESRCH included), the chunk that leaves the output ring and the attachment that the broadcast removes (`buffer_dropped`) are events, and a client task that panicked is an error record.
 - S40.3: the reply lines carry the `cids` of their request beside `surface` and `body`, and each reply is the event `sidecar.vt.reply` with `ok`, `micros` and `error` as `<code>: <text>`; the failure to open a headless session names its surface.
 - S40.4: the request event does not clone or serialize the whole request: it borrows the text of the line and records a line over 1,000,000 bytes by its head and size, and the writer stores fields over 1,048,576 bytes by their head with `truncated`.
 - S40.5: the hex of `pty_write` and `pty_read` is built with a lookup table (8211 allocations for a chunk of 8192 bytes before, at most 32 now), and `pty_read` is built and queued only when the policy stores the class `io`; `log.open` states the policy.

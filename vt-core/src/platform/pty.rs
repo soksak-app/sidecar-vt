@@ -52,17 +52,39 @@ pub fn pending_input(
     }
 }
 
+/// What a signal to a process or a group reached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KillResult {
+    /// The signal was sent.
+    Sent,
+    /// The operating system answered ESRCH: nothing with that identifier exists any more.
+    NoSuchProcess,
+    /// The operating system answered EPERM because every member of the group is ending and waits to be reaped.
+    Ending,
+}
+
+impl KillResult {
+    /// The value of the field `result` of the event `sidecar.vt.kill`.
+    pub fn name(self) -> &'static str {
+        match self {
+            KillResult::Sent => "sent",
+            KillResult::NoSuchProcess => "ESRCH",
+            KillResult::Ending => "EPERM: the members are ending",
+        }
+    }
+}
+
 /// platform이 PTY process group을 노출하면 그 group을 종료한다.
 pub fn kill_process_group(
     #[cfg(unix)] group: Option<i32>,
     #[cfg(not(unix))] _group: Option<i32>,
-) -> Result<(), String> {
+) -> Result<KillResult, String> {
     #[cfg(unix)]
     {
         let group = group.ok_or("PTY process group is unavailable")?;
         match kill(Pid::from_raw(-group), Signal::SIGKILL) {
-            Ok(()) => Ok(()),
-            Err(nix::errno::Errno::ESRCH) => Ok(()),
+            Ok(()) => Ok(KillResult::Sent),
+            Err(nix::errno::Errno::ESRCH) => Ok(KillResult::NoSuchProcess),
             #[cfg(target_os = "macos")]
             Err(nix::errno::Errno::EPERM) => {
                 // macOS 는 구성원이 모두 exit() 을 처리하는 중이거나 회수를 기다리는(좀비) 그룹의 신호에
@@ -72,7 +94,7 @@ pub fn kill_process_group(
                 let members = crate::platform::darwin::process_group::members(group)
                     .map_err(|error| format!("kill PTY process group {group}: EPERM; {error}"))?;
                 if members.iter().all(|member| member.ended()) {
-                    return Ok(());
+                    return Ok(KillResult::Ending);
                 }
                 Err(format!(
                     "kill PTY process group {group}: EPERM with members {members:?}"
@@ -83,7 +105,7 @@ pub fn kill_process_group(
     }
     #[cfg(not(unix))]
     {
-        Ok(())
+        Ok(KillResult::NoSuchProcess)
     }
 }
 

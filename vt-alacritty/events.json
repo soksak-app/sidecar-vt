@@ -174,6 +174,61 @@
         "error?": "string"
       },
       "description": "A reply line that the service sent to the request of a client, in the result form of core: ok, the microseconds since the request was read, and the error as <code>: <text> for a failed request. The line carries the cids of the request."
+    },
+    "sidecar.vt.session_stop": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "reason": "string",
+        "clients": "number"
+      },
+      "description": "The service stops. reason is SIGTERM, SIGINT or shutdown (the shutdown request of the last client), and clients is the number of client tasks the service still holds."
+    },
+    "sidecar.vt.session_end": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "ok": "boolean",
+        "error?": "string"
+      },
+      "description": "The serve loop returned and the queued events are flushed next. error is present when the service ended with an error."
+    },
+    "sidecar.vt.client_disconnect": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "owner": "string",
+        "ok": "boolean",
+        "error?": "string"
+      },
+      "description": "The connection of a client ended. error is present when the connection ended with an error."
+    },
+    "sidecar.vt.kill": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "target": "string",
+        "id": "number",
+        "signal": "string",
+        "result": "string"
+      },
+      "description": "Closing a session sent a signal to its process group or its child. target is process group or child, id is the group or the pid, and result is sent, ESRCH (nothing with that identifier exists any more) or EPERM when the members are ending."
+    },
+    "sidecar.vt.buffer_dropped": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "warn",
+      "fields": {
+        "buffer": "string",
+        "count": "number",
+        "bytes": "number",
+        "reason": "string"
+      },
+      "description": "A buffer of a session refused or removed data. buffer is output ring (the oldest chunk left the ring that serves a client that attaches later) or broadcast (an attachment whose receiver was closed was removed)."
     }
   }
 }

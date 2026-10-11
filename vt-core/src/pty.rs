@@ -6,7 +6,7 @@
 
 use crate::events::{bytes_fields, Events, Level, Subject};
 use crate::platform::pty::{
-    kill_process_group, pending_input, process_group_leader, wait_for_exit,
+    kill_process_group, pending_input, process_group_leader, wait_for_exit, KillResult,
 };
 use crate::protocol::DaemonEvent;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -49,6 +49,7 @@ pub fn resolve_directory(request: &str) -> Result<String, String> {
     Ok(request.to_string())
 }
 
+/// The chunks of output that a session keeps for a client that attaches later; the oldest chunk leaves when it is exceeded.
 const RETAINED_OUTPUT: usize = 10_000;
 
 /// 한 시점의 PTY 전송 상태 측정. pending 은 마스터가 쓰고 자식이 아직 읽지 않은 입력 바이트 수이고,
@@ -84,6 +85,8 @@ struct Session {
     closed: Mutex<bool>,
     reader: Mutex<Option<thread::JoinHandle<()>>>,
     reaper: Mutex<Option<thread::JoinHandle<()>>>,
+    /// The chunks of output that the ring keeps.
+    retained_output: usize,
     /// The writer of the service that opened the session, which records each write, each read and the end of the child.
     log: Events,
 }
@@ -91,6 +94,7 @@ struct Session {
 #[derive(Clone)]
 pub struct PtyService {
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
+    retained_output: usize,
     log: Events,
 }
 
@@ -120,8 +124,15 @@ impl PtyService {
     pub fn new(log: Events) -> Self {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            retained_output: RETAINED_OUTPUT,
             log,
         }
+    }
+
+    /// The service whose sessions keep `chunks` chunks of output in the ring.
+    pub fn with_retained_output(mut self, chunks: usize) -> Self {
+        self.retained_output = chunks;
+        self
     }
 
     pub fn open(
@@ -210,11 +221,12 @@ impl PtyService {
             child_reaped: Condvar::new(),
             next_sequence: Mutex::new(0),
             written_output: Mutex::new(0),
-            output: Mutex::new(VecDeque::with_capacity(RETAINED_OUTPUT)),
+            output: Mutex::new(VecDeque::with_capacity(self.retained_output)),
             attachments: Mutex::new(HashMap::new()),
             closed: Mutex::new(false),
             reader: Mutex::new(None),
             reaper: Mutex::new(None),
+            retained_output: self.retained_output,
             log: self.log.clone(),
         });
         session
@@ -392,13 +404,17 @@ impl PtyService {
         session.master.lock().unwrap().take();
         let kill_result = {
             let process_group_result = kill_process_group(session.process_group);
+            if let (Ok(result), Some(group)) = (&process_group_result, session.process_group) {
+                record_kill(&session, "process group", group, *result);
+            }
             // process group 신호가 자식에 닿지 않았을 수 있으므로 자식에 pid 로 SIGKILL 을 보내고, 회수 thread 가 자식을
             // 회수한 뒤에 돌아온다. 회수 thread 는 child lock 을 쥐지 않고 기다리고 이 lock 을 쥔 채 회수하므로,
             // reaped 가 None 인 동안 이 lock 을 쥐고 보내는 신호는 다른 프로세스에 가지 않는다.
             let child = session.child.lock().unwrap();
             let child_result = match &child.reaped {
                 Some(result) => result.clone(),
-                None => kill_child(child.child.as_ref()).and_then(|()| {
+                None => kill_child(child.child.as_ref()).and_then(|(pid, result)| {
+                    record_kill(&session, "child", pid, result);
                     let child = session
                         .child_reaped
                         .wait_while(child, |child| child.reaped.is_none())
@@ -412,7 +428,7 @@ impl PtyService {
             match (process_group_result, child_result) {
                 (Err(group_error), _) => Err(group_error),
                 (_, Err(child_error)) => Err(child_error),
-                (Ok(()), Ok(())) => Ok(()),
+                (Ok(_), Ok(())) => Ok(()),
             }
         };
         let reader = session.reader.lock().unwrap().take();
@@ -504,8 +520,20 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
                 {
                     let mut output = session.output.lock().unwrap();
                     output.push_back((sequence, data.clone()));
-                    while output.len() > RETAINED_OUTPUT {
-                        output.pop_front();
+                    while output.len() > session.retained_output {
+                        if let Some((_, left)) = output.pop_front() {
+                            session.log.emit_for(
+                                Level::Warn,
+                                "sidecar.vt.buffer_dropped",
+                                Subject::session(&session.id, &[]),
+                                &serde_json::json!({
+                                    "buffer": "output ring",
+                                    "count": 1,
+                                    "bytes": left.len(),
+                                    "reason": format!("the ring holds {} chunks", session.retained_output),
+                                }),
+                            );
+                        }
                     }
                 }
                 broadcast(
@@ -539,8 +567,8 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
 }
 
 /// session 의 자식에 SIGKILL 을 보낸다. 부르는 쪽은 child lock 을 쥐고 회수 thread 가 자식을 아직 회수하지 않았음을
-/// 확인했다.
-fn kill_child(child: &(dyn Child + Send)) -> Result<(), String> {
+/// 확인했다. 돌려주는 것은 신호가 닿은 결과와 자식의 pid 이다.
+fn kill_child(child: &(dyn Child + Send)) -> Result<(i32, KillResult), String> {
     let pid = child
         .process_id()
         .ok_or_else(|| "PTY child has no process id".to_string())?;
@@ -549,8 +577,9 @@ fn kill_child(child: &(dyn Child + Send)) -> Result<(), String> {
         nix::unistd::Pid::from_raw(pid),
         nix::sys::signal::Signal::SIGKILL,
     ) {
+        Ok(()) => Ok((pid, KillResult::Sent)),
         // ESRCH: 자식이 이미 끝나 회수를 기다린다. 회수 thread 가 회수한다.
-        Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
+        Err(nix::errno::Errno::ESRCH) => Ok((pid, KillResult::NoSuchProcess)),
         Err(error) => Err(format!("kill PTY child {pid}: {error}")),
     }
 }
@@ -600,12 +629,43 @@ fn reap_child(session: Arc<Session>) {
     );
 }
 
+/// Records the SIGKILL that closing a session sent to its process group or its child, and what it reached.
+fn record_kill(session: &Session, target: &str, id: i32, result: KillResult) {
+    session.log.emit_for(
+        Level::Info,
+        "sidecar.vt.kill",
+        Subject::session(&session.id, &[]),
+        &serde_json::json!({
+            "target": target,
+            "id": id,
+            "signal": "SIGKILL",
+            "result": result.name(),
+        }),
+    );
+}
+
 fn broadcast(session: &Session, event: DaemonEvent) {
-    session
-        .attachments
-        .lock()
-        .unwrap()
-        .retain(|_, sender| sender.send(event.clone()).is_ok());
+    let mut attachments = session.attachments.lock().unwrap();
+    let before = attachments.len();
+    attachments.retain(|_, sender| sender.send(event.clone()).is_ok());
+    let removed = before - attachments.len();
+    if removed > 0 {
+        let bytes = match &event {
+            DaemonEvent::Output { data, .. } => data.len(),
+            _ => 0,
+        };
+        session.log.emit_for(
+            Level::Warn,
+            "sidecar.vt.buffer_dropped",
+            Subject::session(&session.id, &[]),
+            &serde_json::json!({
+                "buffer": "broadcast",
+                "count": removed,
+                "bytes": bytes * removed,
+                "reason": "the receiver of the attachment was closed",
+            }),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -716,6 +776,128 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line["event"] == "sidecar.vt.session_open"));
+    }
+
+    /// The events of `name` in the file of `events`.
+    fn named(
+        events: &crate::events::test_support::TestEvents,
+        name: &str,
+    ) -> Vec<serde_json::Value> {
+        events
+            .lines()
+            .into_iter()
+            .filter(|line| line["event"] == name)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn closing_a_running_session_records_the_kill_of_its_process_group() {
+        let _test_lock = crate::platform::pty::native_pty_test_lock();
+        let events = crate::events::test_support::TestEvents::new();
+        let service = PtyService::new(events.handle());
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (session_id, _) = service
+            .open("/bin/sh", &["-c".into(), "cat".into()], None, 80, 24, tx)
+            .expect("PTY setup failed; environmental PTY errors must fail this test");
+        service.close(&session_id).unwrap();
+        let kills = named(&events, "sidecar.vt.kill");
+        let group = kills
+            .iter()
+            .find(|kill| kill["fields"]["target"] == "process group")
+            .unwrap_or_else(|| panic!("the kill of the group is not recorded: {kills:?}"));
+        assert_eq!(group["session"], session_id);
+        assert_eq!(group["fields"]["signal"], "SIGKILL");
+        assert_eq!(group["fields"]["result"], "sent");
+        assert!(group["fields"]["id"].as_i64().unwrap() > 0);
+    }
+
+    #[tokio::test]
+    async fn a_kill_of_a_group_that_ended_is_recorded_as_esrch() {
+        let _test_lock = crate::platform::pty::native_pty_test_lock();
+        let events = crate::events::test_support::TestEvents::new();
+        let service = PtyService::new(events.handle());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (session_id, _) = service
+            .open("/bin/sh", &["-c".into(), "true".into()], None, 80, 24, tx)
+            .expect("PTY setup failed; environmental PTY errors must fail this test");
+        // The exit event follows the reaping of the child, so the group no longer exists.
+        while !matches!(next_event(&mut rx).await, DaemonEvent::Exit { .. }) {}
+        service.close(&session_id).unwrap();
+        let kills = named(&events, "sidecar.vt.kill");
+        let group = kills
+            .iter()
+            .find(|kill| kill["fields"]["target"] == "process group")
+            .unwrap_or_else(|| panic!("the kill of the group is not recorded: {kills:?}"));
+        assert_eq!(group["fields"]["result"], "ESRCH");
+    }
+
+    #[tokio::test]
+    async fn output_that_leaves_the_ring_is_counted_as_a_dropped_buffer() {
+        let _test_lock = crate::platform::pty::native_pty_test_lock();
+        let events = crate::events::test_support::TestEvents::new();
+        let service = PtyService::new(events.handle()).with_retained_output(2);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (session_id, _) = service
+            .open("/bin/sh", &["-c".into(), "cat".into()], None, 80, 24, tx)
+            .expect("PTY setup failed; environmental PTY errors must fail this test");
+        for word in ["one", "two", "three", "four"] {
+            service
+                .write(&session_id, format!("{word}\n").as_bytes(), &[])
+                .unwrap();
+            let mut seen = String::new();
+            // The terminal echoes the line and cat prints it again: the word is read twice.
+            while seen.matches(word).count() < 2 {
+                seen.push_str(&String::from_utf8_lossy(&next_output(&mut rx).await));
+            }
+        }
+        service.close(&session_id).unwrap();
+        let dropped = named(&events, "sidecar.vt.buffer_dropped");
+        assert!(!dropped.is_empty(), "no chunk left the ring of 2 chunks");
+        for drop in &dropped {
+            assert_eq!(drop["level"], "warn");
+            assert_eq!(drop["session"], session_id);
+            assert_eq!(drop["fields"]["buffer"], "output ring");
+            assert_eq!(drop["fields"]["count"], 1);
+            assert!(drop["fields"]["bytes"].as_u64().unwrap() > 0);
+            assert_eq!(drop["fields"]["reason"], "the ring holds 2 chunks");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_attachment_that_nobody_reads_is_removed_and_counted_as_a_dropped_buffer() {
+        let _test_lock = crate::platform::pty::native_pty_test_lock();
+        let events = crate::events::test_support::TestEvents::new();
+        let service = PtyService::new(events.handle());
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (session_id, _) = service
+            .open("/bin/sh", &["-c".into(), "cat".into()], None, 80, 24, tx)
+            .expect("PTY setup failed; environmental PTY errors must fail this test");
+        drop(rx);
+        service.write(&session_id, b"gone\n", &[]).unwrap();
+        // The reader thread stores the event when it broadcasts the echo to the attachment whose receiver is gone. No
+        // notification reaches this test from that thread, so it asks the file again after a short pause.
+        let dropped = timeout(STALL, async {
+            loop {
+                let found = named(&events, "sidecar.vt.buffer_dropped");
+                if !found.is_empty() {
+                    return found;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the dropped attachment was not recorded");
+        service.close(&session_id).unwrap();
+        let drop = &dropped[0];
+        assert_eq!(drop["level"], "warn");
+        assert_eq!(drop["session"], session_id);
+        assert_eq!(drop["fields"]["buffer"], "broadcast");
+        assert_eq!(drop["fields"]["count"], 1);
+        assert!(drop["fields"]["bytes"].as_u64().unwrap() > 0);
+        assert_eq!(
+            drop["fields"]["reason"],
+            "the receiver of the attachment was closed"
+        );
     }
 
     #[tokio::test]
@@ -874,6 +1056,7 @@ mod tests {
             closed: Mutex::new(false),
             reader: Mutex::new(None),
             reaper: Mutex::new(None),
+            retained_output: RETAINED_OUTPUT,
             log: crate::events::test_support::TestEvents::new().handle(),
         });
         service

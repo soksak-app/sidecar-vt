@@ -309,8 +309,14 @@ pub async fn serve_persistent(
     let mut had_client = false;
     loop {
         tokio::select! {
-            _ = terminate.recv() => return Ok(()),
-            _ = interrupt.recv() => return Ok(()),
+            _ = terminate.recv() => {
+                record_stop(&log, "SIGTERM", clients.len());
+                return Ok(());
+            }
+            _ = interrupt.recv() => {
+                record_stop(&log, "SIGINT", clients.len());
+                return Ok(());
+            }
             accepted = listener.accept() => {
                 let (stream, _) = accepted.map_err(|e| format!("accept service client: {e}"))?;
                 had_client = true;
@@ -329,6 +335,7 @@ pub async fn serve_persistent(
                     &serde_json::json!({"owner": client}),
                 );
                 let owner = client.clone();
+                let disconnected = client.clone();
                 let factory_service = Arc::clone(&service);
                 let factory = Arc::new(move || {
                     Arc::new(LocalSessionPort::new_with_owner(
@@ -339,7 +346,7 @@ pub async fn serve_persistent(
                 let close_service = Arc::clone(&service);
                 let close_client = client.clone();
                 let close_owner = Arc::new(move || close_service.close_owner(&close_client));
-                if let Err(error) = serve_with_registry(
+                let ended = serve_with_registry(
                     engine_factory,
                     reader,
                     writer,
@@ -351,20 +358,53 @@ pub async fn serve_persistent(
                         log: log.clone(),
                     },
                 )
-                .await
-                {
+                .await;
+                let mut fields = serde_json::json!({"owner": disconnected, "ok": ended.is_ok()});
+                if let Err(error) = &ended {
+                    fields["error"] = serde_json::json!(error.to_string());
+                }
+                log.emit(Level::Info, "sidecar.vt.client_disconnect", &fields);
+                if let Err(error) = ended {
                     log.record_error("client session", error);
                 }
             }
             }
                 });
             }
-            Some(_) = clients.join_next(), if had_client => {
+            Some(joined) = clients.join_next(), if had_client => {
+                record_client_end(&log, joined);
                 if clients.is_empty() && registry.shutdown_requested() {
+                    record_stop(&log, "shutdown", clients.len());
                     return Ok(());
                 }
             }
         }
+    }
+}
+
+/// Records that the service stops, and why: the signal that asked for it, or the shutdown request of the last client.
+/// `clients` is the number of client tasks that the service still holds.
+fn record_stop(log: &Events, reason: &str, clients: usize) {
+    log.emit(
+        Level::Info,
+        "sidecar.vt.session_stop",
+        &serde_json::json!({"reason": reason, "clients": clients}),
+    );
+}
+
+/// Records the end of the serve loop of the service and how it ended.
+pub fn record_end(log: &Events, served: &std::io::Result<()>) {
+    let mut fields = serde_json::json!({"ok": served.is_ok()});
+    if let Err(error) = served {
+        fields["error"] = serde_json::json!(error.to_string());
+    }
+    log.emit(Level::Info, "sidecar.vt.session_end", &fields);
+}
+
+/// Records the end of a client task that did not return normally (a panic, or a task that was cancelled).
+pub(crate) fn record_client_end(log: &Events, joined: Result<(), tokio::task::JoinError>) {
+    if let Err(error) = joined {
+        log.record_error("client session", format!("the client task ended: {error}"));
     }
 }
 
@@ -417,6 +457,22 @@ mod tests {
         fs::write(directory.path().join("endpoint.json"), b"not-json").unwrap();
         let error = read_endpoint(directory.path()).unwrap_err();
         assert!(error.contains("decode"));
+    }
+
+    #[tokio::test]
+    async fn a_client_task_that_panicked_is_an_error_record() {
+        let events = crate::events::test_support::TestEvents::new();
+        let panicked = tokio::spawn(async { panic!("injected client panic") });
+        record_client_end(&events.handle(), panicked.await);
+        let lines = events.lines();
+        let record = lines
+            .iter()
+            .find(|line| line["event"] == "sidecar.vt.record.error")
+            .expect("the panic of a client task is recorded");
+        assert_eq!(record["fields"]["where"], "client session");
+        let text = record["fields"]["text"].as_str().unwrap();
+        assert!(text.contains("the client task ended"), "{text}");
+        assert!(text.contains("panic"), "{text}");
     }
 
     #[tokio::test]
