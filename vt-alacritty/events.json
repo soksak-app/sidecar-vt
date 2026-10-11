@@ -252,6 +252,39 @@
         "cols": "number"
       },
       "description": "The engine of a session was resized to rows and cols. A replay input: sequence counts the inputs of the session from 1."
+    },
+    "sidecar.vt.selection": {
+      "layer": "sidecar",
+      "class": "input",
+      "level": "info",
+      "fields": {
+        "sequence": "number",
+        "action": "string",
+        "edge?": "number",
+        "row?": "number"
+      },
+      "description": "The selection of a session changed. action is start, update, end or clear; edge (the cell boundary from 0 to the columns) and row (the row of the viewport) are present for start and update, as the service resolved them from the pointer. Only a call that took effect is stored. A replay input (core docs/spec/replay.md#view-state)."
+    },
+    "sidecar.vt.viewport": {
+      "layer": "sidecar",
+      "class": "input",
+      "level": "info",
+      "fields": {
+        "sequence": "number",
+        "lines?": "number",
+        "newest?": "boolean"
+      },
+      "description": "The viewport of a session moved. lines is the change of the offset into the scrollback after the engine limited it to the retained lines, positive toward older lines; newest is true for a move to the newest output. A move that changed nothing is not stored. A replay input (core docs/spec/replay.md#view-state)."
+    },
+    "sidecar.vt.theme": {
+      "layer": "sidecar",
+      "class": "input",
+      "level": "info",
+      "fields": {
+        "sequence": "number",
+        "colors": "object"
+      },
+      "description": "The theme of the engine of a session was put in force; the first input of every session is the theme in force. colors is the complete set of colors that the service resolves through the theme: foreground, background, cursor, selection and ansi0 to ansi255, each as #rrggbb in lowercase. A replay input (core docs/spec/replay.md#view-state)."
     }
   }
 }

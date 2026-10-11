@@ -599,10 +599,19 @@ async fn the_inputs_and_the_frames_of_a_session_are_replay_records() {
                 "sidecar.vt.pty_read",
                 "sidecar.vt.pty_write",
                 "sidecar.vt.resize",
+                "sidecar.vt.theme",
             ]
             .contains(&line["event"].as_str().unwrap())
         })
         .collect();
+    let theme = inputs
+        .iter()
+        .find(|input| input["event"] == "sidecar.vt.theme")
+        .expect("the theme in force is an input");
+    assert_eq!(
+        theme["fields"]["sequence"], 1,
+        "the first input is the theme"
+    );
     let session = inputs[0]["session"]
         .as_str()
         .expect("an input names its session")

@@ -1,0 +1,670 @@
+{
+  "description": "Golden cases of the replay inputs (docs/spec/replay.md#records). `valid` and `invalid` are inputs `{kind, fields}`; an invalid input has the `error` that `replayInputProblem` returns. `sessions` are the inputs of a session in the order they were applied; a session with a `problem` is refused with that text by `replaySessionProblem`.",
+  "valid": [
+    {
+      "name": "output bytes",
+      "kind": "output",
+      "fields": {
+        "sequence": 4,
+        "hex": "68690d0a"
+      }
+    },
+    {
+      "name": "bytes written to the program",
+      "kind": "write",
+      "fields": {
+        "sequence": 5,
+        "hex": "6c730d"
+      }
+    },
+    {
+      "name": "resize",
+      "kind": "resize",
+      "fields": {
+        "sequence": 6,
+        "rows": 24,
+        "cols": 80
+      }
+    },
+    {
+      "name": "selection start",
+      "kind": "selection",
+      "fields": {
+        "sequence": 7,
+        "action": "start",
+        "edge": 3,
+        "row": 2
+      }
+    },
+    {
+      "name": "selection update",
+      "kind": "selection",
+      "fields": {
+        "sequence": 8,
+        "action": "update",
+        "edge": 9,
+        "row": 2
+      }
+    },
+    {
+      "name": "selection end",
+      "kind": "selection",
+      "fields": {
+        "sequence": 9,
+        "action": "end"
+      }
+    },
+    {
+      "name": "selection clear",
+      "kind": "selection",
+      "fields": {
+        "sequence": 10,
+        "action": "clear"
+      }
+    },
+    {
+      "name": "viewport toward older lines",
+      "kind": "viewport",
+      "fields": {
+        "sequence": 11,
+        "lines": 3
+      }
+    },
+    {
+      "name": "viewport toward newer lines",
+      "kind": "viewport",
+      "fields": {
+        "sequence": 12,
+        "lines": -2
+      }
+    },
+    {
+      "name": "viewport to the newest output",
+      "kind": "viewport",
+      "fields": {
+        "sequence": 13,
+        "newest": true
+      }
+    },
+    {
+      "name": "theme",
+      "kind": "theme",
+      "fields": {
+        "sequence": 1,
+        "colors": {
+          "foreground": "#c0c0c0",
+          "background": "#101010",
+          "selection": "#404080",
+          "ansi0": "#000000"
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "an unknown kind",
+      "kind": "pointer",
+      "fields": {
+        "sequence": 2
+      },
+      "error": "replay input pointer is not one of output, write, resize, selection, viewport, theme"
+    },
+    {
+      "name": "a sequence below 1",
+      "kind": "output",
+      "fields": {
+        "sequence": 0,
+        "hex": "00"
+      },
+      "error": "output: sequence must be an integer from 1, found 0"
+    },
+    {
+      "name": "hex of an odd length",
+      "kind": "output",
+      "fields": {
+        "sequence": 2,
+        "hex": "abc"
+      },
+      "error": "output: hex must be lowercase hexadecimal text of whole bytes, found \"abc\""
+    },
+    {
+      "name": "hex in capital letters",
+      "kind": "write",
+      "fields": {
+        "sequence": 2,
+        "hex": "AB"
+      },
+      "error": "write: hex must be lowercase hexadecimal text of whole bytes, found \"AB\""
+    },
+    {
+      "name": "a resize without columns",
+      "kind": "resize",
+      "fields": {
+        "sequence": 2,
+        "rows": 24
+      },
+      "error": "resize: cols must be an integer from 1, found undefined"
+    },
+    {
+      "name": "a selection action outside the four",
+      "kind": "selection",
+      "fields": {
+        "sequence": 2,
+        "action": "drag",
+        "edge": 1,
+        "row": 1
+      },
+      "error": "selection: action must be start, update, end or clear, found \"drag\""
+    },
+    {
+      "name": "a selection start without a row",
+      "kind": "selection",
+      "fields": {
+        "sequence": 2,
+        "action": "start",
+        "edge": 1
+      },
+      "error": "selection: row must be an integer from 0, found undefined"
+    },
+    {
+      "name": "a selection end with a position",
+      "kind": "selection",
+      "fields": {
+        "sequence": 2,
+        "action": "end",
+        "edge": 1,
+        "row": 1
+      },
+      "error": "selection: end takes no edge and no row"
+    },
+    {
+      "name": "a viewport with lines and newest",
+      "kind": "viewport",
+      "fields": {
+        "sequence": 2,
+        "lines": 1,
+        "newest": true
+      },
+      "error": "viewport: lines and newest are exclusive"
+    },
+    {
+      "name": "a viewport with neither",
+      "kind": "viewport",
+      "fields": {
+        "sequence": 2
+      },
+      "error": "viewport: lines (a non-zero integer) or newest (true) is required"
+    },
+    {
+      "name": "a viewport of no lines",
+      "kind": "viewport",
+      "fields": {
+        "sequence": 2,
+        "lines": 0
+      },
+      "error": "viewport: lines must be a non-zero integer, found 0"
+    },
+    {
+      "name": "a viewport newest that is false",
+      "kind": "viewport",
+      "fields": {
+        "sequence": 2,
+        "newest": false
+      },
+      "error": "viewport: newest must be true, found false"
+    },
+    {
+      "name": "a theme without the selection color",
+      "kind": "theme",
+      "fields": {
+        "sequence": 1,
+        "colors": {
+          "foreground": "#c0c0c0",
+          "background": "#101010"
+        }
+      },
+      "error": "theme: colors.selection is required"
+    },
+    {
+      "name": "a theme color in capital letters",
+      "kind": "theme",
+      "fields": {
+        "sequence": 1,
+        "colors": {
+          "foreground": "#C0C0C0",
+          "background": "#101010",
+          "selection": "#404080"
+        }
+      },
+      "error": "theme: colors.foreground must be \"#rrggbb\" in lowercase, found \"#C0C0C0\""
+    },
+    {
+      "name": "a theme that is the name of a theme",
+      "kind": "theme",
+      "fields": {
+        "sequence": 1,
+        "colors": "dark"
+      },
+      "error": "theme: colors must be an object of colors, found \"dark\""
+    },
+    {
+      "name": "empty hex",
+      "kind": "output",
+      "fields": {
+        "sequence": 2,
+        "hex": ""
+      },
+      "error": "output: hex must be lowercase hexadecimal text of whole bytes, found \"\""
+    }
+  ],
+  "sessions": [
+    {
+      "name": "a session with a scroll and a selection",
+      "inputs": [
+        {
+          "kind": "theme",
+          "fields": {
+            "sequence": 1,
+            "colors": {
+              "foreground": "#c0c0c0",
+              "background": "#101010",
+              "selection": "#404080"
+            }
+          }
+        },
+        {
+          "kind": "resize",
+          "fields": {
+            "sequence": 2,
+            "rows": 4,
+            "cols": 10
+          }
+        },
+        {
+          "kind": "output",
+          "fields": {
+            "sequence": 3,
+            "hex": "6f6e650d0a74776f0d0a"
+          }
+        },
+        {
+          "kind": "viewport",
+          "fields": {
+            "sequence": 4,
+            "lines": 1
+          }
+        },
+        {
+          "kind": "selection",
+          "fields": {
+            "sequence": 5,
+            "action": "start",
+            "edge": 0,
+            "row": 0
+          }
+        },
+        {
+          "kind": "selection",
+          "fields": {
+            "sequence": 6,
+            "action": "update",
+            "edge": 3,
+            "row": 0
+          }
+        },
+        {
+          "kind": "selection",
+          "fields": {
+            "sequence": 7,
+            "action": "end"
+          }
+        },
+        {
+          "kind": "write",
+          "fields": {
+            "sequence": 8,
+            "hex": "61"
+          }
+        },
+        {
+          "kind": "viewport",
+          "fields": {
+            "sequence": 9,
+            "newest": true
+          }
+        }
+      ],
+      "problem": null
+    },
+    {
+      "name": "a session that does not start with a theme",
+      "inputs": [
+        {
+          "kind": "resize",
+          "fields": {
+            "sequence": 1,
+            "rows": 4,
+            "cols": 10
+          }
+        }
+      ],
+      "problem": "input 1 is a resize and the first input of a session is a theme"
+    },
+    {
+      "name": "a session with a gap in the sequence",
+      "inputs": [
+        {
+          "kind": "theme",
+          "fields": {
+            "sequence": 1,
+            "colors": {
+              "foreground": "#c0c0c0",
+              "background": "#101010",
+              "selection": "#404080"
+            }
+          }
+        },
+        {
+          "kind": "output",
+          "fields": {
+            "sequence": 3,
+            "hex": "61"
+          }
+        }
+      ],
+      "problem": "input 2 has sequence 3 and the sequence after 1 is 2"
+    },
+    {
+      "name": "a selection update before a selection start",
+      "inputs": [
+        {
+          "kind": "theme",
+          "fields": {
+            "sequence": 1,
+            "colors": {
+              "foreground": "#c0c0c0",
+              "background": "#101010",
+              "selection": "#404080"
+            }
+          }
+        },
+        {
+          "kind": "resize",
+          "fields": {
+            "sequence": 2,
+            "rows": 4,
+            "cols": 10
+          }
+        },
+        {
+          "kind": "selection",
+          "fields": {
+            "sequence": 3,
+            "action": "update",
+            "edge": 1,
+            "row": 0
+          }
+        }
+      ],
+      "problem": "input 3 is a selection update and no selection has started"
+    },
+    {
+      "name": "a selection start before any resize",
+      "inputs": [
+        {
+          "kind": "theme",
+          "fields": {
+            "sequence": 1,
+            "colors": {
+              "foreground": "#c0c0c0",
+              "background": "#101010",
+              "selection": "#404080"
+            }
+          }
+        },
+        {
+          "kind": "selection",
+          "fields": {
+            "sequence": 2,
+            "action": "start",
+            "edge": 0,
+            "row": 0
+          }
+        }
+      ],
+      "problem": "input 2 is a selection start before any resize"
+    },
+    {
+      "name": "a selection start below the grid",
+      "inputs": [
+        {
+          "kind": "theme",
+          "fields": {
+            "sequence": 1,
+            "colors": {
+              "foreground": "#c0c0c0",
+              "background": "#101010",
+              "selection": "#404080"
+            }
+          }
+        },
+        {
+          "kind": "resize",
+          "fields": {
+            "sequence": 2,
+            "rows": 4,
+            "cols": 10
+          }
+        },
+        {
+          "kind": "selection",
+          "fields": {
+            "sequence": 3,
+            "action": "start",
+            "edge": 0,
+            "row": 4
+          }
+        }
+      ],
+      "problem": "input 3 is a selection start at edge 0 row 4 outside the grid of 4 rows and 10 columns"
+    },
+    {
+      "name": "a selection update after the grid shrank",
+      "inputs": [
+        {
+          "kind": "theme",
+          "fields": {
+            "sequence": 1,
+            "colors": {
+              "foreground": "#c0c0c0",
+              "background": "#101010",
+              "selection": "#404080"
+            }
+          }
+        },
+        {
+          "kind": "resize",
+          "fields": {
+            "sequence": 2,
+            "rows": 4,
+            "cols": 10
+          }
+        },
+        {
+          "kind": "selection",
+          "fields": {
+            "sequence": 3,
+            "action": "start",
+            "edge": 8,
+            "row": 1
+          }
+        },
+        {
+          "kind": "resize",
+          "fields": {
+            "sequence": 4,
+            "rows": 4,
+            "cols": 5
+          }
+        },
+        {
+          "kind": "selection",
+          "fields": {
+            "sequence": 5,
+            "action": "update",
+            "edge": 8,
+            "row": 1
+          }
+        }
+      ],
+      "problem": "input 5 is a selection update at edge 8 row 1 outside the grid of 4 rows and 5 columns"
+    },
+    {
+      "name": "a selection update after the gesture ended",
+      "inputs": [
+        {
+          "kind": "theme",
+          "fields": {
+            "sequence": 1,
+            "colors": {
+              "foreground": "#c0c0c0",
+              "background": "#101010",
+              "selection": "#404080"
+            }
+          }
+        },
+        {
+          "kind": "resize",
+          "fields": {
+            "sequence": 2,
+            "rows": 4,
+            "cols": 10
+          }
+        },
+        {
+          "kind": "selection",
+          "fields": {
+            "sequence": 3,
+            "action": "start",
+            "edge": 1,
+            "row": 1
+          }
+        },
+        {
+          "kind": "selection",
+          "fields": {
+            "sequence": 4,
+            "action": "end"
+          }
+        },
+        {
+          "kind": "selection",
+          "fields": {
+            "sequence": 5,
+            "action": "update",
+            "edge": 2,
+            "row": 1
+          }
+        }
+      ],
+      "problem": "input 5 is a selection update and no selection has started"
+    },
+    {
+      "name": "a theme change in the middle of a session",
+      "inputs": [
+        {
+          "kind": "theme",
+          "fields": {
+            "sequence": 1,
+            "colors": {
+              "foreground": "#c0c0c0",
+              "background": "#101010",
+              "selection": "#404080"
+            }
+          }
+        },
+        {
+          "kind": "resize",
+          "fields": {
+            "sequence": 2,
+            "rows": 4,
+            "cols": 10
+          }
+        },
+        {
+          "kind": "output",
+          "fields": {
+            "sequence": 3,
+            "hex": "61"
+          }
+        },
+        {
+          "kind": "theme",
+          "fields": {
+            "sequence": 4,
+            "colors": {
+              "foreground": "#d0d0d0",
+              "background": "#202020",
+              "selection": "#204060",
+              "ansi1": "#aa0000"
+            }
+          }
+        },
+        {
+          "kind": "output",
+          "fields": {
+            "sequence": 5,
+            "hex": "62"
+          }
+        }
+      ],
+      "problem": null
+    },
+    {
+      "name": "viewport moves stored as the effective change",
+      "inputs": [
+        {
+          "kind": "theme",
+          "fields": {
+            "sequence": 1,
+            "colors": {
+              "foreground": "#c0c0c0",
+              "background": "#101010",
+              "selection": "#404080"
+            }
+          }
+        },
+        {
+          "kind": "resize",
+          "fields": {
+            "sequence": 2,
+            "rows": 4,
+            "cols": 10
+          }
+        },
+        {
+          "kind": "viewport",
+          "fields": {
+            "sequence": 3,
+            "lines": 2
+          }
+        },
+        {
+          "kind": "viewport",
+          "fields": {
+            "sequence": 4,
+            "lines": -1
+          }
+        },
+        {
+          "kind": "viewport",
+          "fields": {
+            "sequence": 5,
+            "newest": true
+          }
+        }
+      ],
+      "problem": null
+    }
+  ]
+}

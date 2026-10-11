@@ -72,7 +72,7 @@
         },
         "cells": [
           {
-            "grapheme": "\ud55c",
+            "grapheme": "한",
             "width": 2,
             "fg": null,
             "bg": null,
@@ -123,14 +123,14 @@
             "attributes": 160
           },
           {
-            "grapheme": "e\u0301",
+            "grapheme": "é",
             "width": 1,
             "fg": null,
             "bg": 255,
             "attributes": 92
           },
           {
-            "grapheme": "\ud83d\ude00",
+            "grapheme": "😀",
             "width": 2,
             "fg": 0,
             "bg": "#abcdef",
@@ -140,6 +140,138 @@
       },
       "bytes_hex": "534b53435231000000020000000201000000010000000000000001610101000001010000c80100000001620102ff800002000001a00000000365cc810100000000010000ff5c00000004f09f9880020100000002abcdef02",
       "hash": "d4dda4d28337185b6cd84c7473d3177955f086bfa70f98c1c6d6f44a0e37e39a"
+    },
+    {
+      "name": "scrolled viewport with the cursor outside it",
+      "screen": {
+        "rows": 2,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false
+        },
+        "cells": [
+          {
+            "grapheme": "a",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "b",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "c",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "d",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "e",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "f",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "bytes_hex": "534b534352310000000200000003000000000000000002000000016101000000000000000000000000016201000000000000000000000000016301000000000000000000000000016401000000000000000000000000016501000000000000000000000000016601000000000000000000",
+      "hash": "9ad339506001938b065e2ddb1cf6af35c4a7ce2d3a8f22431801235f06567acf"
+    },
+    {
+      "name": "selected cells with the highlight colors",
+      "screen": {
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": true
+        },
+        "cells": [
+          {
+            "grapheme": "a",
+            "width": 1,
+            "fg": "#c0c0c0",
+            "bg": "#404080",
+            "attributes": 0
+          },
+          {
+            "grapheme": "b",
+            "width": 1,
+            "fg": "#c0c0c0",
+            "bg": "#404080",
+            "attributes": 0
+          },
+          {
+            "grapheme": "c",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "bytes_hex": "534b53435231000000010000000301000000000000000200000001610102c0c0c0024040800000000001620102c0c0c00240408000000000016301000000000000000000",
+      "hash": "f6ffcf1a5bf11275d06f5d9b43e3a66680680b94e5d9eb5078330176d617d521"
+    },
+    {
+      "name": "the same text under another theme",
+      "screen": {
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": true
+        },
+        "cells": [
+          {
+            "grapheme": "a",
+            "width": 1,
+            "fg": "#d0d0d0",
+            "bg": "#204060",
+            "attributes": 0
+          },
+          {
+            "grapheme": "b",
+            "width": 1,
+            "fg": "#d0d0d0",
+            "bg": "#204060",
+            "attributes": 0
+          },
+          {
+            "grapheme": "c",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "bytes_hex": "534b53435231000000010000000301000000000000000200000001610102d0d0d0022040600000000001620102d0d0d00220406000000000016301000000000000000000",
+      "hash": "9b2610011c3a00df1cc8fe983650655e86d09bf04f46fcd83870cd44f0f1ad66"
     }
   ],
   "rejected": [
@@ -177,7 +309,7 @@
           }
         ]
       },
-      "error": "screen hash: cells must hold 6 cells (rows 2 \u00d7 cols 3), found 3"
+      "error": "screen hash: cells must hold 6 cells (rows 2 × cols 3), found 3"
     },
     {
       "name": "cursor row outside the grid",

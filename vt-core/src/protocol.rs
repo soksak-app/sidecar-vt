@@ -1646,13 +1646,15 @@ struct SurfacePorts<'a> {
 }
 
 /// The inputs of the engine of one surface, recorded in the order in which the surface task applies them (core
-/// docs/spec/replay.md#records): the output of the program, the input to the program and each resize. `sequence` counts
-/// them from 1 without a gap, and a frame names the sequence of the last input that its screen includes.
+/// docs/spec/replay.md#records): the theme, the output of the program, the input to the program, each resize and each view
+/// change that took effect (the selection and the viewport). `sequence` counts them from 1 without a gap, and a frame names
+/// the sequence of the last input that its screen includes. The view changes are applied to the engine through the methods
+/// of this type, so the engine call and its record cannot differ.
 struct ReplayInputs {
     log: Events,
     sequence: u64,
-    /// The resizes of the engine before the session existed: `(sequence, rows, cols)`. They are recorded when it opens.
-    deferred: Vec<(u64, u16, u16)>,
+    /// The inputs before the session existed: the event and its fields with `sequence`. They are recorded when it opens.
+    deferred: Vec<(&'static str, Value)>,
 }
 
 impl ReplayInputs {
@@ -1662,6 +1664,21 @@ impl ReplayInputs {
             sequence: 0,
             deferred: Vec::new(),
         }
+    }
+
+    /// Gives the next `sequence` to an input and records it, or keeps it until the session exists.
+    fn input(&mut self, session: Option<&str>, event: &'static str, mut fields: Value) {
+        self.sequence += 1;
+        fields["sequence"] = json!(self.sequence);
+        match session {
+            Some(session) => self.record(session, event, &fields),
+            None => self.deferred.push((event, fields)),
+        }
+    }
+
+    fn record(&self, session: &str, event: &'static str, fields: &Value) {
+        self.log
+            .emit_for(Level::Info, event, Subject::session(session, &[]), fields);
     }
 
     /// The output of the program is fed to the engine. It is stored when the policy stores the class `io`.
@@ -1679,27 +1696,114 @@ impl ReplayInputs {
 
     /// The engine was resized.
     fn resized(&mut self, session: Option<&str>, rows: u16, cols: u16) {
-        self.sequence += 1;
-        match session {
-            Some(session) => self.record_resize(session, self.sequence, rows, cols),
-            None => self.deferred.push((self.sequence, rows, cols)),
-        }
-    }
-
-    /// The session exists: the resizes before it are recorded.
-    fn opened(&mut self, session: &str) {
-        for (sequence, rows, cols) in std::mem::take(&mut self.deferred) {
-            self.record_resize(session, sequence, rows, cols);
-        }
-    }
-
-    fn record_resize(&self, session: &str, sequence: u64, rows: u16, cols: u16) {
-        self.log.emit_for(
-            Level::Info,
+        self.input(
+            session,
             "sidecar.vt.resize",
-            Subject::session(session, &[]),
-            &json!({"sequence": sequence, "rows": rows, "cols": cols}),
+            json!({"rows": rows, "cols": cols}),
         );
+    }
+
+    /// The session exists: the inputs before it are recorded.
+    fn opened(&mut self, session: &str) {
+        for (event, fields) in std::mem::take(&mut self.deferred) {
+            self.record(session, event, &fields);
+        }
+    }
+
+    /// Puts `theme` in force in the engine and records the complete set of colors.
+    fn set_theme(
+        &mut self,
+        engine: &mut dyn Engine,
+        session: Option<&str>,
+        theme: crate::palette::TerminalTheme,
+    ) {
+        engine.set_theme(theme);
+        let hex = |color: [u8; 3]| format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2]);
+        let mut colors = serde_json::Map::new();
+        colors.insert("foreground".into(), json!(hex(theme.foreground)));
+        colors.insert("background".into(), json!(hex(theme.background)));
+        colors.insert("cursor".into(), json!(hex(theme.cursor)));
+        colors.insert("selection".into(), json!(hex(theme.selection)));
+        for (index, color) in theme.palette.iter().enumerate() {
+            colors.insert(format!("ansi{index}"), json!(hex(*color)));
+        }
+        self.input(session, "sidecar.vt.theme", json!({"colors": colors}));
+    }
+
+    fn selection(&mut self, session: Option<&str>, fields: Value) {
+        self.input(session, "sidecar.vt.selection", fields);
+    }
+
+    /// Starts the selection at a cell boundary. A call that the engine refuses is an error and no input.
+    fn selection_start(
+        &mut self,
+        engine: &mut dyn Engine,
+        session: Option<&str>,
+        edge: u16,
+        row: u16,
+    ) -> Result<(), String> {
+        engine.selection_start(edge, row)?;
+        self.selection(
+            session,
+            json!({"action": "start", "edge": edge, "row": row}),
+        );
+        Ok(())
+    }
+
+    /// Moves the end of the selection to a cell boundary.
+    fn selection_update(
+        &mut self,
+        engine: &mut dyn Engine,
+        session: Option<&str>,
+        edge: u16,
+        row: u16,
+    ) -> Result<(), String> {
+        engine.selection_update(edge, row)?;
+        self.selection(
+            session,
+            json!({"action": "update", "edge": edge, "row": row}),
+        );
+        Ok(())
+    }
+
+    /// Ends the gesture and returns the text of the selection.
+    fn selection_end(
+        &mut self,
+        engine: &mut dyn Engine,
+        session: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        let text = engine.selection_end()?;
+        self.selection(session, json!({"action": "end"}));
+        Ok(text)
+    }
+
+    /// Clears the selection; only a clear that removed a selection is an input.
+    fn selection_clear(&mut self, engine: &mut dyn Engine, session: Option<&str>) -> bool {
+        let cleared = engine.selection_clear();
+        if cleared {
+            self.selection(session, json!({"action": "clear"}));
+        }
+        cleared
+    }
+
+    /// Moves the viewport by `lines` (positive toward older lines). The input holds the change that the engine applied, which
+    /// its limit to the retained lines may make smaller, and a move that changed nothing is no input.
+    fn scroll_viewport(&mut self, engine: &mut dyn Engine, session: Option<&str>, lines: i32) {
+        let before = i64::from(engine.viewport_offset());
+        engine.scroll_viewport(lines);
+        let moved = i64::from(engine.viewport_offset()) - before;
+        if moved != 0 {
+            self.input(session, "sidecar.vt.viewport", json!({"lines": moved}));
+        }
+    }
+
+    /// Moves the viewport to the newest output; true when it moved, which is an input.
+    fn scroll_to_newest(&mut self, engine: &mut dyn Engine, session: Option<&str>) -> bool {
+        let moved = engine.scroll_to_newest();
+        if moved {
+            self.input(session, "sidecar.vt.viewport", json!({"newest": true}));
+        }
+        moved
     }
 
     /// Writes `data` to the session and records the write with the `cids` of the inputs that caused it.
@@ -2198,6 +2302,8 @@ async fn surface_task(
     let mut pending_selection_event: Option<String> = None;
     let mut preedit: Option<Preedit> = None;
     let mut current_theme = crate::palette::TerminalTheme::dark();
+    // The first input of a session is the theme in force, so a replay starts from it and not from a default of its own.
+    inputs.set_theme(engine.as_mut(), None, current_theme);
     let mut cursor_policy = CursorPolicy::default();
     // 이 표면의 터미널 글꼴. font 요청 전까지 시스템 고정폭 글꼴이다.
     let mut terminal_font = crate::platform::default_font();
@@ -2363,7 +2469,7 @@ async fn surface_task(
                         cursor_activity = Instant::now();
                         last_cursor_frame = None;
                         // 입력은 뷰포트를 가장 새 출력으로 되돌린 뒤 쓴다.
-                        if engine.scroll_to_newest() {
+                        if inputs.scroll_to_newest(engine.as_mut(), session_id.as_deref()) {
                             refresh_inline_image_positions(&mut engine, &mut image_state);
                             if !hold_while_presenting(&mut image_state) {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
@@ -2407,7 +2513,7 @@ async fn surface_task(
                         cursor_activity = Instant::now();
                         last_cursor_frame = None;
                         // 입력은 뷰포트를 가장 새 출력으로 되돌린 뒤 쓴다.
-                        if engine.scroll_to_newest() {
+                        if inputs.scroll_to_newest(engine.as_mut(), session_id.as_deref()) {
                             refresh_inline_image_positions(&mut engine, &mut image_state);
                             if !hold_while_presenting(&mut image_state) {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
@@ -2485,7 +2591,7 @@ async fn surface_task(
                             MousePhase::Down if modes.mouse_report() && !shift => {
                                 mouse_gesture = true;
                                 mouse_gesture_motion = modes.mouse_drag || modes.mouse_motion;
-                                if engine.selection_clear() {
+                                if inputs.selection_clear(engine.as_mut(), session_id.as_deref()) {
                                     last_cursor_frame = None;
                                     if let Some(state) = image_state.as_mut() {
                                         let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
@@ -2589,7 +2695,7 @@ async fn surface_task(
                     SurfaceCommand::SelectionStart { x, y } => {
                         let result = image_state.as_ref().ok_or_else(|| "selection image is not configured".to_string())
                             .and_then(|state| state.selection_edge(x, y))
-                            .and_then(|(edge, row)| engine.selection_start(edge, row));
+                            .and_then(|(edge, row)| inputs.selection_start(engine.as_mut(), session_id.as_deref(), edge, row));
                         if let Err(error) = result {
                             let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": error}});
                             if output_tx.reply(response).await.is_err() { return; }
@@ -2607,7 +2713,7 @@ async fn surface_task(
                     SurfaceCommand::SelectionUpdate { x, y } => {
                         let result = image_state.as_ref().ok_or_else(|| "selection image is not configured".to_string())
                             .and_then(|state| state.selection_edge(x, y))
-                            .and_then(|(edge, row)| engine.selection_update(edge, row));
+                            .and_then(|(edge, row)| inputs.selection_update(engine.as_mut(), session_id.as_deref(), edge, row));
                         if let Err(error) = result {
                             let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": error}});
                             if output_tx.reply(response).await.is_err() { return; }
@@ -2631,7 +2737,7 @@ async fn surface_task(
                             if output_tx.reply(response).await.is_err() { return; }
                             continue;
                         }
-                        match engine.selection_end() {
+                        match inputs.selection_end(engine.as_mut(), session_id.as_deref()) {
                             Ok(text) => {
                                 if let Some(state) = image_state.as_mut() {
                                     let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
@@ -2661,7 +2767,7 @@ async fn surface_task(
                         // 엔진이 보관된 기록 범위 안으로 제한한다.
                         let delta = i64::from(offset) - i64::from(engine.viewport_offset());
                         if delta != 0 {
-                            engine.scroll_viewport(delta.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32);
+                            inputs.scroll_viewport(engine.as_mut(), session_id.as_deref(), delta.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32);
                         }
                         refresh_inline_image_positions(&mut engine, &mut image_state);
                         if hold_while_presenting(&mut image_state) { continue; }
@@ -2706,7 +2812,7 @@ async fn surface_task(
                                 }
                             }
                             None => {
-                                engine.scroll_viewport(lines);
+                                inputs.scroll_viewport(engine.as_mut(), session_id.as_deref(), lines);
                                 refresh_inline_image_positions(&mut engine, &mut image_state);
                                 if hold_while_presenting(&mut image_state) { continue; }
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
@@ -2729,7 +2835,7 @@ async fn surface_task(
                         cursor_activity = Instant::now();
                         last_cursor_frame = None;
                         // 입력은 뷰포트를 가장 새 출력으로 되돌린 뒤 쓴다.
-                        if engine.scroll_to_newest() {
+                        if inputs.scroll_to_newest(engine.as_mut(), session_id.as_deref()) {
                             refresh_inline_image_positions(&mut engine, &mut image_state);
                             if !hold_while_presenting(&mut image_state) {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
@@ -2840,7 +2946,7 @@ async fn surface_task(
                     SurfaceCommand::Theme { theme } => {
                         let theme = *theme;
                         current_theme = theme;
-                        engine.set_theme(theme);
+                        inputs.set_theme(engine.as_mut(), session_id.as_deref(), theme);
                         if let Some(state) = image_state.as_mut() {
                             state.theme = theme;
                             if state.pending_draw {
