@@ -706,6 +706,46 @@ async fn the_bytes_of_the_program_are_not_stored_when_the_policy_turns_the_class
     );
 }
 
+// The `screen` event that the service sends carries the members of the screen hash, and its `sequence` is the sequence of the
+// frame record that carries the hash of the same screen, so a page compares the two (core docs/spec/terminal-runtime.md).
+#[tokio::test]
+async fn the_screen_event_is_the_screen_of_the_frame_record_of_its_sequence() {
+    let events = TestEvents::new();
+    let replies = serve_lines(
+        &events,
+        br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#,
+    )
+    .await;
+    let screens: Vec<serde_json::Value> = replies
+        .iter()
+        .map(|reply| serde_json::from_str::<serde_json::Value>(reply).unwrap())
+        .filter(|reply| reply["body"]["event"] == "screen")
+        .map(|reply| reply["body"].clone())
+        .collect();
+    assert!(!screens.is_empty());
+    let frames = events.named("sidecar.vt.frame");
+    for screen in &screens {
+        assert!(screen.get("lines").is_none(), "{screen}");
+        let rows = screen["rows"].as_u64().unwrap();
+        let cols = screen["cols"].as_u64().unwrap();
+        assert_eq!(
+            screen["cells"].as_array().unwrap().len() as u64,
+            rows * cols
+        );
+        let frame = frames
+            .iter()
+            .find(|frame| frame["fields"]["sequence"] == screen["sequence"])
+            .unwrap_or_else(|| panic!("no frame record has sequence {}", screen["sequence"]));
+        assert_eq!(
+            frame["fields"]["hash"],
+            soksak_sidecar_vt_core::screen_hash::screen_hash_json(screen).unwrap(),
+            "the hash of the message is the hash of the frame record"
+        );
+    }
+}
+
 // A request line over the bound of an event is recorded by its first 4,096 bytes and its size, and the line is neither cloned
 // nor serialized whole (core docs/spec/logging.md#bounds).
 #[tokio::test]

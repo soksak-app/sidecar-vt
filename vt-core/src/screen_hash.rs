@@ -8,6 +8,19 @@ use sha2::{Digest, Sha256};
 
 const MAGIC: &[u8] = b"SKSCR1";
 
+/// The cell that stands for a cell the engine leaves out.
+static BLANK: crate::protocol::Cell = crate::protocol::Cell {
+    ch: None,
+    width: 1,
+    fg: None,
+    bg: None,
+    bold: false,
+    italic: false,
+    underline: false,
+    inverse: false,
+    link: None,
+};
+
 /// A color of a cell: the default color, an index of the palette, or a true color.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Color {
@@ -17,6 +30,17 @@ enum Color {
 }
 
 impl Color {
+    /// The color in the JSON form of the contract.
+    fn json(self) -> Value {
+        match self {
+            Color::Default => Value::Null,
+            Color::Indexed(index) => Value::from(index),
+            Color::True(red, green, blue) => {
+                Value::from(format!("#{red:02x}{green:02x}{blue:02x}"))
+            }
+        }
+    }
+
     fn bytes(self) -> [u8; 4] {
         match self {
             Color::Default => [0, 0, 0, 0],
@@ -225,6 +249,52 @@ pub fn screen_hash_json(screen: &Value) -> Result<String, String> {
 /// the true colors that the engine resolved (`#rrggbb`) or the default color. The attributes are those that a cell of the
 /// engine states: bold `01`, italic `04`, underline `08` and inverse `20`.
 pub fn screen_hash(screen: &Screen) -> Result<String, String> {
+    let cells = screen_cells(screen)?;
+    Ok(digest(&canonical(
+        u32::from(screen.rows),
+        u32::from(screen.cols),
+        (
+            screen.cursor.visible,
+            u32::from(screen.cursor.row),
+            u32::from(screen.cursor.col),
+        ),
+        &cells,
+    )))
+}
+
+/// The cells of the message `screen` for the screen of the engine, in the form of core (docs/spec/terminal-runtime.md#screen-message):
+/// `rows` × `cols` objects with `grapheme`, `width`, `fg`, `bg` (null, an integer or `#rrggbb`), `attributes`, and `link` when the
+/// cell has one. They are the cells that [`screen_hash`] covers, so a page that hashes the message gets the hash of the screen.
+pub fn message_cells(screen: &Screen) -> Result<Vec<Value>, String> {
+    let cells = screen_cells(screen)?;
+    let mut values = Vec::with_capacity(cells.len());
+    for (index, cell) in cells.iter().enumerate() {
+        let mut value = serde_json::json!({
+            "grapheme": cell.grapheme,
+            "width": cell.width,
+            "fg": cell.fg.json(),
+            "bg": cell.bg.json(),
+            "attributes": cell.attributes,
+        });
+        let (row, col) = (
+            index / usize::from(screen.cols),
+            index % usize::from(screen.cols),
+        );
+        if let Some(link) = screen
+            .lines
+            .get(row)
+            .and_then(|line| line.get(col))
+            .and_then(|cell| cell.link.as_ref())
+        {
+            value["link"] = serde_json::json!(link);
+        }
+        values.push(value);
+    }
+    Ok(values)
+}
+
+/// The cells of the screen of the engine, `rows` × `cols`, with the checks of the size and of the cursor.
+fn screen_cells(screen: &Screen) -> Result<Vec<HashCell<'_>>, String> {
     let (rows, cols) = (u32::from(screen.rows), u32::from(screen.cols));
     if rows == 0 || cols == 0 {
         return refuse(format!("the screen is {rows}x{cols}"));
@@ -235,7 +305,6 @@ pub fn screen_hash(screen: &Screen) -> Result<String, String> {
             screen.cursor.row, screen.cursor.col
         ));
     }
-    let blank = crate::protocol::Cell::default();
     let color = |name: &str, color: &Option<String>| match color {
         None => Ok(Color::Default),
         Some(text) => Color::parse_true(text)
@@ -249,7 +318,7 @@ pub fn screen_hash(screen: &Screen) -> Result<String, String> {
                 .get(row)
                 .and_then(|line| line.get(col))
                 // default: a cell that the engine leaves out is a blank cell.
-                .unwrap_or(&blank);
+                .unwrap_or(&BLANK);
             cells.push(HashCell {
                 // default: a blank cell has no grapheme.
                 grapheme: cell.ch.as_deref().unwrap_or(""),
@@ -263,14 +332,5 @@ pub fn screen_hash(screen: &Screen) -> Result<String, String> {
             });
         }
     }
-    Ok(digest(&canonical(
-        rows,
-        cols,
-        (
-            screen.cursor.visible,
-            u32::from(screen.cursor.row),
-            u32::from(screen.cursor.col),
-        ),
-        &cells,
-    )))
+    Ok(cells)
 }

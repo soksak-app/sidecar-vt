@@ -113,9 +113,16 @@ const lineClient = async (endpoint, clientName, { root = null } = {}) => {
   return { socket, next, write };
 };
 
-const screenText = (value) => (value.body?.lines ?? [])
-  .map((row) => row.map((cell) => cell.ch).join(""))
-  .join("\n");
+// The screen message holds rows x cols cells in row-major order (core docs/spec/terminal-runtime.md#screen-message).
+const screenText = (value) => {
+  const { cells, cols } = value.body;
+  if (!Array.isArray(cells) || !Number.isInteger(cols)) fail(`screen event without cells and cols: ${JSON.stringify(value.body)}`);
+  const rows = [];
+  for (let start = 0; start < cells.length; start += cols) {
+    rows.push(cells.slice(start, start + cols).map((cell) => cell.grapheme).join(""));
+  }
+  return rows.join("\n");
+};
 
 const waitFor = async (client, predicate, label) => {
   const started = performance.now();
