@@ -1,0 +1,399 @@
+{
+  "vectors": [
+    {
+      "name": "empty one cell",
+      "screen": {
+        "rows": 1,
+        "cols": 1,
+        "cursor": {
+          "row": 0,
+          "col": 0,
+          "visible": true
+        },
+        "cells": [
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "bytes_hex": "534b5343523100000001000000010100000000000000000000000001000000000000000000",
+      "hash": "0b1b5a155fc09ab5d44c3aab7da1069acfbd4bb865de6831a15f2cfb8f8161a0"
+    },
+    {
+      "name": "ascii with hidden cursor",
+      "screen": {
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false
+        },
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "bytes_hex": "534b5343523100000001000000030000000000000000020000000168010000000000000000000000000169010000000000000000000000000001000000000000000000",
+      "hash": "efa7f5f414cdff34c5fcf5cc26ce14acc4d1da63a2a9aab70c3f5b1e22c80ac7"
+    },
+    {
+      "name": "wide character and its continuation",
+      "screen": {
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": true
+        },
+        "cells": [
+          {
+            "grapheme": "\ud55c",
+            "width": 2,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 0,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "a",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "bytes_hex": "534b53435231000000010000000301000000000000000200000003ed959c020000000000000000000000000000000000000000000000000000016101000000000000000000",
+      "hash": "ba8ec986c64e9a055d3ec75bae74e1a9fbee0d0bfba585ac0746b682afc630eb"
+    },
+    {
+      "name": "colors and attributes",
+      "screen": {
+        "rows": 2,
+        "cols": 2,
+        "cursor": {
+          "row": 1,
+          "col": 0,
+          "visible": true
+        },
+        "cells": [
+          {
+            "grapheme": "a",
+            "width": 1,
+            "fg": 1,
+            "bg": 200,
+            "attributes": 1
+          },
+          {
+            "grapheme": "b",
+            "width": 1,
+            "fg": "#ff8000",
+            "bg": "#000001",
+            "attributes": 160
+          },
+          {
+            "grapheme": "e\u0301",
+            "width": 1,
+            "fg": null,
+            "bg": 255,
+            "attributes": 92
+          },
+          {
+            "grapheme": "\ud83d\ude00",
+            "width": 2,
+            "fg": 0,
+            "bg": "#abcdef",
+            "attributes": 2
+          }
+        ]
+      },
+      "bytes_hex": "534b53435231000000020000000201000000010000000000000001610101000001010000c80100000001620102ff800002000001a00000000365cc810100000000010000ff5c00000004f09f9880020100000002abcdef02",
+      "hash": "d4dda4d28337185b6cd84c7473d3177955f086bfa70f98c1c6d6f44a0e37e39a"
+    }
+  ],
+  "rejected": [
+    {
+      "name": "cell count differs from rows times cols",
+      "screen": {
+        "rows": 2,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false
+        },
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "error": "screen hash: cells must hold 6 cells (rows 2 \u00d7 cols 3), found 3"
+    },
+    {
+      "name": "cursor row outside the grid",
+      "screen": {
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 1,
+          "col": 0,
+          "visible": true
+        },
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "error": "screen hash: cursor.row must be an integer from 0 to 0, found 1"
+    },
+    {
+      "name": "width outside 0, 1, 2",
+      "screen": {
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false
+        },
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 3,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "error": "screen hash: cells[0].width must be 0, 1 or 2, found 3"
+    },
+    {
+      "name": "indexed color outside 0 to 255",
+      "screen": {
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false
+        },
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": 256,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "error": "screen hash: cells[1].fg must be null, an integer from 0 to 255 or \"#rrggbb\", found 256"
+    },
+    {
+      "name": "true color in upper case",
+      "screen": {
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false
+        },
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": null,
+            "bg": "#FF8000",
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "error": "screen hash: cells[1].bg must be null, an integer from 0 to 255 or \"#rrggbb\", found \"#FF8000\""
+    },
+    {
+      "name": "attributes outside one byte",
+      "screen": {
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false
+        },
+        "cells": [
+          {
+            "grapheme": "h",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 256
+          }
+        ]
+      },
+      "error": "screen hash: cells[2].attributes must be an integer from 0 to 255, found 256"
+    },
+    {
+      "name": "grapheme with a lone surrogate",
+      "screen": {
+        "rows": 1,
+        "cols": 3,
+        "cursor": {
+          "row": 0,
+          "col": 2,
+          "visible": false
+        },
+        "cells": [
+          {
+            "grapheme": "\ud800",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "i",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          },
+          {
+            "grapheme": "",
+            "width": 1,
+            "fg": null,
+            "bg": null,
+            "attributes": 0
+          }
+        ]
+      },
+      "error": "screen hash: cells[0].grapheme must be well-formed Unicode"
+    }
+  ]
+}

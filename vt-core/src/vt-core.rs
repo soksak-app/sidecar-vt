@@ -10,6 +10,7 @@ pub mod palette;
 pub mod platform;
 pub mod protocol;
 pub mod pty;
+pub mod screen_hash;
 pub mod service;
 pub mod shell_integration;
 

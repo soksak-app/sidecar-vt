@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S40.11: `screen_hash`가 core의 화면 hash를 계산하고 golden vector를 재현한다.
 - S40.7: 칸이 없는 raster, integration이 없는 shell, 적용할 수 없는 inline image 명령을 기록한다.
 - S40.9: test가 event `consumed_wait`, `read_wait`, `output_blocked`를 일으키고 그 필드를 확인한다.
 - S40.8: event `frame`은 모든 frame마다 표면, session, `sequence`, `size`, `raster`와 함께 저장한다. 화면의 hash는 core의 정의를 기다린다.

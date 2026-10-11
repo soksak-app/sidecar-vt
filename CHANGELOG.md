@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S40.11: `screen_hash` computes the screen hash of core and reproduces its golden vectors.
 - S40.7: a raster without a whole cell, a shell without integration and an inline image command that cannot be applied are recorded.
 - S40.9: tests cause the events `consumed_wait`, `read_wait` and `output_blocked` and check their fields.
 - S40.8: the event `frame` is stored for every frame with the surface, the session, `sequence`, `size` and `raster`; the hash of the screen waits for the definition of core.
