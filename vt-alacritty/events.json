@@ -1,5 +1,6 @@
 {
   "schema": 2,
+  "sidecar": "vt",
   "layers": [
     "sidecar"
   ],

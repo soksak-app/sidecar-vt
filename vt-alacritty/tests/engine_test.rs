@@ -1993,9 +1993,6 @@ fn a_prompt_redrawn_after_a_narrowing_resize_has_no_empty_row_above_it_when_rows
         .all(|event| !matches!(event, EngineEvent::Error(_))));
 }
 
-
-
-
 // The bytes of a session of the window checks of core on 2026-10-12, ordered by their time: after the grid narrowed from 53
 // to 26 columns, the input line that the shell redrew was on none of the rows (#S44).
 #[test]
@@ -2050,8 +2047,14 @@ fn a_narrowing_reflow_keeps_the_redrawn_input_line() {
     )));
     let screen = engine.screen();
     let all = text(&screen);
-    assert!(all.contains("START-"), "the redrawn input line left the screen: {all}");
-    assert!(all.contains("ABOVE-LINE"), "the output line above the prompt left the screen: {all}");
+    assert!(
+        all.contains("START-"),
+        "the redrawn input line left the screen: {all}"
+    );
+    assert!(
+        all.contains("ABOVE-LINE"),
+        "the output line above the prompt left the screen: {all}"
+    );
 }
 
 /// The bytes of the tests of this file as hexadecimal text.
