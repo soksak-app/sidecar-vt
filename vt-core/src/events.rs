@@ -975,6 +975,8 @@ impl Output {
                 "count": events,
                 "bytes": bytes,
                 "reason": reason,
+                // The sidecar holds one event file, so the channel of every lost event is other.
+                "channel": "other",
             }))
             .expect("a json value serializes"),
         );
@@ -997,6 +999,8 @@ impl Output {
                     "count": lost.to_seq - lost.from_seq + 1,
                     "bytes": lost.bytes,
                     "reason": lost.reason,
+                    // The sidecar holds one event file, so the channel of every lost event is other.
+                    "channel": "other",
                 }))
                 .expect("a json value serializes"),
             );
