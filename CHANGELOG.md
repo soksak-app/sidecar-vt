@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S44: the engine keeps the input line that a shell redraws after a narrowing reflow; a test replays the recorded bytes of a failed window check (53 to 26 columns) with the rows kept.
 - S43: a release that arrives while the event of the previous release waits for its raster is applied after that event instead of being refused.
 - S41.6: `sidecar.json` names the event of each kind of replay input in `replay.inputs`.
 - S41.2: `census.json` declares the writer entrances of the Rust sources as emitters, and `make test` checks their emit sites against the catalog with `--catalog vt-alacritty/events.json`; the catalog declares the fields `cwd` and `pid` of `sidecar.vt.session_open`.
