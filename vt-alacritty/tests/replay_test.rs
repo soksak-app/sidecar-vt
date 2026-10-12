@@ -7,7 +7,7 @@ mod engine;
 
 use engine::AlacrittyEngine;
 use serde_json::Value;
-use soksak_sidecar_vt_core::events::{read_lines, EventLog, Options};
+use soksak_sidecar_vt_core::events::{read_run_lines, EventLog, Options};
 use soksak_sidecar_vt_core::protocol::{make_default_session_port_factory, serve, Engine};
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -45,7 +45,7 @@ async fn served_session() -> Vec<Value> {
         loop {
             log.flush(Duration::from_secs(10))
                 .expect("flush the writer");
-            let lines = read_lines(log.path()).expect("read the events");
+            let lines = read_run_lines(log.path()).expect("read the events");
             let echo = lines.iter().find_map(|line| {
                 (line["event"] == "sidecar.vt.pty_read"
                     && line["fields"]["hex"]
@@ -72,7 +72,7 @@ async fn served_session() -> Vec<Value> {
     task.await.unwrap();
     log.flush(Duration::from_secs(10))
         .expect("flush the writer");
-    let lines = read_lines(log.path()).expect("read the events");
+    let lines = read_run_lines(log.path()).expect("read the events");
     drop(directory);
     lines
 }
@@ -233,7 +233,7 @@ async fn viewed_session() -> Vec<Value> {
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 log.flush(Duration::from_secs(10)).expect("flush the writer");
-                let lines = read_lines(log.path()).expect("read the events");
+                let lines = read_run_lines(log.path()).expect("read the events");
                 let image = lines
                     .iter()
                     .filter(|line| line["event"] == "sidecar.vt.frame")
@@ -313,7 +313,7 @@ async fn viewed_session() -> Vec<Value> {
     task.await.unwrap();
     log.flush(Duration::from_secs(10))
         .expect("flush the writer");
-    let lines = read_lines(log.path()).expect("read the events");
+    let lines = read_run_lines(log.path()).expect("read the events");
     drop(directory);
     lines
 }

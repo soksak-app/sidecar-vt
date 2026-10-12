@@ -2,7 +2,7 @@
 // change through the file system events without a timer, refuses a file that breaks the rules and keeps the policy in force,
 // and states each policy and each count of gated events as events of its own.
 use serde_json::{json, Value};
-use soksak_sidecar_vt_core::events::{read_lines, EventLog, Events, Level, Options};
+use soksak_sidecar_vt_core::events::{read_run_lines, EventLog, Events, Level, Options};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -45,7 +45,7 @@ impl Config {
 
 fn lines(log: &Events) -> Vec<Value> {
     log.flush(DEADLINE).expect("flush the writer");
-    read_lines(log.path()).expect("read the events")
+    read_run_lines(log.path()).expect("read the events")
 }
 
 /// The lines of `event` that the file holds now.

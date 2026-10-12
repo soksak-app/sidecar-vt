@@ -93,6 +93,52 @@ fn assert_satisfies_catalog(line: &Value) {
 }
 
 #[test]
+fn the_levels_of_the_debug_channel_go_to_the_debug_file_with_one_seq_across_both() {
+    let dir = directory("debug-file");
+    let log = EventLog::start(options(&dir)).unwrap();
+    assert!(log.emit(Level::Info, "sidecar.vt.test", &json!({"index": 1})));
+    assert!(log.emit(Level::Debug, "sidecar.vt.test", &json!({"index": 2})));
+    assert!(log.emit(Level::Trace, "sidecar.vt.test", &json!({"index": 3})));
+    assert!(log.emit(Level::Warn, "sidecar.vt.test", &json!({"index": 4})));
+    log.flush(DEADLINE).unwrap();
+    let main = lines_of(log.path());
+    let debug_path = dir.join("vt-b1.debug.jsonl");
+    let debug = lines_of(&debug_path);
+    assert_eq!(
+        debug[0]["event"], "log.open",
+        "the debug file opens with log.open"
+    );
+    let names = |lines: &[Value]| {
+        lines
+            .iter()
+            .filter(|line| line["event"] == "sidecar.vt.test")
+            .map(|line| line["fields"]["index"].as_u64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        names(&main),
+        vec![1, 4],
+        "the main file holds error, warn and info"
+    );
+    assert_eq!(
+        names(&debug),
+        vec![2, 3],
+        "the debug file holds debug and trace"
+    );
+    let mut seen = [false; 8];
+    for line in main.iter().chain(debug.iter()) {
+        let seq = line["seq"].as_u64().unwrap() as usize;
+        assert!((1..=7).contains(&seq), "seq {seq} is outside the files");
+        assert!(!seen[seq], "seq {seq} appears twice");
+        seen[seq] = true;
+    }
+    assert!(
+        seen[1..=7].iter().all(|stored| *stored),
+        "a seq of the two files is missing: {seen:?}"
+    );
+}
+
+#[test]
 fn the_first_line_opens_the_file_with_the_schema_the_pid_the_role_and_the_boot() {
     let dir = directory("open");
     let log = EventLog::start(options(&dir)).unwrap();
@@ -193,15 +239,16 @@ fn seq_is_consecutive_from_one_and_ts_us_is_in_microseconds() {
         assert!(log.emit(Level::Debug, "sidecar.vt.test", &json!({ "index": index })));
     }
     log.flush(DEADLINE).unwrap();
-    let lines = lines_of(log.path());
+    // The four events are of the debug channel, so the test reads both files in the order of their seq.
+    let lines = soksak_sidecar_vt_core::events::read_run_lines(log.path()).unwrap();
     let seqs: Vec<u64> = lines
         .iter()
         .map(|line| line["seq"].as_u64().unwrap())
         .collect();
     assert_eq!(
         seqs,
-        (1..=6).collect::<Vec<u64>>(),
-        "log.open, log.policy and the four events"
+        (1..=7).collect::<Vec<u64>>(),
+        "log.open, log.policy, the log.open of the debug file and the four events"
     );
     for line in &lines {
         let ts = line["ts_us"].as_u64().unwrap();

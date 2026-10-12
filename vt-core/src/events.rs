@@ -391,6 +391,9 @@ impl EventLog {
         let path = options
             .directory
             .join(format!("{ROLE}-{}.jsonl", options.boot));
+        let debug_path = options
+            .directory
+            .join(format!("{ROLE}-{}.debug.jsonl", options.boot));
         let file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -427,6 +430,7 @@ impl EventLog {
             let loss = Arc::clone(&loss);
             let interval = options.batch_interval;
             let path_for_writer = path.clone();
+            let debug_path_for_writer = debug_path.clone();
             let rotate_bytes = options.rotate_bytes;
             let generations = options.generations;
             std::thread::Builder::new()
@@ -436,6 +440,7 @@ impl EventLog {
                         Output::new(
                             file,
                             path_for_writer,
+                            debug_path_for_writer,
                             rotate_bytes,
                             generations,
                             &open,
@@ -780,33 +785,67 @@ impl PolicyState {
 }
 
 /// The file of the writer with its batch, its size and the sequence number of the last line.
+/// One file of the writer: the main file of the levels error, warn and info, or the debug file of the levels debug and
+/// trace. The debug file is `None` until the first line of its channel is written, so a run that stores no such level
+/// leaves no empty file.
+struct LogFile {
+    path: PathBuf,
+    file: Option<File>,
+    /// The bytes of the file, written or waiting in the batch.
+    size: u64,
+    /// The bytes of the file that reached it as whole lines.
+    file_len: u64,
+    /// The size at which a rotation that failed is tried again.
+    retry_rotation_at: u64,
+    /// The lines that wait for the next write, with the `seq` of the first and their number.
+    batch: String,
+    batch_first_seq: u64,
+    batch_lines: u64,
+    /// The lines that failed writes lost; `log.dropped` states them when writing works again.
+    lost: Option<Lost>,
+}
+
+impl LogFile {
+    fn new(path: PathBuf, file: Option<File>) -> LogFile {
+        LogFile {
+            path,
+            file,
+            size: 0,
+            file_len: 0,
+            retry_rotation_at: 0,
+            batch: String::new(),
+            batch_first_seq: 0,
+            batch_lines: 0,
+            lost: None,
+        }
+    }
+}
+
+/// The channel of a level: 0 holds error, warn and info in the main file, 1 holds debug and trace in the debug file.
+fn channel_of(level: Level) -> usize {
+    match level {
+        Level::Debug | Level::Trace => 1,
+        Level::Error | Level::Warn | Level::Info => 0,
+    }
+}
+
+/// The two files of the writer with the sequence number of the last line, which runs across both.
 struct Output {
     policy: PolicyState,
-    file: File,
-    path: PathBuf,
+    files: [LogFile; 2],
     rotate_bytes: u64,
     generations: usize,
     /// The fields of `log.open`, written again at the start of every file.
     open_fields: String,
-    batch: String,
-    /// The `seq` of the first line of the batch, and the number of its lines.
-    batch_first_seq: u64,
-    batch_lines: u64,
-    /// The bytes of the current file, written or waiting in the batch.
-    size: u64,
-    /// The bytes of the current file that reached it as whole lines.
-    file_len: u64,
-    /// The size at which a rotation that failed is tried again.
-    retry_rotation_at: u64,
-    /// The lines that failed writes lost; `log.dropped` states them when writing works again.
-    lost: Option<Lost>,
     seq: u64,
 }
 
 impl Output {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         file: File,
         path: PathBuf,
+        debug_path: PathBuf,
         rotate_bytes: u64,
         generations: usize,
         open: &Pending,
@@ -814,32 +853,28 @@ impl Output {
     ) -> Output {
         Output {
             policy,
-            file,
-            path,
+            files: [
+                LogFile::new(path, Some(file)),
+                LogFile::new(debug_path, None),
+            ],
             rotate_bytes,
             generations,
             open_fields: open.fields.get().to_string(),
-            batch: String::new(),
-            batch_first_seq: 0,
-            batch_lines: 0,
-            size: 0,
-            file_len: 0,
-            retry_rotation_at: 0,
-            lost: None,
             seq: 0,
         }
     }
 
-    /// Adds the line of an event with the next `seq`.
-    fn append(&mut self, pending: &Pending) {
+    /// Adds the line of an event with the next `seq` to the batch of a file.
+    fn append(&mut self, channel: usize, pending: &Pending) {
         self.seq += 1;
-        if self.batch_lines == 0 {
-            self.batch_first_seq = self.seq;
-        }
-        self.batch_lines += 1;
         let text = format!("{}\n", line(self.seq, pending));
-        self.size += text.len() as u64;
-        self.batch.push_str(&text);
+        let file = &mut self.files[channel];
+        if file.batch_lines == 0 {
+            file.batch_first_seq = self.seq;
+        }
+        file.batch_lines += 1;
+        file.size += text.len() as u64;
+        file.batch.push_str(&text);
     }
 
     /// Records a failure of the writer itself as an error record of the file.
@@ -853,7 +888,7 @@ impl Output {
             "sidecar.vt.record.error",
             to_raw_value(&json!({"where": place, "text": text})).expect("a json value serializes"),
         );
-        self.append(&record);
+        self.push(&record);
     }
 
     /// States the policy that the writer found when it started, and the refusal of its file.
@@ -914,29 +949,55 @@ impl Output {
         }
     }
 
-    /// Adds an event. A file that the line would take past the bound is closed first; the new file opens with
-    /// `log.open` and the record of the rotation, so every file of the contract starts with `log.open` and `seq`
-    /// continues. A rotation that fails is tried again after another `rotate_bytes` of lines.
+    /// The `log.open` that starts every file, with the fields of the run.
+    fn open_event(&self) -> Pending {
+        Pending::of_writer(
+            Level::Info,
+            "log.open",
+            RawValue::from_string(self.open_fields.clone())
+                .expect("the fields of log.open are JSON"),
+        )
+    }
+
+    /// Adds an event to the file of its channel. A file that the line would take past the bound is closed first; the new
+    /// file opens with `log.open` and the record of the rotation, so every file of the contract starts with `log.open` and
+    /// `seq` continues. A rotation that fails is tried again after another `rotate_bytes` of lines.
     fn push(&mut self, pending: &Pending) {
-        let next = line(self.seq + 1, pending).len() as u64 + 1;
-        if self.size > 0
-            && self.size + next > self.rotate_bytes
-            && self.size >= self.retry_rotation_at
-        {
-            self.flush();
-            let full = self.size;
-            match self.rotate() {
-                Ok(removed) => {
-                    self.size = 0;
-                    self.file_len = 0;
-                    self.retry_rotation_at = 0;
-                    let open = Pending::of_writer(
-                        Level::Info,
-                        "log.open",
-                        RawValue::from_string(self.open_fields.clone())
-                            .expect("the fields of log.open are JSON"),
+        let channel = channel_of(pending.level);
+        if self.files[channel].file.is_none() {
+            match open_log_file(&self.files[channel].path) {
+                Ok(file) => {
+                    self.files[channel].file = Some(file);
+                    let open = self.open_event();
+                    self.append(channel, &open);
+                }
+                Err(error) => {
+                    // The event is not written; its seq stays taken, so the audit shows the gap next to this report.
+                    self.seq += 1;
+                    eprintln!(
+                        "event writer: {} cannot be written: {}: {error}",
+                        pending.event,
+                        self.files[channel].path.display()
                     );
-                    self.append(&open);
+                    return;
+                }
+            }
+        }
+        let next = line(self.seq + 1, pending).len() as u64 + 1;
+        if self.files[channel].size > 0
+            && self.files[channel].size + next > self.rotate_bytes
+            && self.files[channel].size >= self.files[channel].retry_rotation_at
+        {
+            self.write_batch(channel);
+            let full = self.files[channel].size;
+            match self.rotate(channel) {
+                Ok(removed) => {
+                    let file = &mut self.files[channel];
+                    file.size = 0;
+                    file.file_len = 0;
+                    file.retry_rotation_at = 0;
+                    let open = self.open_event();
+                    self.append(channel, &open);
                     let rotated = Pending::of_writer(
                         Level::Info,
                         "log.rotated",
@@ -947,15 +1008,16 @@ impl Output {
                         }))
                         .expect("a json value serializes"),
                     );
-                    self.append(&rotated);
+                    self.append(channel, &rotated);
                 }
                 Err(error) => {
-                    self.retry_rotation_at = self.size + self.rotate_bytes;
+                    self.files[channel].retry_rotation_at =
+                        self.files[channel].size + self.rotate_bytes;
                     self.record_failure(error);
                 }
             }
         }
-        self.append(pending);
+        self.append(channel, pending);
     }
 
     /// Stores one `log.dropped` after the range of `seq` that the refused events would have had. The refused events had no
@@ -975,7 +1037,7 @@ impl Output {
                 "count": events,
                 "bytes": bytes,
                 "reason": reason,
-                // The sidecar holds one event file, so the channel of every lost event is other.
+                // The queue holds the events of both channels, so its loss names the channel other.
                 "channel": "other",
             }))
             .expect("a json value serializes"),
@@ -986,10 +1048,13 @@ impl Output {
     /// Writes the batch. A write that fails loses the lines of the batch: the file returns to its last whole line, and the
     /// range of `seq` is stated by `log.dropped` after the next write that succeeds.
     fn flush(&mut self) {
-        if !self.write_batch() {
-            return;
-        }
-        if let Some(lost) = self.lost.take() {
+        for channel in 0..2 {
+            if !self.write_batch(channel) {
+                continue;
+            }
+            let Some(lost) = self.files[channel].lost.take() else {
+                continue;
+            };
             let pending = Pending::of_writer(
                 Level::Warn,
                 "log.dropped",
@@ -999,58 +1064,63 @@ impl Output {
                     "count": lost.to_seq - lost.from_seq + 1,
                     "bytes": lost.bytes,
                     "reason": lost.reason,
-                    // The sidecar holds one event file, so the channel of every lost event is other.
-                    "channel": "other",
+                    // The batch held the lines of one file, so its loss names that file.
+                    "channel": if channel == 0 { "other" } else { "debug" },
                 }))
                 .expect("a json value serializes"),
             );
-            self.append(&pending);
-            self.write_batch();
+            self.append(0, &pending);
+            self.write_batch(0);
         }
     }
 
-    /// Writes the batch to the file; false when the write failed and the batch was counted as lost.
-    fn write_batch(&mut self) -> bool {
-        if self.batch.is_empty() {
+    /// Writes the batch of one file; false when the write failed and the batch was counted as lost.
+    fn write_batch(&mut self, channel: usize) -> bool {
+        if self.files[channel].batch.is_empty() {
             return true;
         }
-        match self.file.write_all(self.batch.as_bytes()) {
+        let Some(file) = self.files[channel].file.as_mut() else {
+            return true;
+        };
+        match file.write_all(self.files[channel].batch.as_bytes()) {
             Ok(()) => {
-                self.file_len += self.batch.len() as u64;
-                self.batch.clear();
-                self.batch_lines = 0;
+                let file = &mut self.files[channel];
+                file.file_len += file.batch.len() as u64;
+                file.batch.clear();
+                file.batch_lines = 0;
                 true
             }
             Err(error) => {
                 let mut reason = format!("the write failed: {error}");
                 // A partial write leaves a torn line; the file goes back to its last whole line.
-                if let Err(truncate) = self.file.set_len(self.file_len) {
+                if let Err(truncate) = file.set_len(self.files[channel].file_len) {
                     reason.push_str(&format!("; the partial line stays in the file: {truncate}"));
                 }
+                let file = &mut self.files[channel];
                 let lost = Lost {
-                    from_seq: self
+                    from_seq: file
                         .lost
                         .as_ref()
-                        .map_or(self.batch_first_seq, |lost| lost.from_seq),
+                        .map_or(file.batch_first_seq, |lost| lost.from_seq),
                     to_seq: self.seq,
-                    bytes: self.lost.as_ref().map_or(0, |lost| lost.bytes)
-                        + self.batch.len() as u64,
+                    bytes: file.lost.as_ref().map_or(0, |lost| lost.bytes)
+                        + file.batch.len() as u64,
                     reason,
                 };
-                self.lost = Some(lost);
-                self.size = self.file_len;
-                self.batch.clear();
-                self.batch_lines = 0;
+                file.lost = Some(lost);
+                file.size = file.file_len;
+                file.batch.clear();
+                file.batch_lines = 0;
                 false
             }
         }
     }
 
-    /// Moves the full file to generation 1 and the older generations one step up, removes the generation beyond the kept
-    /// ones, and opens a new file. Returns the name of the removed generation, if there was one, or the step that failed;
-    /// a failed step leaves the writer with the file it has.
-    fn rotate(&mut self) -> Result<Option<String>, String> {
-        let path = self.path.clone();
+    /// Moves the full file of a channel to generation 1 and the older generations one step up, removes the generation
+    /// beyond the kept ones, and opens a new file. Returns the name of the removed generation, if there was one, or the
+    /// step that failed; a failed step leaves the writer with the file it has.
+    fn rotate(&mut self, channel: usize) -> Result<Option<String>, String> {
+        let path = self.files[channel].path.clone();
         let generation = |n: usize| {
             let mut name = path.clone().into_os_string();
             name.push(format!(".{n}"));
@@ -1091,12 +1161,24 @@ impl Output {
             .custom_flags(libc::O_CLOEXEC)
             .open(&path)
             .map_err(|error| format!("rotation could not open {}: {error}", path.display()))?;
-        let full = std::mem::replace(&mut self.file, next);
-        if let Err(error) = full.sync_all() {
-            self.record_failure(format!("rotation could not sync the full file: {error}"));
+        let full = self.files[channel].file.replace(next);
+        if let Some(file) = full {
+            if let Err(error) = file.sync_all() {
+                self.record_failure(format!("rotation could not sync the full file: {error}"));
+            }
         }
         Ok(removed)
     }
+}
+
+/// Opens a file of the writer close-on-exec.
+fn open_log_file(path: &Path) -> std::io::Result<File> {
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .custom_flags(libc::O_CLOEXEC)
+        .open(path)
 }
 
 fn write_loop(
@@ -1185,6 +1267,19 @@ fn write_loop(
 
 /// Reads the lines of an event file. A file whose first line is not `log.open` of the schema of this writer is rejected with
 /// an error that names the file and what it found; no earlier schema is read.
+/// Reads the lines of both files of a writer of one run in the order of their `seq`: the main file and the debug file,
+/// which exists once the first line of its channel was written.
+pub fn read_run_lines(main: &Path) -> Result<Vec<serde_json::Value>, String> {
+    let mut lines = read_lines(main)?;
+    let debug = main.with_extension("debug.jsonl");
+    if debug.exists() {
+        lines.extend(read_lines(&debug)?);
+        // default: a line without a readable seq keeps its place after the lines before it.
+        lines.sort_by_key(|line| line["seq"].as_u64().unwrap_or(0));
+    }
+    Ok(lines)
+}
+
 pub fn read_lines(path: &Path) -> Result<Vec<serde_json::Value>, String> {
     let text =
         std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;

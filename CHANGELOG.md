@@ -4,7 +4,7 @@
 
 ## Unreleased
 
-- S48 (open): the writer must store debug and trace in a debug file; the audit of core refuses the debug lines of the single file.
+- S48: the writer stores debug and trace in `vt-<boot>.debug.jsonl`, which it creates with the first line of its channel; one seq counts across both files and each rotates by its generations, and `read_run_lines` reads both files of a run in the order of their seq.
 - S47: log.dropped names the channel other, because the sidecar holds one event file; the base catalog of core requires the channel.
 - S46: the event catalog names the sidecar `vt` beside its schema, which the composed catalog of core requires.
 - S44: the engine keeps the input line that a shell redraws after a narrowing reflow; a test replays the recorded bytes of a failed window check (53 to 26 columns) with the rows kept.
