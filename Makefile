@@ -1,5 +1,5 @@
 # 터미널 engine sidecar repository 의 test, build, release(docs/features.md). release 는 core 의 sok 를 쓴다.
-.PHONY: test build release repeat
+.PHONY: test build release repeat hooks
 
 MACOS_MINIMUM = 14.4
 PROFILE ?= debug
@@ -49,3 +49,7 @@ repeat:
 	  if ! MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -q -p $(PACKAGE) $(if $(TEST),-- --exact $(TEST)) > "$$output" 2>&1; then \
 	    cat "$$output"; echo "FAIL run $$run of $(COUNT) after $$(( $$(date +%s) - started )) s"; exit 1; fi; \
 	  echo "PASS run $$run of $(COUNT) in $$(( $$(date +%s) - started )) s"; run=$$((run + 1)); done
+
+# Sets this repository to use .githooks, which checks commit messages and records at commit time.
+hooks:
+	@git config core.hooksPath .githooks

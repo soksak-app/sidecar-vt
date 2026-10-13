@@ -8,6 +8,7 @@
 make test                 # test
 make build                # sidecar.json이 가리키는 실행 파일
 make release OUT=<folder> SOK=<core>/target/debug/sok   # 이 platform의 release
+make hooks                # clone 후 한 번: commit 때 commit message와 record를 검사
 ```
 
 service는 `soksak-vt-alacritty --service-dir <dir> --log-dir <dir>`로 시작하며 두 option이 모두 필요하다. event는 `<log-dir>/vt-<boot>.jsonl`에 쓰고, [events.json](vt-alacritty/events.json)이 그 event를 선언한다. release는 `sidecar.json`이 선언하는 replay 실행 파일 `soksak-vt-replay`도 담는다. 이 파일은 저장한 입력에서 session의 화면을 다시 만들고 frame 기록마다 화면 hash를 출력한다.

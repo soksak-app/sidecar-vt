@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S60: `make hooks`가 `.githooks`를 hook 폴더로 정해, commit message의 형식이나 용어 규칙, record 규칙을 어긴 commit이 만들어질 때 거부된다.
 - S58: 막힌 쓰기의 test가 고정된 시간 대신 응답의 첫 byte를 기다린다.
 - S57: 모든 crate를 Rust edition 2024로 빌드한다. manifest가 `edition = "2024"`를 선언하고 동작은 그대로 둔다. 진단 build의 engine 기록 폴더는 시작할 때 `SOKSAK_VT_TRACE_DIR`에서 한 번 읽는다.
 - S56: session의 close가 writer를 가져가기 전에 자식을 끝내므로, 읽지 않는 자식을 기다리는 write가 close를 붙잡지 않는다.
