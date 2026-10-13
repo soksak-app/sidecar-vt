@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S40.15: `@soksak/plugin-api` comes from the core release 0.0.11, so `make test` checks the emit sites of the Rust sources against the catalog with the installed `soksak-events`, and the release workflow builds `sok` from that release.
 - S51: the manifest case of `tests/events.test.mjs` requires the replay inputs of `sidecar.json` and their declaration in the catalog.
 - S48: the writer stores debug and trace in `vt-<boot>.debug.jsonl`, which it creates with the first line of its channel; one seq counts across both files and each rotates by its generations, and `read_run_lines` reads both files of a run in the order of their seq.
 - S47: log.dropped names the channel other, because the sidecar holds one event file; the base catalog of core requires the channel.

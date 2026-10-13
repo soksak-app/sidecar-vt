@@ -11,7 +11,7 @@ permissions:
 
 # sok sidecar release 를 build 하는 core release. 이 저장소가 릴리스하는 version 과 관계가 없다.
 env:
-  CORE_RELEASE: v0.0.5
+  CORE_RELEASE: v0.0.11
 
 jobs:
   release:
