@@ -90,6 +90,7 @@ fn the_message_for_the_screen_of_each_vector_has_its_members_and_its_hash() {
         let message = screen_message(
             expected["segment"].as_str().unwrap(),
             expected["sequence"].as_u64().unwrap(),
+            serde_json::Value::Null,
             &screen,
         )
         .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -132,6 +133,6 @@ fn the_message_for_the_screen_of_each_vector_has_its_members_and_its_hash() {
 fn a_screen_that_the_hash_refuses_gets_no_message() {
     let mut screen = screen_of(&golden("screen-message.json")["vectors"][1]["message"]).unwrap();
     screen.cursor.row = 5;
-    let error = screen_message("b1", 3, &screen).unwrap_err();
+    let error = screen_message("b1", 3, serde_json::Value::Null, &screen).unwrap_err();
     assert!(error.contains("outside the screen"), "{error}");
 }

@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S59: the `screen` event carries `frame` with the `generation`, `raster` and `sequence` of the frame that shows the screen, so a screen read names the presented frame; `frame` is null without an image state.
 - S60: `make hooks` sets `.githooks` as the hook folder, so a commit whose message breaks the commit form or the term rules, or whose records break the record rules, is refused when it is made.
 - S58: the test of a blocked write waits for the first byte of the reply instead of a fixed time.
 - S57: every crate builds with Rust edition 2024; the manifests declare `edition = "2024"` and the code keeps its behavior. The engine trace folder of a diagnostic build is read once at startup from `SOKSAK_VT_TRACE_DIR`.

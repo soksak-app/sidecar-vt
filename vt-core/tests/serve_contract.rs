@@ -5138,3 +5138,101 @@ async fn the_answer_of_a_new_raster_is_not_taken_for_a_retained_transfer_of_the_
     drop(to_serve);
     task.await.unwrap().unwrap();
 }
+
+/// 다음 `screen` 줄을 기다린다. 표시 뒤의 화면 줄이나 `screen.read` 의 응답이 그 줄이다.
+async fn next_screen_line<R: tokio::io::AsyncBufRead + Unpin>(
+    lines: &mut tokio::io::Lines<R>,
+) -> serde_json::Value {
+    loop {
+        let line = tokio::time::timeout(std::time::Duration::from_secs(2), lines.next_line())
+            .await
+            .expect("timeout waiting for a screen line")
+            .expect("failed to read a sidecar line")
+            .expect("the sidecar closed its output");
+        if line.contains(r#""event":"screen""#) {
+            return serde_json::from_str(&line).unwrap();
+        }
+    }
+}
+
+/// `screen.read` 의 응답은 그 화면을 보이는 표시된 frame 을 `frame` 으로 이름 짓는다. 답한 frame 뒤에는 그 frame 이다.
+#[tokio::test]
+async fn a_screen_read_names_the_answered_frame_that_shows_the_screen() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new("raster".into(), calls.clone()));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let first = next_image(&mut lines).await;
+    assert_eq!(
+        (first["raster"].as_u64(), first["sequence"].as_u64()),
+        (Some(1), Some(1)),
+        "{first}"
+    );
+    // The screen line that follows the image is the screen of the frame; the reply to `screen.read` comes after it.
+    let _presented = next_screen_line(&mut lines).await;
+
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
+{"surface":"s1","body":{"operation":"screen.read"}}
+"#).await.unwrap();
+    let read = next_screen_line(&mut lines).await;
+    assert_eq!(
+        read["body"]["frame"],
+        serde_json::json!({"generation": 1, "raster": 1, "sequence": 1}),
+        "{read}"
+    );
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+}
+
+/// A screen that changes while the frame is unanswered is shown by the next frame, so `screen.read` names that frame.
+#[tokio::test]
+async fn a_screen_read_names_the_next_frame_while_a_change_waits_for_the_answer() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new("raster".into(), calls.clone()));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let first = next_image(&mut lines).await;
+    assert_eq!(
+        (first["raster"].as_u64(), first["sequence"].as_u64()),
+        (Some(1), Some(1)),
+        "{first}"
+    );
+    let _presented = next_screen_line(&mut lines).await;
+
+    // The first frame stays unanswered. A font change resizes the engine and marks the screen as changed, and the
+    // reply to `screen.read` follows it in the same order as the requests.
+    to_serve
+        .write_all(
+            br#"{"surface":"s1","body":{"operation":"font","family":"Menlo","size":14}}
+{"surface":"s1","body":{"operation":"screen.read"}}
+"#,
+        )
+        .await
+        .unwrap();
+    let read = next_screen_line(&mut lines).await;
+    assert_eq!(
+        read["body"]["frame"],
+        serde_json::json!({"generation": 1, "raster": 1, "sequence": 2}),
+        "{read}"
+    );
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+}
