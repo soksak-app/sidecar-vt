@@ -185,7 +185,7 @@
     "sidecar.vt.policy.watch_started": {
       "layer": "sidecar",
       "class": "lifecycle",
-      "level": "debug",
+      "level": "info",
       "fields": {
         "folder": "string"
       },
@@ -194,13 +194,12 @@
     "sidecar.vt.policy.watch_event": {
       "layer": "sidecar",
       "class": "lifecycle",
-      "level": "debug",
+      "level": "info",
       "fields": {
-        "kind": "string",
-        "paths": "array",
-        "matched": "boolean"
+        "vnode": "string",
+        "flags": "array"
       },
-      "description": "The file system reported an event in the folder of the policy file: kind is the notify event kind, paths are the paths of the event, and matched is true when the policy file filter accepts the event."
+      "description": "The kernel reported a change of the folder of the policy file or of the policy file: vnode is folder or file, and flags names the vnode events of the change."
     },
     "sidecar.vt.record.error": {
       "layer": "sidecar",

@@ -15,11 +15,11 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use serde_json::json;
 use serde_json::value::{to_raw_value, RawValue};
 
+use crate::platform::darwin::file_watch::{watch_file, Change};
 use crate::policy::{is_being_written, parse_policy, Class, Gate, Policy};
 
 /// The schema number of the lines that this writer writes.
@@ -278,11 +278,10 @@ enum Message {
     PolicyWatchFailed(String),
     /// The watch of the policy file is armed on this folder.
     PolicyWatchStarted(String),
-    /// The file system reported an event: its kind, its paths and whether the policy file filter accepted it.
+    /// The kernel reported a change of the folder or the file of the policy: the vnode and the names of its flags.
     PolicyWatchEvent {
-        kind: String,
-        paths: Vec<String>,
-        matched: bool,
+        vnode: String,
+        flags: Vec<String>,
     },
 }
 
@@ -351,8 +350,8 @@ pub struct EventLog {
     gate: Arc<Gate>,
     path: PathBuf,
     boot: String,
-    /// The watch of the policy file; it ends before the writer does.
-    watcher: Mutex<Option<RecommendedWatcher>>,
+    /// The stop of the watch of the policy file; it runs before the writer ends.
+    policy_watch: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     writer: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -414,7 +413,7 @@ impl EventLog {
         let queued_bytes = Arc::new(AtomicUsize::new(0));
         let loss = Arc::new(Loss::new());
         // The watch starts before the first read, so a change between the two reaches the writer as a notification.
-        let watcher = match &options.policy_file {
+        let policy_watch = match &options.policy_file {
             Some(file) => Some(watch_policy_file(file, &sender)?),
             None => None,
         };
@@ -474,7 +473,7 @@ impl EventLog {
             gate,
             path,
             boot: options.boot.clone(),
-            watcher: Mutex::new(watcher),
+            policy_watch: Mutex::new(policy_watch),
             writer: Mutex::new(Some(writer)),
         })
     }
@@ -629,8 +628,10 @@ impl EventLog {
 impl Drop for EventLog {
     fn drop(&mut self) {
         // The watch ends first, so no notification is sent to a queue that is being closed.
-        if let Ok(mut watcher) = self.watcher.lock() {
-            watcher.take();
+        if let Ok(mut policy_watch) = self.policy_watch.lock() {
+            if let Some(stop) = policy_watch.take() {
+                stop();
+            }
         }
         // The stop waits for room in the queue: the writer takes events while it runs. A writer that ended can no longer
         // record its own end, so the standard error of the process is the only place left for these two reports.
@@ -720,53 +721,38 @@ fn read_policy_file(file: &Path) -> Result<PolicyFile, String> {
     parse_policy(&file.display().to_string(), &text).map(PolicyFile::Policy)
 }
 
-/// Starts the watch of the policy file: a notification of the file system for the file puts a request to read it in the
-/// queue of the writer. The folder is watched and not the file, because the host replaces the file by a rename and the
-/// file may not exist yet. No timer reads the file. The send waits for room in the queue; it fails only when the writer
-/// has ended.
+/// Starts the watch of the policy file: the folder and the file are watched through the kqueue of the kernel, so the
+/// creation, the rename onto and the removal of the file change the folder, and a write in place changes the file. Each
+/// notification of the watch puts a request to read the file in the queue of the writer, and a failure of the watch is
+/// sent to the writer as a record. No timer reads the file. The returned function ends the watch.
 fn watch_policy_file(
     file: &Path,
     sender: &SyncSender<Message>,
-) -> Result<RecommendedWatcher, String> {
+) -> Result<Box<dyn FnOnce() + Send>, String> {
     let folder = file
         .parent()
         .ok_or_else(|| format!("{}: the policy file has no folder", file.display()))?;
-    let name = file
-        .file_name()
-        .ok_or_else(|| format!("{}: the policy file has no name", file.display()))?
-        .to_os_string();
-    let callback_sender = sender.clone();
-    let mut watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
-        let message = match result {
-            Ok(event) => {
-                let matched = event
-                    .paths
-                    .iter()
-                    .any(|path| path.file_name() == Some(&name));
+    let changed_sender = sender.clone();
+    let failed_sender = sender.clone();
+    let stop = watch_file(
+        file,
+        Arc::new(move |changes: &[Change]| {
+            for change in changes {
                 // silent: the send fails only after the writer ended, when there is no file to record the notification in.
-                let _ = callback_sender.send(Message::PolicyWatchEvent {
-                    kind: format!("{:?}", event.kind),
-                    paths: event
-                        .paths
-                        .iter()
-                        .map(|path| path.display().to_string())
-                        .collect(),
-                    matched,
+                let _ = changed_sender.send(Message::PolicyWatchEvent {
+                    vnode: change.vnode.to_string(),
+                    flags: change.flags.iter().map(|flag| flag.to_string()).collect(),
                 });
-                if !matched {
-                    return;
-                }
-                Message::PolicyChanged
             }
-            Err(error) => Message::PolicyWatchFailed(error.to_string()),
-        };
-        // silent: the send fails only after the writer ended, when there is no file to record the notification in.
-        let _ = callback_sender.send(message);
-    })
+            // silent: the send fails only after the writer ended, when there is no file to record the notification in.
+            let _ = changed_sender.send(Message::PolicyChanged);
+        }),
+        Arc::new(move |text: String| {
+            // silent: the send fails only after the writer ended, when there is no file to record the failure in.
+            let _ = failed_sender.send(Message::PolicyWatchFailed(text));
+        }),
+    )
     .map_err(|error| format!("{}: watch the policy file: {error}", file.display()))?;
-    watcher
-        .watch(folder, RecursiveMode::NonRecursive)
-        .map_err(|error| format!("{}: watch the policy file: {error}", folder.display()))?;
     sender
         .send(Message::PolicyWatchStarted(folder.display().to_string()))
         .map_err(|_| {
@@ -775,7 +761,7 @@ fn watch_policy_file(
                 file.display()
             )
         })?;
-    Ok(watcher)
+    Ok(stop)
 }
 
 /// The policy of the writer: the file it reads, the policy in force and the gate that the producers ask.
@@ -962,27 +948,26 @@ impl Output {
 
     /// Stores the event `sidecar.vt.policy.watch_started` when the watch of the policy file is armed on `folder`.
     fn policy_watch_started(&mut self, folder: &str) {
-        if !self.policy.gate.allows(Class::Lifecycle, Level::Debug) {
+        if !self.policy.gate.allows(Class::Lifecycle, Level::Info) {
             return;
         }
         let event = Pending::of_writer(
-            Level::Debug,
+            Level::Info,
             "sidecar.vt.policy.watch_started",
             to_raw_value(&json!({"folder": folder})).expect("a json value serializes"),
         );
         self.push(&event);
     }
 
-    /// Stores the event `sidecar.vt.policy.watch_event` for one file system event of the policy watch, whether or not
-    /// the policy file filter accepted it.
-    fn policy_watch_event(&mut self, kind: &str, paths: &[String], matched: bool) {
-        if !self.policy.gate.allows(Class::Lifecycle, Level::Debug) {
+    /// Stores the event `sidecar.vt.policy.watch_event` for one change that the kernel reported for the policy watch.
+    fn policy_watch_event(&mut self, vnode: &str, flags: &[String]) {
+        if !self.policy.gate.allows(Class::Lifecycle, Level::Info) {
             return;
         }
         let event = Pending::of_writer(
-            Level::Debug,
+            Level::Info,
             "sidecar.vt.policy.watch_event",
-            to_raw_value(&json!({"kind": kind, "paths": paths, "matched": matched}))
+            to_raw_value(&json!({"vnode": vnode, "flags": flags}))
                 .expect("a json value serializes"),
         );
         self.push(&event);
@@ -1267,11 +1252,9 @@ fn write_loop(
                 Message::PolicyChanged => out.policy_changed(),
                 Message::PolicyWatchFailed(text) => out.record_error("log policy", text),
                 Message::PolicyWatchStarted(folder) => out.policy_watch_started(&folder),
-                Message::PolicyWatchEvent {
-                    kind,
-                    paths,
-                    matched,
-                } => out.policy_watch_event(&kind, &paths, matched),
+                Message::PolicyWatchEvent { vnode, flags } => {
+                    out.policy_watch_event(&vnode, &flags)
+                }
                 other => {
                     request = Some(other);
                     break;
@@ -1322,11 +1305,7 @@ fn write_loop(
             Message::PolicyChanged => out.policy_changed(),
             Message::PolicyWatchFailed(text) => out.record_error("log policy", text),
             Message::PolicyWatchStarted(folder) => out.policy_watch_started(&folder),
-            Message::PolicyWatchEvent {
-                kind,
-                paths,
-                matched,
-            } => out.policy_watch_event(&kind, &paths, matched),
+            Message::PolicyWatchEvent { vnode, flags } => out.policy_watch_event(&vnode, &flags),
         }
     }
 }

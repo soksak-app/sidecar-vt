@@ -40,13 +40,13 @@
       },
       {
         "call": "policy_watch_started",
-        "fixed": "debug",
+        "fixed": "info",
         "name": "sidecar.vt.policy.watch_started",
         "event": 0
       },
       {
         "call": "policy_watch_event",
-        "fixed": "debug",
+        "fixed": "info",
         "name": "sidecar.vt.policy.watch_event",
         "event": 0
       }

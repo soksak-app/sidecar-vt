@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S54: service가 policy 파일을 kqueue로 폴더와 파일에서 감시하므로 log 폴더에 쓰는 동안에도 변경을 받는다. `sidecar.vt.policy.watch_started`와 `sidecar.vt.policy.watch_event`는 level info로 선언한다.
 - S49: host의 답은 놓인 surface가 남긴 transfer image를 이름, generation, raster, sequence가 모두 맞을 때만 놓으므로, 같은 surface의 다음 raster의 `consumed`가 surface에 닿고 그 configure가 그린다.
 - S52: service가 1 s 이상의 runtime 멈춤을 `sidecar.vt.runtime_stall`로, thread들의 stack을 `sidecar.vt.stall_dump`로, 끝을 `sidecar.vt.runtime_resumed`로 기록한다.
 - S50: `make test`가 record 검사 `soksak-records`를 실행하고, CI가 push된 각 commit message의 형식을 `soksak-commits`로 검사한다.

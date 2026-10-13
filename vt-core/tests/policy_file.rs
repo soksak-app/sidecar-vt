@@ -3,8 +3,11 @@
 // and states each policy and each count of gated events as events of its own.
 use serde_json::{json, Value};
 use soksak_sidecar_vt_core::events::{read_run_lines, EventLog, Events, Level, Options};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -236,4 +239,67 @@ fn the_service_reads_the_policy_file_in_the_parent_of_its_log_folder() {
         Path::new(log.path()).parent(),
         Some(config.directory.path().join("logs").as_path())
     );
+}
+
+/// Appends a line with `sync_data` to a file of the log folder every 20 ms until it is stopped, so the log folder is
+/// written while the policy file changes. Dropping it stops and joins the thread, also when the test fails.
+struct LogFolderWriter {
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl LogFolderWriter {
+    fn start(path: PathBuf) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::clone(&stop);
+        let handle = std::thread::spawn(move || {
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .expect("open the file of the log folder");
+            while !stopped.load(Ordering::Relaxed) {
+                writeln!(file, "{{\"line\":1}}").expect("append a line");
+                file.sync_data().expect("sync the line");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        Self {
+            stop,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for LogFolderWriter {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            handle.join().expect("join the appending thread");
+        }
+    }
+}
+
+#[test]
+fn a_change_is_learned_while_the_log_folder_is_written() {
+    let config = Config::new();
+    let log = config.start();
+    wait_for(&log, "log.policy", 1);
+    let _appender = LogFolderWriter::start(config.directory.path().join("logs").join("x.jsonl"));
+    config.write(IO_OFF);
+    let changed = wait_for(&log, "log.policy", 2);
+    assert_eq!(changed[1]["fields"]["source"], "file");
+    assert_eq!(changed[1]["fields"]["classes"]["io"], "off");
+}
+
+#[test]
+fn an_in_place_write_of_the_file_is_learned() {
+    let config = Config::new();
+    config.write(FRAME_OFF);
+    let log = config.start();
+    wait_for(&log, "log.policy", 1);
+    std::fs::write(config.policy_file(), IO_OFF).expect("write the policy file in place");
+    let changed = wait_for(&log, "log.policy", 2);
+    assert_eq!(changed[1]["fields"]["source"], "file");
+    assert_eq!(changed[1]["fields"]["classes"]["io"], "off");
 }

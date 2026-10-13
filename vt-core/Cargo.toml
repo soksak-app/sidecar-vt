@@ -27,7 +27,6 @@ portable-pty = "0.8"
 unicode-segmentation = "1.12"
 unicode-width = "0.2"
 sha2 = "0.10"
-notify = "8"
 
 [build-dependencies]
 cc = "1"
