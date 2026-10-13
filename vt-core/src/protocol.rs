@@ -3621,11 +3621,15 @@ where
                     Some(registry) => registry.close_owner(&owner).await,
                     None => Ok(()),
                 };
-                let owner_closed = owner_close
-                    .as_ref()
-                    .map(|close| close())
+                // The owner close waits for each child to be reaped, so it runs outside the runtime workers.
+                let owner_closed = match owner_close.clone() {
+                    Some(close) => tokio::task::spawn_blocking(move || close())
+                        .await
+                        .map_err(|error| format!("close owner task failed: {error}"))
+                        .and_then(|result| result),
                     // default: a service without an owner close answers that request with an error.
-                    .unwrap_or_else(|| Err("owner close is unavailable".to_string()));
+                    None => Err("owner close is unavailable".to_string()),
+                };
                 let result = match (closed, owner_closed) {
                     (Ok(()), Ok(())) => Ok(()),
                     (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
@@ -4877,7 +4881,13 @@ impl SessionPort for LocalSessionPort {
     }
 
     async fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
-        self.service.write(session_id, data)
+        // A write waits while the child does not read, so it runs outside the runtime workers.
+        let service = Arc::clone(&self.service);
+        let session_id = session_id.to_string();
+        let data = data.to_vec();
+        tokio::task::spawn_blocking(move || service.write(&session_id, &data))
+            .await
+            .map_err(|error| format!("write PTY task failed: {error}"))?
     }
 
     async fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {

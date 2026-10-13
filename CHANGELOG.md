@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S55: the writes of a session and the owner close of the input loop run outside the runtime workers, so a write that waits for a child that does not read no longer blocks the other tasks of the runtime.
 - S54: the service watches the policy file through kqueue, on the folder and on the file, so a change is learned while the log folder is written; `sidecar.vt.policy.watch_started` and `sidecar.vt.policy.watch_event` are declared at level info.
 - S49: an answer of the host releases a transfer image that a released surface left only when its name, generation, raster and sequence match, so the `consumed` of the next raster of the same surface reaches the surface and its configure draws.
 - S52: the service records a stall of its runtime of 1 s or more as `sidecar.vt.runtime_stall`, the stacks of its threads as `sidecar.vt.stall_dump` and the end as `sidecar.vt.runtime_resumed`.

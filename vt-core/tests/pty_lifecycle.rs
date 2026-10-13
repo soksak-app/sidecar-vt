@@ -3,9 +3,10 @@ use std::fs::OpenOptions;
 mod events_test;
 
 use std::os::fd::AsRawFd;
+use std::sync::Arc;
 
 use soksak_sidecar_vt_core::pty::PtyService;
-use soksak_sidecar_vt_core::DaemonEvent;
+use soksak_sidecar_vt_core::{DaemonEvent, LocalSessionPort, SessionPort, ShellRequest};
 use tokio::time::{timeout, Duration};
 
 /// 실제 PTY 를 쓰는 test 를 하나씩 실행한다. test 마다 runtime 이 다르므로 await 를 넘어 잡는 async 잠금이다.
@@ -585,5 +586,75 @@ fn a_process_group_whose_members_are_exiting_is_already_terminated() {
         result,
         Ok(soksak_sidecar_vt_core::platform::pty::KillResult::Ending),
         "members while exiting: {exiting:?}"
+    );
+}
+
+/// A session whose shell is a script that sleeps and never reads its input. The write of 1 MiB fills the
+/// terminal buffer and waits for the child, which ends after three seconds.
+#[tokio::test(flavor = "current_thread")]
+async fn a_write_waiting_for_the_child_does_not_block_the_runtime() {
+    let _test_lock = lifecycle_test_lock().await;
+    let _native_test_lock = native_pty_test_lock();
+    let dir = tempfile::tempdir().expect("temporary directory must be created");
+    let script = dir.path().join("sleeper");
+    std::fs::write(&script, "#!/bin/sh\nsleep 3\n").expect("script must be written");
+    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("script must be executable");
+    let port = Arc::new(LocalSessionPort::new_with_owner(
+        Arc::new(PtyService::new(events_test::TestEvents::new().handle())),
+        String::new(),
+    ));
+    let shell = script.to_str().expect("script path is UTF-8").to_string();
+    let session = port
+        .open(
+            &ShellRequest {
+                shell,
+                directory: None,
+            },
+            80,
+            24,
+        )
+        .await
+        .expect("PTY setup failed; this is an environmental test failure");
+    let writer = {
+        let port = Arc::clone(&port);
+        let session = session.clone();
+        // Complete lines fill the canonical queue of the line discipline, which blocks the master write
+        // once the child does not read it.
+        let data = b"x\n".repeat(1 << 19);
+        tokio::spawn(async move { port.write(&session, &data).await })
+    };
+    let (tick_tx, mut tick_rx) = tokio::sync::mpsc::unbounded_channel();
+    let ticker = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(50));
+        loop {
+            interval.tick().await;
+            if tick_tx.send(()).is_err() {
+                break;
+            }
+        }
+    });
+    let mut ticks = 0usize;
+    let _ = timeout(Duration::from_secs(1), async {
+        while ticks < 5 {
+            if tick_rx.recv().await.is_none() {
+                break;
+            }
+            ticks += 1;
+        }
+    })
+    .await;
+    ticker.abort();
+    port.close(&session)
+        .await
+        .expect("closing the session must succeed");
+    let written = writer.await.expect("write task must finish");
+    assert!(
+        written.is_err(),
+        "a 1 MiB write to a child that never reads must fail when the child ends: {written:?}"
+    );
+    assert!(
+        ticks >= 5,
+        "the runtime advanced {ticks} ticks of 50 ms within 1 s while a 1 MiB write waited for its child, expected at least 5"
     );
 }
