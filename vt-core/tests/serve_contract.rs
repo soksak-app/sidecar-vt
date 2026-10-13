@@ -5052,3 +5052,85 @@ async fn a_persistent_closed_surface_releases_its_unanswered_transfer_image_when
 ) {
     check_unanswered_transfer(true, LettingGo::Close, Release::ConnectionEnd).await;
 }
+
+/// 다음 표시 요청을 기다려 그 image 를 돌려준다.
+async fn next_image<R: tokio::io::AsyncBufRead + Unpin>(
+    lines: &mut tokio::io::Lines<R>,
+) -> serde_json::Value {
+    loop {
+        let line = next_line_except_screen(lines).await;
+        let message: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert!(message["body"].get("error").is_none(), "{line}");
+        if let Some(image) = message["body"].get("image") {
+            return image.clone();
+        }
+    }
+}
+
+/// reconnect 가 남긴 전송 이미지와 새 래스터의 표시 요청은 이름과 순번이 같을 수 있다. 호스트의 답은 generation 과
+/// raster 를 싣는다. 새 래스터의 답은 그 표면의 그리기 대기를 풀고 남은 전송 이미지를 놓지 않는다. 남은 이미지는
+/// 그 래스터의 답이 놓는다.
+#[tokio::test]
+async fn the_answer_of_a_new_raster_is_not_taken_for_a_retained_transfer_of_the_same_sequence() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new("raster".into(), calls.clone()));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+    let mark = std::ffi::CString::new(format!("{} retained raster", std::process::id())).unwrap();
+
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let first = next_image(&mut lines).await;
+    assert_eq!(
+        (first["raster"].as_u64(), first["sequence"].as_u64()),
+        (Some(1), Some(1)),
+        "{first}"
+    );
+    let retained = u32::try_from(first["token"]["id"].as_u64().expect("the token has no id"))
+        .expect("the token id is not a u32");
+    mark_transfer_image(retained, &mark);
+
+    to_serve
+        .write_all(b"{\"surface\":\"s1\",\"body\":{\"operation\":\"reconnect\"}}\n")
+        .await
+        .unwrap();
+    wait_for_reply(&mut lines, LettingGo::Reconnect).await;
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":2,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let second = next_image(&mut lines).await;
+    assert_eq!(
+        (second["raster"].as_u64(), second["sequence"].as_u64()),
+        (Some(2), Some(1)),
+        "{second}"
+    );
+
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":2,"sequence":1}}}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":3,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    // An answer that does not reach the surface leaves it waiting, and the configure of raster 3 draws no frame.
+    let third = next_image(&mut lines).await;
+    assert_eq!(third["raster"].as_u64(), Some(3), "{third}");
+    assert_eq!(
+        transfer_image(retained, &mark),
+        TransferImage::Marked,
+        "the answer of raster 2 released the retained transfer image of raster 1"
+    );
+
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
+{"surface":"s1","body":{"operation":"close"}}
+"#).await.unwrap();
+    wait_for_reply(&mut lines, LettingGo::Close).await;
+    assert_ne!(
+        transfer_image(retained, &mark),
+        TransferImage::Marked,
+        "the answer of raster 1 did not release its retained transfer image"
+    );
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+}

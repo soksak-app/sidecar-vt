@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S49: host의 답은 놓인 surface가 남긴 transfer image를 이름, generation, raster, sequence가 모두 맞을 때만 놓으므로, 같은 surface의 다음 raster의 `consumed`가 surface에 닿고 그 configure가 그린다.
 - S52: service가 1 s 이상의 runtime 멈춤을 `sidecar.vt.runtime_stall`로, thread들의 stack을 `sidecar.vt.stall_dump`로, 끝을 `sidecar.vt.runtime_resumed`로 기록한다.
 - S50: `make test`가 record 검사 `soksak-records`를 실행하고, CI가 push된 각 commit message의 형식을 `soksak-commits`로 검사한다.
 - S40.15: `@soksak/plugin-api`를 core release 0.0.11에서 받으므로 `make test`가 설치된 `soksak-events`로 Rust source의 emit site를 catalog와 대조하고, release workflow가 그 release에서 `sok`를 build한다.

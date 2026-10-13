@@ -138,6 +138,9 @@ pub struct TransferStore {
 struct RetainedTransfer {
     surface: String,
     name: String,
+    // 한 표면의 다음 래스터는 같은 이름과 순번을 다시 쓰므로, 답은 generation 과 raster 까지 맞아야 그 전송 이미지의 답이다.
+    generation: u64,
+    raster: u64,
     sequence: u32,
     // 놓을 때까지 IOSurface 를 붙든다.
     _frame: crate::platform::Frame,
@@ -164,13 +167,17 @@ impl TransferStore {
 
     /// 답에 맞는 전송 이미지를 놓고, 그런 이미지가 있었는지 돌려준다. 호스트는 표시 요청을 받은 순서로 답하므로,
     /// 같은 표면, 이름, 순번의 이미지가 여럿이면 먼저 보낸 것이 그 답의 이미지이다.
-    fn answer(&self, surface: &str, name: &str, sequence: u64) -> bool {
+    fn answer(&self, surface: &str, answer: ImageAnswer<'_>) -> bool {
         let mut images = self.images();
         let Some(images) = images.as_mut() else {
             return false;
         };
         let Some(index) = images.iter().position(|image| {
-            image.surface == surface && image.name == name && u64::from(image.sequence) == sequence
+            image.surface == surface
+                && image.name == answer.name
+                && image.generation == answer.generation
+                && image.raster == answer.raster
+                && u64::from(image.sequence) == answer.sequence
         }) else {
             return false;
         };
@@ -1527,6 +1534,8 @@ fn release_image_state(surface_id: &str, state: ImageState) -> Vec<InlineImagePl
     let ImageState {
         name,
         frame,
+        generation,
+        raster,
         sequence,
         pending_draw,
         carrier,
@@ -1537,6 +1546,8 @@ fn release_image_state(surface_id: &str, state: ImageState) -> Vec<InlineImagePl
         carrier.retain(RetainedTransfer {
             surface: surface_id.to_string(),
             name,
+            generation,
+            raster,
             sequence,
             _frame: frame,
         });
@@ -1544,17 +1555,27 @@ fn release_image_state(surface_id: &str, state: ImageState) -> Vec<InlineImagePl
     inline_images
 }
 
-/// 표시 요청에 대한 호스트의 답(consumed 또는 오류)의 이름과 순번.
-fn image_answer(image: &serde_json::Map<String, Value>) -> Option<(&str, u64)> {
+/// 표시 요청에 대한 호스트의 답(consumed 또는 오류)이 가리키는 전송 이미지.
+struct ImageAnswer<'a> {
+    name: &'a str,
+    generation: u64,
+    raster: u64,
+    sequence: u64,
+}
+
+/// 표시 요청에 대한 호스트의 답(consumed 또는 오류)의 이름, generation, raster 와 순번.
+fn image_answer(image: &serde_json::Map<String, Value>) -> Option<ImageAnswer<'_>> {
     let answer = match image.get("consumed") {
         Some(consumed) => consumed.as_object()?,
         None if image.contains_key("error") => image,
         None => return None,
     };
-    Some((
-        answer.get("name")?.as_str()?,
-        answer.get("sequence")?.as_u64()?,
-    ))
+    Some(ImageAnswer {
+        name: answer.get("name")?.as_str()?,
+        generation: answer.get("generation")?.as_u64()?,
+        raster: answer.get("raster")?.as_u64()?,
+        sequence: answer.get("sequence")?.as_u64()?,
+    })
 }
 
 async fn send_state(
@@ -3706,14 +3727,14 @@ where
                     }
                 } else if let Some(body) = env.body {
                     // 닫힌 표면이 남긴 전송 이미지의 답이면 그 이미지를 놓는다. 그 답은 표면을 다시 만들지 않는다.
-                    if let Some((name, sequence)) = body
+                    if let Some(answer) = body
                         .get("image")
                         .and_then(Value::as_object)
                         .and_then(image_answer)
                     {
                         if transfers
                             .as_ref()
-                            .is_some_and(|transfers| transfers.answer(&surface_id, name, sequence))
+                            .is_some_and(|transfers| transfers.answer(&surface_id, answer))
                         {
                             continue;
                         }

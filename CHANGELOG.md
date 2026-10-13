@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S49: an answer of the host releases a transfer image that a released surface left only when its name, generation, raster and sequence match, so the `consumed` of the next raster of the same surface reaches the surface and its configure draws.
 - S52: the service records a stall of its runtime of 1 s or more as `sidecar.vt.runtime_stall`, the stacks of its threads as `sidecar.vt.stall_dump` and the end as `sidecar.vt.runtime_resumed`.
 - S50: `make test` runs the record check `soksak-records`, and CI checks the form of each pushed commit message with `soksak-commits`.
 - S40.15: `@soksak/plugin-api` comes from the core release 0.0.11, so `make test` checks the emit sites of the Rust sources against the catalog with the installed `soksak-events`, and the release workflow builds `sok` from that release.
