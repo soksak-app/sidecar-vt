@@ -132,6 +132,34 @@
       },
       "description": "The time from sending a frame to the answer of the host."
     },
+    "sidecar.vt.runtime_stall": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "warn",
+      "fields": {
+        "late_ms": "number"
+      },
+      "description": "The heartbeat of the runtime of the service was late_ms milliseconds late, 1 s or more: no task of the runtime ran in that time."
+    },
+    "sidecar.vt.stall_dump": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "warn",
+      "fields": {
+        "path": "string",
+        "error?": "string"
+      },
+      "description": "The file in the logs folder with the stacks of the threads of the service during a stall; error states why the file was not written."
+    },
+    "sidecar.vt.runtime_resumed": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "stalled_ms": "number"
+      },
+      "description": "The runtime of the service ran again after a stall of stalled_ms milliseconds."
+    },
     "sidecar.vt.read_wait": {
       "layer": "sidecar",
       "class": "lifecycle",

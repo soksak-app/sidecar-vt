@@ -14,6 +14,7 @@ pub mod pty;
 pub mod screen_hash;
 pub mod service;
 pub mod shell_integration;
+pub mod stall;
 pub mod thread;
 
 pub use palette::{
