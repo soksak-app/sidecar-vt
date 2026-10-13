@@ -392,8 +392,8 @@ impl PtyService {
             }
             *closed = true;
         }
-        session.writer.lock().unwrap().take();
-        session.master.lock().unwrap().take();
+        // The child ends before the writer is taken: a write that waits for a child that does not read holds the writer
+        // and ends only when the child ends.
         let kill_result = {
             let process_group_result = kill_process_group(session.process_group);
             if let (Ok(result), Some(group)) = (&process_group_result, session.process_group) {
@@ -423,6 +423,8 @@ impl PtyService {
                 (Ok(_), Ok(())) => Ok(()),
             }
         };
+        session.writer.lock().unwrap().take();
+        session.master.lock().unwrap().take();
         let reader = session.reader.lock().unwrap().take();
         let reaper = session.reaper.lock().unwrap().take();
         let log = session.log.clone();

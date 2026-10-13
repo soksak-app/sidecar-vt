@@ -658,3 +658,56 @@ async fn a_write_waiting_for_the_child_does_not_block_the_runtime() {
         "the runtime advanced {ticks} ticks of 50 ms within 1 s while a 1 MiB write waited for its child, expected at least 5"
     );
 }
+
+/// The close of a session ends its child first, so a write that waits for a child that never reads ends with the child
+/// and does not hold the close. The child sleeps 30 s, far longer than the close may take.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_close_ends_a_write_that_waits_for_the_child() {
+    let _test_lock = lifecycle_test_lock().await;
+    let _native_test_lock = native_pty_test_lock();
+    let dir = tempfile::tempdir().expect("temporary directory must be created");
+    let script = dir.path().join("sleeper");
+    std::fs::write(&script, "#!/bin/sh\nsleep 30\n").expect("script must be written");
+    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("script must be executable");
+    let port = Arc::new(LocalSessionPort::new_with_owner(
+        Arc::new(PtyService::new(events_test::TestEvents::new().handle())),
+        String::new(),
+    ));
+    let shell = script.to_str().expect("script path is UTF-8").to_string();
+    let session = port
+        .open(
+            &ShellRequest {
+                shell,
+                directory: None,
+            },
+            80,
+            24,
+        )
+        .await
+        .expect("PTY setup failed; this is an environmental test failure");
+    let writer = {
+        let port = Arc::clone(&port);
+        let session = session.clone();
+        let data = b"x\n".repeat(1 << 19);
+        tokio::spawn(async move { port.write(&session, &data).await })
+    };
+    // The write fills the canonical queue of the line discipline within this time and then waits for the child.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let started = std::time::Instant::now();
+    let closed = timeout(Duration::from_secs(40), port.close(&session))
+        .await
+        .expect("the close did not end within 40 s");
+    let elapsed = started.elapsed();
+    closed.expect("closing the session must succeed");
+    let written = writer.await.expect("write task must finish");
+    assert!(
+        written.is_err(),
+        "a write to a child that the close ended must fail: {written:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "the close of a session with a waiting write took {} ms; the child sleeps 30 s",
+        elapsed.as_millis()
+    );
+}

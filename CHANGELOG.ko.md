@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S56: session의 close가 writer를 가져가기 전에 자식을 끝내므로, 읽지 않는 자식을 기다리는 write가 close를 붙잡지 않는다.
 - S55: session의 write와 input loop의 소유자 닫기를 runtime worker 밖에서 실행하므로, 읽지 않는 자식을 기다리는 write가 runtime의 다른 task를 막지 않는다.
 - S54: service가 policy 파일을 kqueue로 폴더와 파일에서 감시하므로 log 폴더에 쓰는 동안에도 변경을 받는다. `sidecar.vt.policy.watch_started`와 `sidecar.vt.policy.watch_event`는 level info로 선언한다.
 - S49: host의 답은 놓인 surface가 남긴 transfer image를 이름, generation, raster, sequence가 모두 맞을 때만 놓으므로, 같은 surface의 다음 raster의 `consumed`가 surface에 닿고 그 configure가 그린다.
