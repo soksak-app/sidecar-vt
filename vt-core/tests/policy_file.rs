@@ -57,13 +57,31 @@ fn of(lines: &[Value], event: &str) -> Vec<Value> {
         .collect()
 }
 
+/// Prints the lines of the policy watch that the file holds, so a run shows the file system events that arrived and
+/// the policy lines and errors that the writer stored for them.
+fn report_watch(lines: &[Value], outcome: &str) {
+    for line in lines.iter().filter(|line| {
+        line["event"] == "sidecar.vt.policy.watch_started"
+            || line["event"] == "sidecar.vt.policy.watch_event"
+            || line["event"] == "log.policy"
+            || line["event"] == "sidecar.vt.record.error"
+    }) {
+        eprintln!("policy watch ({outcome}): {line}");
+    }
+}
+
 /// Waits until the file holds `count` lines of `event`; the writer stores the line when it has applied the change.
 fn wait_for(log: &Events, event: &str, count: usize) -> Vec<Value> {
     let started = Instant::now();
     loop {
-        let found = of(&lines(log), event);
+        let all = lines(log);
+        let found = of(&all, event);
         if found.len() >= count {
+            report_watch(&all, "found");
             return found;
+        }
+        if started.elapsed() >= DEADLINE {
+            report_watch(&all, "deadline");
         }
         assert!(
             started.elapsed() < DEADLINE,

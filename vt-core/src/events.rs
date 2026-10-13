@@ -276,6 +276,14 @@ enum Message {
     PolicyChanged,
     /// The file system events of the policy file failed with this error.
     PolicyWatchFailed(String),
+    /// The watch of the policy file is armed on this folder.
+    PolicyWatchStarted(String),
+    /// The file system reported an event: its kind, its paths and whether the policy file filter accepted it.
+    PolicyWatchEvent {
+        kind: String,
+        paths: Vec<String>,
+        matched: bool,
+    },
 }
 
 /// The slots of the queue that only requests use.
@@ -727,15 +735,25 @@ fn watch_policy_file(
         .file_name()
         .ok_or_else(|| format!("{}: the policy file has no name", file.display()))?
         .to_os_string();
-    let sender = sender.clone();
+    let callback_sender = sender.clone();
     let mut watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
         let message = match result {
             Ok(event) => {
-                if !event
+                let matched = event
                     .paths
                     .iter()
-                    .any(|path| path.file_name() == Some(&name))
-                {
+                    .any(|path| path.file_name() == Some(&name));
+                // silent: the send fails only after the writer ended, when there is no file to record the notification in.
+                let _ = callback_sender.send(Message::PolicyWatchEvent {
+                    kind: format!("{:?}", event.kind),
+                    paths: event
+                        .paths
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect(),
+                    matched,
+                });
+                if !matched {
                     return;
                 }
                 Message::PolicyChanged
@@ -743,12 +761,20 @@ fn watch_policy_file(
             Err(error) => Message::PolicyWatchFailed(error.to_string()),
         };
         // silent: the send fails only after the writer ended, when there is no file to record the notification in.
-        let _ = sender.send(message);
+        let _ = callback_sender.send(message);
     })
     .map_err(|error| format!("{}: watch the policy file: {error}", file.display()))?;
     watcher
         .watch(folder, RecursiveMode::NonRecursive)
         .map_err(|error| format!("{}: watch the policy file: {error}", folder.display()))?;
+    sender
+        .send(Message::PolicyWatchStarted(folder.display().to_string()))
+        .map_err(|_| {
+            format!(
+                "{}: watch the policy file: the event writer ended",
+                file.display()
+            )
+        })?;
     Ok(watcher)
 }
 
@@ -932,6 +958,34 @@ impl Output {
         self.policy.current = policy;
         self.policy.gate.set(&policy);
         self.state_policy(source);
+    }
+
+    /// Stores the event `sidecar.vt.policy.watch_started` when the watch of the policy file is armed on `folder`.
+    fn policy_watch_started(&mut self, folder: &str) {
+        if !self.policy.gate.allows(Class::Lifecycle, Level::Debug) {
+            return;
+        }
+        let event = Pending::of_writer(
+            Level::Debug,
+            "sidecar.vt.policy.watch_started",
+            to_raw_value(&json!({"folder": folder})).expect("a json value serializes"),
+        );
+        self.push(&event);
+    }
+
+    /// Stores the event `sidecar.vt.policy.watch_event` for one file system event of the policy watch, whether or not
+    /// the policy file filter accepted it.
+    fn policy_watch_event(&mut self, kind: &str, paths: &[String], matched: bool) {
+        if !self.policy.gate.allows(Class::Lifecycle, Level::Debug) {
+            return;
+        }
+        let event = Pending::of_writer(
+            Level::Debug,
+            "sidecar.vt.policy.watch_event",
+            to_raw_value(&json!({"kind": kind, "paths": paths, "matched": matched}))
+                .expect("a json value serializes"),
+        );
+        self.push(&event);
     }
 
     /// Stores one `log.gated` for each class and level whose events the policy refused since the last report.
@@ -1212,6 +1266,12 @@ fn write_loop(
                 Message::Event(pending) => take(out, &pending),
                 Message::PolicyChanged => out.policy_changed(),
                 Message::PolicyWatchFailed(text) => out.record_error("log policy", text),
+                Message::PolicyWatchStarted(folder) => out.policy_watch_started(&folder),
+                Message::PolicyWatchEvent {
+                    kind,
+                    paths,
+                    matched,
+                } => out.policy_watch_event(&kind, &paths, matched),
                 other => {
                     request = Some(other);
                     break;
@@ -1261,6 +1321,12 @@ fn write_loop(
             }
             Message::PolicyChanged => out.policy_changed(),
             Message::PolicyWatchFailed(text) => out.record_error("log policy", text),
+            Message::PolicyWatchStarted(folder) => out.policy_watch_started(&folder),
+            Message::PolicyWatchEvent {
+                kind,
+                paths,
+                matched,
+            } => out.policy_watch_event(&kind, &paths, matched),
         }
     }
 }

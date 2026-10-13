@@ -182,6 +182,26 @@
       },
       "description": "Writing a line to a client took 10 milliseconds or more."
     },
+    "sidecar.vt.policy.watch_started": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "debug",
+      "fields": {
+        "folder": "string"
+      },
+      "description": "The watch of the policy file is armed on folder, the parent folder of the policy file."
+    },
+    "sidecar.vt.policy.watch_event": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "debug",
+      "fields": {
+        "kind": "string",
+        "paths": "array",
+        "matched": "boolean"
+      },
+      "description": "The file system reported an event in the folder of the policy file: kind is the notify event kind, paths are the paths of the event, and matched is true when the policy file filter accepts the event."
+    },
     "sidecar.vt.record.error": {
       "layer": "sidecar",
       "class": "lifecycle",
