@@ -15,7 +15,7 @@ use soksak_sidecar_vt_core::protocol::{
     make_default_session_port_factory, serve,
 };
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 #[derive(Default)]
@@ -288,8 +288,10 @@ async fn the_answer_of_the_host_to_a_frame_is_the_event_consumed_wait() {
     assert!(waits[0]["fields"]["wait_us"].is_u64(), "{}", waits[0]);
 }
 
-/// Serves a connection whose output pipe holds `output_capacity` bytes. The sender writes `line` after `before_line`, and the
-/// client reads the replies after `before_reading`; the waits are the condition that the events under test report.
+/// Serves a connection whose output pipe holds `output_capacity` bytes. The sender writes `line` after `before_line`. The client
+/// reads the first byte of the replies, which the service has written when the read returns, then waits `before_reading` and
+/// reads the rest; a write longer than the pipe therefore waits for the client at least `before_reading`, however late the
+/// service starts it. The waits are the condition that the events under test report.
 async fn serve_slowly(
     events: &TestEvents,
     output_capacity: usize,
@@ -310,6 +312,12 @@ async fn serve_slowly(
     tokio::time::sleep(before_line).await;
     to_serve.write_all(line).await.unwrap();
     drop(to_serve);
+    let mut from_serve = from_serve;
+    let mut first = [0u8; 1];
+    from_serve
+        .read_exact(&mut first)
+        .await
+        .expect("the service writes a reply");
     tokio::time::sleep(before_reading).await;
     let mut lines = BufReader::new(from_serve).lines();
     while lines.next_line().await.unwrap().is_some() {}

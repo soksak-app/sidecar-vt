@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S58: 막힌 쓰기의 test가 고정된 시간 대신 응답의 첫 byte를 기다린다.
 - S57: 모든 crate를 Rust edition 2024로 빌드한다. manifest가 `edition = "2024"`를 선언하고 동작은 그대로 둔다. 진단 build의 engine 기록 폴더는 시작할 때 `SOKSAK_VT_TRACE_DIR`에서 한 번 읽는다.
 - S56: session의 close가 writer를 가져가기 전에 자식을 끝내므로, 읽지 않는 자식을 기다리는 write가 close를 붙잡지 않는다.
 - S55: session의 write와 input loop의 소유자 닫기를 runtime worker 밖에서 실행하므로, 읽지 않는 자식을 기다리는 write가 runtime의 다른 task를 막지 않는다.
