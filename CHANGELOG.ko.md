@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S51: `tests/events.test.mjs`의 manifest case가 `sidecar.json`의 replay input과 그 catalog 선언을 요구한다.
 - S43: 앞 release의 event가 raster를 기다리는 동안 온 release를 거부하지 않고 그 event 뒤에 적용한다.
 - S41.6: `sidecar.json`이 `replay.inputs`에 재생 입력 종류마다 event를 적는다.
 - S41.2: `census.json`이 Rust source의 writer 진입점을 emitter로 선언하고, `make test`가 `--catalog vt-alacritty/events.json`으로 그 site를 catalog와 대조하며, catalog는 `sidecar.vt.session_open`의 field `cwd`와 `pid`를 선언한다.

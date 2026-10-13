@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S51: the manifest case of `tests/events.test.mjs` requires the replay inputs of `sidecar.json` and their declaration in the catalog.
 - S48: the writer stores debug and trace in `vt-<boot>.debug.jsonl`, which it creates with the first line of its channel; one seq counts across both files and each rotates by its generations, and `read_run_lines` reads both files of a run in the order of their seq.
 - S47: log.dropped names the channel other, because the sidecar holds one event file; the base catalog of core requires the channel.
 - S46: the event catalog names the sidecar `vt` beside its schema, which the composed catalog of core requires.

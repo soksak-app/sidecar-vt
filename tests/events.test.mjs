@@ -81,10 +81,23 @@ test("the manifest of the sidecar names the catalog and the release packs it", (
   assert.ok(packed.includes(manifest.events), `package.json files ${JSON.stringify(packed)} lack ${manifest.events}`);
 });
 
-test("the manifest declares the replay executable of the role vt and the release packs it", () => {
+test("the manifest declares the replay executable of the role vt, the events of its inputs, and the release packs it", () => {
   const manifest = JSON.parse(readFileSync(join(root, "vt-alacritty/sidecar.json"), "utf8"));
   const packed = JSON.parse(readFileSync(join(root, "vt-alacritty/package.json"), "utf8")).files;
-  assert.deepEqual(manifest.replay, { role: "vt", executable: "build/soksak-vt-replay" });
+  assert.deepEqual(manifest.replay, {
+    role: "vt",
+    executable: "build/soksak-vt-replay",
+    // Each kind of replay input names the event that stores it (core docs/spec/sidecars.md, replay).
+    inputs: {
+      output: "sidecar.vt.pty_read",
+      write: "sidecar.vt.pty_write",
+      resize: "sidecar.vt.resize",
+      selection: "sidecar.vt.selection",
+      viewport: "sidecar.vt.viewport",
+      theme: "sidecar.vt.theme",
+    },
+  });
+  for (const name of Object.values(manifest.replay.inputs)) assert.ok(catalog.events[name], `the replay input ${name} is not declared in the catalog`);
   assert.ok(packed.includes(manifest.replay.executable), `package.json files ${JSON.stringify(packed)} lack ${manifest.replay.executable}`);
 });
 }
