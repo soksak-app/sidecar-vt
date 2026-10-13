@@ -5236,3 +5236,89 @@ async fn a_screen_read_names_the_next_frame_while_a_change_waits_for_the_answer(
     drop(to_serve);
     task.await.unwrap().unwrap();
 }
+
+/// A composition wider than the rest of the row makes the frame refuse to draw, so the screen is in no frame. The screen
+/// names the next frame, and the next change draws it.
+#[tokio::test]
+async fn a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new("raster".into(), calls.clone()));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let first = next_image(&mut lines).await;
+    assert_eq!(
+        (first["raster"].as_u64(), first["sequence"].as_u64()),
+        (Some(1), Some(1)),
+        "{first}"
+    );
+    let _presented = next_screen_line(&mut lines).await;
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
+"#).await.unwrap();
+
+    // 1000 wide graphemes need 2000 cells, more than an 800 px raster holds in one row. The draw of the frame fails.
+    let wide = "하".repeat(1000);
+    let compose = serde_json::json!({
+        "surface": "s1",
+        "body": {"operation": "input", "compose": {
+            "text": wide,
+            "selectedRange": {"location": 1, "length": 0},
+            "replacementRange": null,
+            "attributed": true
+        }}
+    });
+    to_serve
+        .write_all(format!("{compose}\n").as_bytes())
+        .await
+        .unwrap();
+    let failure = next_line_except_screen(&mut lines).await;
+    assert!(
+        failure.contains("preedit extends beyond terminal columns"),
+        "{failure}"
+    );
+
+    to_serve
+        .write_all(
+            br#"{"surface":"s1","body":{"operation":"screen.read"}}
+"#,
+        )
+        .await
+        .unwrap();
+    let read = next_screen_line(&mut lines).await;
+    assert_eq!(
+        read["body"]["frame"],
+        serde_json::json!({"generation": 1, "raster": 1, "sequence": 2}),
+        "{read}"
+    );
+
+    // The cause is gone: a short composition is a change, and the change draws the frame that the screen named.
+    let short = serde_json::json!({
+        "surface": "s1",
+        "body": {"operation": "input", "compose": {
+            "text": "a",
+            "selectedRange": {"location": 1, "length": 0},
+            "replacementRange": null,
+            "attributed": true
+        }}
+    });
+    to_serve
+        .write_all(format!("{short}\n").as_bytes())
+        .await
+        .unwrap();
+    let drawn = next_image(&mut lines).await;
+    assert_eq!(
+        (drawn["raster"].as_u64(), drawn["sequence"].as_u64()),
+        (Some(1), Some(2)),
+        "{drawn}"
+    );
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+}

@@ -1465,6 +1465,9 @@ async fn present_screen(
         &state.theme,
         &state.inline_images,
     ) {
+        // The failed screen is in no frame. It stays dirty, so the `screen` event names the next frame, and the next
+        // change draws that frame. Clearing it would name the last sent frame, which shows an earlier screen.
+        state.dirty = true;
         let response = json!({
             "surface": surface_id,
             "body": {"event": "error", "reason": reason}
