@@ -37,6 +37,18 @@
         "fixed": "info",
         "event": 1,
         "only": "^vt-core/src/protocol\\.rs$"
+      },
+      {
+        "call": "policy_watch_started",
+        "fixed": "debug",
+        "name": "sidecar.vt.policy.watch_started",
+        "event": 0
+      },
+      {
+        "call": "policy_watch_event",
+        "fixed": "debug",
+        "name": "sidecar.vt.policy.watch_event",
+        "event": 0
       }
     ]
   }
