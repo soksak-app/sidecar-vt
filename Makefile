@@ -25,6 +25,7 @@ test: build node_modules
 	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo clippy --workspace --all-targets --features diagnostics -- -D warnings
 	$(SOKSAK_EVENTS) --census census.json --catalog vt-alacritty/events.json .
 	node --test tests/
+	pnpm exec soksak-records
 
 # sidecar.json 이 가리키는 vt-alacritty/build/soksak-vt-alacritty 를 쓴다.
 build:
