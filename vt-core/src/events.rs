@@ -10,17 +10,17 @@ use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::json;
-use serde_json::value::{to_raw_value, RawValue};
+use serde_json::value::{RawValue, to_raw_value};
 
-use crate::platform::darwin::file_watch::{watch_file, Change};
-use crate::policy::{is_being_written, parse_policy, Class, Gate, Policy};
+use crate::platform::darwin::file_watch::{Change, watch_file};
+use crate::policy::{Class, Gate, Policy, is_being_written, parse_policy};
 
 /// The schema number of the lines that this writer writes.
 pub const SCHEMA: u64 = 2;
@@ -176,6 +176,8 @@ pub struct Options {
     /// The policy file that the writer reads when it starts and watches (core docs/spec/logging.md#policy-file); none
     /// leaves the default policy in force.
     pub policy_file: Option<PathBuf>,
+    /// The folder that receives the engine input trace of a diagnostic build (`engine_trace`); none records no trace.
+    pub trace_dir: Option<PathBuf>,
 }
 
 impl Options {
@@ -191,6 +193,7 @@ impl Options {
             rotate_bytes: 100 << 20,
             generations: 5,
             policy_file: None,
+            trace_dir: None,
         }
     }
 }
@@ -350,6 +353,7 @@ pub struct EventLog {
     gate: Arc<Gate>,
     path: PathBuf,
     boot: String,
+    trace_dir: Option<PathBuf>,
     /// The stop of the watch of the policy file; it runs before the writer ends.
     policy_watch: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     writer: Mutex<Option<JoinHandle<()>>>,
@@ -360,8 +364,9 @@ pub type Events = Arc<EventLog>;
 
 impl EventLog {
     /// Starts the writer of the service in `directory` with the bounds of the service and the boot of this process. The
-    /// policy file is `log-policy.json` in the parent folder of `directory`.
-    pub fn start_service(directory: &Path) -> Result<Events, String> {
+    /// policy file is `log-policy.json` in the parent folder of `directory`. `trace_dir` is the engine trace folder of a
+    /// diagnostic build; the entry point of the process reads it once.
+    pub fn start_service(directory: &Path, trace_dir: Option<PathBuf>) -> Result<Events, String> {
         if !directory.is_absolute() {
             return Err(format!(
                 "{}: the log directory must be an absolute path",
@@ -376,6 +381,7 @@ impl EventLog {
         })?;
         let mut options = Options::service(directory.to_path_buf(), process_boot().to_string());
         options.policy_file = Some(parent.join(POLICY_FILE));
+        options.trace_dir = trace_dir;
         EventLog::start(options).map(Arc::new)
     }
 
@@ -473,6 +479,7 @@ impl EventLog {
             gate,
             path,
             boot: options.boot.clone(),
+            trace_dir: options.trace_dir.clone(),
             policy_watch: Mutex::new(policy_watch),
             writer: Mutex::new(Some(writer)),
         })
@@ -498,6 +505,11 @@ impl EventLog {
     /// docs/spec/replay.md#segments).
     pub fn boot(&self) -> &str {
         &self.boot
+    }
+
+    /// The engine trace folder that the writer was started with; none records no trace.
+    pub fn trace_dir(&self) -> Option<&Path> {
+        self.trace_dir.as_deref()
     }
 
     /// Queues an event that concerns no object. See [`EventLog::emit_for`].
@@ -527,10 +539,10 @@ impl EventLog {
             return false;
         }
         let class = class_of(event);
-        if let Some(class) = class {
-            if !self.gate.allows(class, level) {
-                return false;
-            }
+        if let Some(class) = class
+            && !self.gate.allows(class, level)
+        {
+            return false;
         }
         if self.queued_events.load(Ordering::Relaxed) >= self.queue_events {
             self.loss.add(Reason::QueueFull, 1, event.len() as u64);
@@ -628,22 +640,21 @@ impl EventLog {
 impl Drop for EventLog {
     fn drop(&mut self) {
         // The watch ends first, so no notification is sent to a queue that is being closed.
-        if let Ok(mut policy_watch) = self.policy_watch.lock() {
-            if let Some(stop) = policy_watch.take() {
-                stop();
-            }
+        if let Ok(mut policy_watch) = self.policy_watch.lock()
+            && let Some(stop) = policy_watch.take()
+        {
+            stop();
         }
         // The stop waits for room in the queue: the writer takes events while it runs. A writer that ended can no longer
         // record its own end, so the standard error of the process is the only place left for these two reports.
         if let Err(error) = self.sender.send(Message::Stop) {
             eprintln!("event writer: the stop request was not taken: {error}");
         }
-        if let Ok(mut writer) = self.writer.lock() {
-            if let Some(handle) = writer.take() {
-                if handle.join().is_err() {
-                    eprintln!("event writer: the writer thread panicked");
-                }
-            }
+        if let Ok(mut writer) = self.writer.lock()
+            && let Some(handle) = writer.take()
+            && handle.join().is_err()
+        {
+            eprintln!("event writer: the writer thread panicked");
         }
     }
 }
@@ -711,7 +722,7 @@ fn read_policy_file(file: &Path) -> Result<PolicyFile, String> {
     let text = match std::fs::read_to_string(file) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(PolicyFile::Absent)
+            return Ok(PolicyFile::Absent);
         }
         Err(error) => return Err(format!("{}: {error}", file.display())),
     };
@@ -1201,10 +1212,10 @@ impl Output {
             .open(&path)
             .map_err(|error| format!("rotation could not open {}: {error}", path.display()))?;
         let full = self.files[channel].file.replace(next);
-        if let Some(file) = full {
-            if let Err(error) = file.sync_all() {
-                self.record_failure(format!("rotation could not sync the full file: {error}"));
-            }
+        if let Some(file) = full
+            && let Err(error) = file.sync_all()
+        {
+            self.record_failure(format!("rotation could not sync the full file: {error}"));
         }
         Ok(removed)
     }

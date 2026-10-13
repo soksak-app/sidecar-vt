@@ -70,7 +70,7 @@ pub struct CFrame {
 unsafe impl Send for CFrame {}
 unsafe impl Sync for CFrame {}
 
-extern "C" {
+unsafe extern "C" {
     fn frame_new(width_px: u32, height_px: u32) -> *mut CFrame;
     fn frame_id(frame: *mut CFrame) -> u32;
     fn frame_nonce(frame: *mut CFrame, buf: *mut u8);
@@ -399,10 +399,12 @@ fn valid_json_range(
         let end = location
             .checked_add(length)
             .ok_or_else(|| format!("{name} JSON range overflows UTF-16 location"))?;
-        if let Some(limit) = text_length {
-            if end > limit {
-                return Err(format!("{name} JSON range [{location}, {length}] exceeds preedit UTF-16 length {limit}"));
-            }
+        if let Some(limit) = text_length
+            && end > limit
+        {
+            return Err(format!(
+                "{name} JSON range [{location}, {length}] exceeds preedit UTF-16 length {limit}"
+            ));
         }
     }
     Ok(())
@@ -655,15 +657,15 @@ pub fn metrics_for(
 }
 
 fn parse_hex_color(color_opt: &Option<String>) -> ([u8; 3], bool) {
-    if let Some(color_str) = color_opt {
-        if color_str.starts_with('#') && color_str.len() == 7 {
-            if let Ok(val) = u32::from_str_radix(&color_str[1..], 16) {
-                let r = ((val >> 16) & 0xFF) as u8;
-                let g = ((val >> 8) & 0xFF) as u8;
-                let b = (val & 0xFF) as u8;
-                return ([r, g, b], true);
-            }
-        }
+    if let Some(color_str) = color_opt
+        && color_str.starts_with('#')
+        && color_str.len() == 7
+        && let Ok(val) = u32::from_str_radix(&color_str[1..], 16)
+    {
+        let r = ((val >> 16) & 0xFF) as u8;
+        let g = ((val >> 8) & 0xFF) as u8;
+        let b = (val & 0xFF) as u8;
+        return ([r, g, b], true);
     }
     ([0, 0, 0], false)
 }

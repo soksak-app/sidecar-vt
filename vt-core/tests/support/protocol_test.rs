@@ -296,14 +296,16 @@ async fn persistent_registry_rejects_stale_owner_and_awaits_actor_close() {
         .await
         .unwrap();
     assert!(attached.1 > 1);
-    assert!(registry
-        .attach(
-            "root\0surface",
-            "client-b",
-            &OutputSink::direct(Connection::new(mpsc::channel(1).0))
-        )
-        .await
-        .is_err());
+    assert!(
+        registry
+            .attach(
+                "root\0surface",
+                "client-b",
+                &OutputSink::direct(Connection::new(mpsc::channel(1).0))
+            )
+            .await
+            .is_err()
+    );
     registry.close_owner("client-a").await.unwrap();
     assert!(!registry.contains("root\0surface").await);
 }

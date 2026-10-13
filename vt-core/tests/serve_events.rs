@@ -11,8 +11,8 @@ use events_test::TestEvents;
 // 프레임 생산자: 트레이스가 켜진 serve 는 프레임마다 reason 과 그리기 시간을 남긴다.
 use soksak_sidecar_vt_core::policy::{Class, Policy};
 use soksak_sidecar_vt_core::protocol::{
-    make_default_session_port_factory, serve, Cursor, CursorShape, Engine, EngineEvent, Modes,
-    Screen, SessionPort, ShellRequest,
+    Cursor, CursorShape, Engine, EngineEvent, Modes, Screen, SessionPort, ShellRequest,
+    make_default_session_port_factory, serve,
 };
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

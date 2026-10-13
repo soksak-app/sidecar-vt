@@ -7,8 +7,8 @@ mod engine;
 
 use engine::AlacrittyEngine;
 use serde_json::Value;
-use soksak_sidecar_vt_core::events::{read_run_lines, EventLog, Options};
-use soksak_sidecar_vt_core::protocol::{make_default_session_port_factory, serve, Engine};
+use soksak_sidecar_vt_core::events::{EventLog, Options, read_run_lines};
+use soksak_sidecar_vt_core::protocol::{Engine, make_default_session_port_factory, serve};
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -53,13 +53,13 @@ async fn served_session() -> Vec<Value> {
                         .is_some_and(|hex| hex.contains("ed959c61")))
                 .then(|| line["fields"]["sequence"].as_u64().unwrap())
             });
-            if let Some(echo) = echo {
-                if lines.iter().any(|line| {
+            if let Some(echo) = echo
+                && lines.iter().any(|line| {
                     line["event"] == "sidecar.vt.frame"
                         && line["fields"]["sequence"].as_u64().unwrap() >= echo
-                }) {
-                    return;
-                }
+                })
+            {
+                return;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }

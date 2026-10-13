@@ -11,10 +11,10 @@ use soksak_sidecar_vt_core::pty::PtyService;
 use soksak_sidecar_vt_core::{DaemonEvent, Engine, Screen};
 use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 // 같은 워크스페이스의 PTY 검사들과 한 번에 하나씩 실행한다. 셸 환경은 프로세스 환경에서 온다.
 fn native_pty_test_lock() -> std::fs::File {
@@ -105,9 +105,7 @@ impl Session {
     }
 }
 
-fn open(shell: &str, variable: &str, directory: &PathBuf) -> Session {
-    let original = std::env::var_os(variable);
-    std::env::set_var(variable, directory);
+fn open(shell: &str, variable: &str, directory: &Path) -> Session {
     // The writer of the events has a folder of its own; the folder goes away with the test directory of the system.
     let logs = tempfile::tempdir().expect("create the folder of the events");
     let events = std::sync::Arc::new(
@@ -117,13 +115,12 @@ fn open(shell: &str, variable: &str, directory: &PathBuf) -> Session {
         ))
         .expect("start the writer of the events"),
     );
-    let service = PtyService::new(events);
+    let service = PtyService::new(events).with_environment(vec![(
+        variable.to_string(),
+        Some(directory.as_os_str().to_os_string()),
+    )]);
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", shell, None, 60, 12, tx);
-    match original {
-        Some(value) => std::env::set_var(variable, value),
-        None => std::env::remove_var(variable),
-    }
     let (id, _) = opened.expect("open a shell session");
     let mut engine = AlacrittyEngine::new();
     engine.resize(60, 12);

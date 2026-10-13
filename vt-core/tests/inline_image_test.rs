@@ -1,4 +1,4 @@
-use soksak_sidecar_vt_core::inline_image::{parse, Dimension, InlineImageCommand};
+use soksak_sidecar_vt_core::inline_image::{Dimension, InlineImageCommand, parse};
 
 #[test]
 fn file_payload_becomes_a_bounded_inline_image_with_typed_dimensions() {

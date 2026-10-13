@@ -4,7 +4,7 @@ use portable_pty::MasterPty;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 #[cfg(unix)]
-use nix::sys::signal::{kill, Signal};
+use nix::sys::signal::{Signal, kill};
 #[cfg(unix)]
 use nix::unistd::Pid;
 

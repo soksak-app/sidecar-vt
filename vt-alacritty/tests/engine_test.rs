@@ -1,10 +1,10 @@
 #[path = "../src/engine.rs"]
 mod engine;
 
-use engine::{AlacrittyEngine, OscOutcome, CSI_SELECTOR_INVENTORY, OSC_SELECTOR_INVENTORY};
+use engine::{AlacrittyEngine, CSI_SELECTOR_INVENTORY, OSC_SELECTOR_INVENTORY, OscOutcome};
 use soksak_sidecar_vt_core::{
-    default_terminal_color, inline_image::Dimension, inline_image::InlineImageCommand, CursorShape,
-    Engine, EngineEvent, ShellMarker, TerminalTheme, DEFAULT_PALETTE,
+    CursorShape, DEFAULT_PALETTE, Engine, EngineEvent, ShellMarker, TerminalTheme,
+    default_terminal_color, inline_image::Dimension, inline_image::InlineImageCommand,
 };
 
 fn text(screen: &soksak_sidecar_vt_core::Screen) -> String {
@@ -222,12 +222,16 @@ fn implemented_and_vendor_osc_selectors_do_not_emit_unsupported_errors() {
     let mut engine = AlacrittyEngine::new();
     engine.feed(b"\x1b]2;title\x07\x1b]7;file:///tmp\x07");
     let events = engine.drain_events();
-    assert!(events
-        .iter()
-        .any(|event| event == &EngineEvent::Title("title".to_string())));
-    assert!(!events
-        .iter()
-        .any(|event| matches!(event, EngineEvent::Error(_))));
+    assert!(
+        events
+            .iter()
+            .any(|event| event == &EngineEvent::Title("title".to_string()))
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, EngineEvent::Error(_)))
+    );
 }
 
 #[test]
@@ -487,12 +491,16 @@ fn osc_dynamic_color_resets_restore_defaults() {
         })
         .collect::<Vec<_>>();
     assert_eq!(replies.len(), 3);
-    assert!(replies
-        .iter()
-        .any(|reply| reply.windows(18).any(|part| part == b"rgb:d0d0/d0d0/d0d0")));
-    assert!(replies
-        .iter()
-        .any(|reply| reply.windows(18).any(|part| part == b"rgb:1e1e/1e1e/1e1e")));
+    assert!(
+        replies
+            .iter()
+            .any(|reply| reply.windows(18).any(|part| part == b"rgb:d0d0/d0d0/d0d0"))
+    );
+    assert!(
+        replies
+            .iter()
+            .any(|reply| reply.windows(18).any(|part| part == b"rgb:1e1e/1e1e/1e1e"))
+    );
 }
 
 #[test]
@@ -510,12 +518,16 @@ fn osc_default_color_queries_match_renderer_defaults() {
             }
         })
         .collect();
-    assert!(replies
-        .iter()
-        .any(|reply| reply.windows(18).any(|part| part == b"rgb:d0d0/d0d0/d0d0")));
-    assert!(replies
-        .iter()
-        .any(|reply| reply.windows(18).any(|part| part == b"rgb:1e1e/1e1e/1e1e")));
+    assert!(
+        replies
+            .iter()
+            .any(|reply| reply.windows(18).any(|part| part == b"rgb:d0d0/d0d0/d0d0"))
+    );
+    assert!(
+        replies
+            .iter()
+            .any(|reply| reply.windows(18).any(|part| part == b"rgb:1e1e/1e1e/1e1e"))
+    );
     assert_eq!(replies.len(), 3);
 }
 
@@ -534,9 +546,11 @@ fn every_default_indexed_color_query_returns_the_default_palette() {
             matches!(event, EngineEvent::PtyWrite(bytes)
                 if bytes.windows(expected_reply.len()).any(|part| part == expected_reply.as_bytes()))
         }), "missing default response for indexed color {index}");
-        assert!(!events
-            .iter()
-            .any(|event| matches!(event, EngineEvent::Error(_))));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, EngineEvent::Error(_)))
+        );
     }
 
     engine.feed(b"\x1b]10;?\x07\x1b]11;?\x07\x1b]12;?\x07");
@@ -548,9 +562,11 @@ fn every_default_indexed_color_query_returns_the_default_palette() {
             .count(),
         3
     );
-    assert!(!events
-        .iter()
-        .any(|event| matches!(event, EngineEvent::Error(_))));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, EngineEvent::Error(_)))
+    );
 }
 
 #[test]
@@ -922,9 +938,11 @@ fn indexed_colors_and_combining_characters_survive_export() {
         .find(|cell| cell.ch.as_deref() == Some("X"))
         .expect("X cell");
     assert_eq!(x.fg.as_deref(), Some("#ff0000"));
-    assert!(first
-        .iter()
-        .any(|cell| cell.ch.as_deref() == Some("e\u{301}")));
+    assert!(
+        first
+            .iter()
+            .any(|cell| cell.ch.as_deref() == Some("e\u{301}"))
+    );
 }
 
 #[test]
@@ -947,12 +965,16 @@ fn dynamic_color_replies_and_screen_colors_use_the_same_palette() {
             }
         })
         .collect();
-    assert!(replies
-        .iter()
-        .any(|reply| reply.windows(18).any(|part| part == b"rgb:1111/3333/5555")));
-    assert!(replies
-        .iter()
-        .any(|reply| reply.windows(18).any(|part| part == b"rgb:7777/9999/bbbb")));
+    assert!(
+        replies
+            .iter()
+            .any(|reply| reply.windows(18).any(|part| part == b"rgb:1111/3333/5555"))
+    );
+    assert!(
+        replies
+            .iter()
+            .any(|reply| reply.windows(18).any(|part| part == b"rgb:7777/9999/bbbb"))
+    );
 }
 
 #[test]
@@ -1008,10 +1030,12 @@ fn cursor_visibility_and_application_shape_are_exported() {
     engine.feed(b"\x1b[?12h");
     assert!(engine.cursor().blinking);
     engine.feed(b"\x1b[?12l");
-    assert!(engine
-        .drain_events()
-        .iter()
-        .any(|event| matches!(event, EngineEvent::CursorBlinkingChange)));
+    assert!(
+        engine
+            .drain_events()
+            .iter()
+            .any(|event| matches!(event, EngineEvent::CursorBlinkingChange))
+    );
     assert!(!engine.cursor().blinking);
 }
 
@@ -1248,9 +1272,11 @@ fn csi_erase_display_and_line_change_only_the_requested_cells() {
     let after_display_erase = engine.screen();
     assert_eq!(after_display_erase.lines[0][0].ch.as_deref(), Some("t"));
     assert_eq!(after_display_erase.lines[1][0].ch.as_deref(), Some("m"));
-    assert!(after_display_erase.lines[1]
-        .get(1)
-        .is_none_or(|cell| cell.ch.is_none()));
+    assert!(
+        after_display_erase.lines[1]
+            .get(1)
+            .is_none_or(|cell| cell.ch.is_none())
+    );
     assert!(after_display_erase.lines[2].is_empty());
 
     engine.reset();
@@ -1260,12 +1286,16 @@ fn csi_erase_display_and_line_change_only_the_requested_cells() {
     let after_line_erase = engine.screen();
     assert_eq!(after_line_erase.lines[0][0].ch.as_deref(), Some("a"));
     assert_eq!(after_line_erase.lines[0][2].ch.as_deref(), Some("c"));
-    assert!(after_line_erase.lines[0]
-        .get(3)
-        .is_none_or(|cell| cell.ch.is_none()));
-    assert!(after_line_erase.lines[0]
-        .get(4)
-        .is_none_or(|cell| cell.ch.is_none()));
+    assert!(
+        after_line_erase.lines[0]
+            .get(3)
+            .is_none_or(|cell| cell.ch.is_none())
+    );
+    assert!(
+        after_line_erase.lines[0]
+            .get(4)
+            .is_none_or(|cell| cell.ch.is_none())
+    );
 }
 
 #[test]
@@ -1277,12 +1307,16 @@ fn csi_insert_delete_characters_and_lines_preserve_requested_cells() {
     let after_insert = engine.screen();
     assert_eq!(after_insert.lines[0][0].ch.as_deref(), Some("a"));
     assert_eq!(after_insert.lines[0][1].ch.as_deref(), Some("b"));
-    assert!(after_insert.lines[0]
-        .get(2)
-        .is_none_or(|cell| cell.ch.is_none()));
-    assert!(after_insert.lines[0]
-        .get(3)
-        .is_none_or(|cell| cell.ch.is_none()));
+    assert!(
+        after_insert.lines[0]
+            .get(2)
+            .is_none_or(|cell| cell.ch.is_none())
+    );
+    assert!(
+        after_insert.lines[0]
+            .get(3)
+            .is_none_or(|cell| cell.ch.is_none())
+    );
     assert_eq!(after_insert.lines[0][4].ch.as_deref(), Some("c"));
     assert_eq!(after_insert.lines[0][5].ch.as_deref(), Some("d"));
 
@@ -1293,9 +1327,11 @@ fn csi_insert_delete_characters_and_lines_preserve_requested_cells() {
     assert_eq!(after_delete.lines[0][0].ch.as_deref(), Some("a"));
     assert_eq!(after_delete.lines[0][1].ch.as_deref(), Some("b"));
     assert_eq!(after_delete.lines[0][2].ch.as_deref(), Some("d"));
-    assert!(after_delete.lines[0]
-        .get(3)
-        .is_none_or(|cell| cell.ch.is_none()));
+    assert!(
+        after_delete.lines[0]
+            .get(3)
+            .is_none_or(|cell| cell.ch.is_none())
+    );
 
     engine.reset();
     engine.resize(8, 4);
@@ -1459,10 +1495,12 @@ fn a_resize_in_the_prompt_state_clears_the_cursor_logical_line_to_the_bottom() {
         (3, 0),
         "the cursor must lie one row below the first prompt row, as at the previous width"
     );
-    assert!(engine
-        .drain_events()
-        .iter()
-        .all(|event| !matches!(event, EngineEvent::Error(_))));
+    assert!(
+        engine
+            .drain_events()
+            .iter()
+            .all(|event| !matches!(event, EngineEvent::Error(_)))
+    );
     assert_eq!(all_text(&mut engine), "o1o2o3");
 }
 
@@ -1826,10 +1864,12 @@ fn osc_highlight_colors_are_set_queried_reset_and_draw_the_selection() {
     assert!(default_background.starts_with('#'));
 
     engine.feed(b"\x1b]17;not-a-color\x07");
-    assert!(engine
-        .drain_events()
-        .iter()
-        .any(|event| matches!(event, EngineEvent::Error(reason) if reason.contains("OSC 17"))));
+    assert!(
+        engine
+            .drain_events()
+            .iter()
+            .any(|event| matches!(event, EngineEvent::Error(reason) if reason.contains("OSC 17")))
+    );
 }
 
 #[test]
@@ -1845,9 +1885,11 @@ fn osc22_sets_the_pointer_shape_and_rejects_unknown_shapes() {
         })
         .collect();
     assert_eq!(shapes, ["pointer", "text", "default"]);
-    assert!(events
-        .iter()
-        .any(|event| matches!(event, EngineEvent::Error(reason) if reason.contains("spaceship"))));
+    assert!(
+        events.iter().any(
+            |event| matches!(event, EngineEvent::Error(reason) if reason.contains("spaceship"))
+        )
+    );
 }
 
 #[test]
@@ -1987,10 +2029,12 @@ fn a_prompt_redrawn_after_a_narrowing_resize_has_no_empty_row_above_it_when_rows
         "a row increase must not show a cleared prompt row above the redrawn prompt"
     );
     assert_eq!(engine.scrollback(), (0, 0));
-    assert!(engine
-        .drain_events()
-        .iter()
-        .all(|event| !matches!(event, EngineEvent::Error(_))));
+    assert!(
+        engine
+            .drain_events()
+            .iter()
+            .all(|event| !matches!(event, EngineEvent::Error(_)))
+    );
 }
 
 // The bytes of a session of the window checks of core on 2026-10-12, ordered by their time: after the grid narrowed from 53

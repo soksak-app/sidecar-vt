@@ -3,7 +3,7 @@
 // a rotation step that fails is an error record in the file. The test binary limits the size of the files of the process to
 // make a write fail with a partial write, as a full disk does; it is a test binary of its own for that reason.
 use serde_json::json;
-use soksak_sidecar_vt_core::events::{read_lines, EventLog, Level, Options};
+use soksak_sidecar_vt_core::events::{EventLog, Level, Options, read_lines};
 use std::path::PathBuf;
 use std::time::Duration;
 

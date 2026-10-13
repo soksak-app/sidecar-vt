@@ -6,11 +6,12 @@
 
 use crate::events::{Events, Level, Subject};
 use crate::platform::pty::{
-    kill_process_group, pending_input, process_group_leader, wait_for_exit, KillResult,
+    KillResult, kill_process_group, pending_input, process_group_leader, wait_for_exit,
 };
 use crate::protocol::DaemonEvent;
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::collections::{HashMap, VecDeque};
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -95,6 +96,9 @@ struct Session {
 pub struct PtyService {
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
     retained_output: usize,
+    /// The variables set in the environment of each child before the shell integration and the locale read it; `None`
+    /// removes the variable that the child would inherit.
+    environment: Vec<(String, Option<OsString>)>,
     log: Events,
 }
 
@@ -125,6 +129,7 @@ impl PtyService {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             retained_output: RETAINED_OUTPUT,
+            environment: Vec::new(),
             log,
         }
     }
@@ -133,6 +138,22 @@ impl PtyService {
     pub fn with_retained_output(mut self, chunks: usize) -> Self {
         self.retained_output = chunks;
         self
+    }
+
+    /// The service whose children get `variables` in their environment: a `Some` value is set and a `None` removes the
+    /// variable. The children inherit the environment of the process otherwise.
+    pub fn with_environment(mut self, variables: Vec<(String, Option<OsString>)>) -> Self {
+        self.environment = variables;
+        self
+    }
+
+    fn apply_environment(&self, command: &mut CommandBuilder) {
+        for (name, value) in &self.environment {
+            match value {
+                Some(value) => command.env(name, value),
+                None => command.env_remove(name),
+            }
+        }
     }
 
     pub fn open(
@@ -145,6 +166,7 @@ impl PtyService {
         events: tokio::sync::mpsc::UnboundedSender<DaemonEvent>,
     ) -> Result<(String, String), String> {
         let mut command = CommandBuilder::new(program);
+        self.apply_environment(&mut command);
         command.args(args);
         self.spawn_owned("", command, cwd, cols, rows, events)
     }
@@ -160,6 +182,7 @@ impl PtyService {
         events: tokio::sync::mpsc::UnboundedSender<DaemonEvent>,
     ) -> Result<(String, String), String> {
         let mut command = CommandBuilder::new_default_prog();
+        self.apply_environment(&mut command);
         command.env("SHELL", shell);
         crate::shell_integration::apply(shell, &mut command, &self.log)?;
         self.spawn_owned(owner, command, cwd, cols, rows, events)
@@ -335,20 +358,21 @@ impl PtyService {
         if *session.closed.lock().unwrap() {
             return Err("session is closed".into());
         }
-        let result = session
+
+        session
             .writer
             .lock()
             .unwrap()
             .as_mut()
             .ok_or_else(|| "session writer is closed".to_string())?
             .write_all(data)
-            .map_err(|error| format!("write PTY: {error}"));
-        result
+            .map_err(|error| format!("write PTY: {error}"))
     }
 
     pub fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
         let session = self.session(session_id)?;
-        let result = session
+
+        session
             .master
             .lock()
             .unwrap()
@@ -360,8 +384,7 @@ impl PtyService {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|error| format!("resize PTY: {error}"));
-        result
+            .map_err(|error| format!("resize PTY: {error}"))
     }
 
     /// 한 시점의 PTY 전송 상태 측정. 쓰기 성공, 자식 수신, 자식 출력을 구분하는 진단 관측이다.
@@ -432,15 +455,15 @@ impl PtyService {
         let joined = crate::thread::start(&log, "pty-joiner", {
             let log = log.clone();
             move || {
-                if let Some(reader) = reader {
-                    if reader.join().is_err() {
-                        log.record_error("pty close", "the reader thread panicked");
-                    }
+                if let Some(reader) = reader
+                    && reader.join().is_err()
+                {
+                    log.record_error("pty close", "the reader thread panicked");
                 }
-                if let Some(reaper) = reaper {
-                    if reaper.join().is_err() {
-                        log.record_error("pty close", "the reaper thread panicked");
-                    }
+                if let Some(reaper) = reaper
+                    && reaper.join().is_err()
+                {
+                    log.record_error("pty close", "the reaper thread panicked");
                 }
             }
         });
@@ -663,7 +686,7 @@ fn broadcast(session: &Session, event: DaemonEvent) {
 mod tests {
     use super::*;
     use tokio::sync::mpsc::UnboundedReceiver;
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{Duration, timeout};
 
     /// 멈춘 검사를 끝내는 상한. 성공은 기다린 event 로 판정하며 이 시간으로 판정하지 않는다. 부하가 큰 기계에서도
     /// PTY event 는 이 안에 온다.

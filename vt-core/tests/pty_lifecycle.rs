@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use soksak_sidecar_vt_core::pty::PtyService;
 use soksak_sidecar_vt_core::{DaemonEvent, LocalSessionPort, SessionPort, ShellRequest};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 /// 실제 PTY 를 쓰는 test 를 하나씩 실행한다. test 마다 runtime 이 다르므로 await 를 넘어 잡는 async 잠금이다.
 static LIFECYCLE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -489,7 +489,7 @@ fn a_process_group_of_only_zombies_is_already_terminated() {
 
 #[test]
 fn process_group_members_report_running_and_ended_processes() {
-    use soksak_sidecar_vt_core::platform::darwin::process_group::{members, Member};
+    use soksak_sidecar_vt_core::platform::darwin::process_group::{Member, members};
     use std::os::unix::process::CommandExt;
     let _test_lock = LIFECYCLE_LOCK.blocking_lock();
     let _native_test_lock = native_pty_test_lock();

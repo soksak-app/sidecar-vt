@@ -6,8 +6,8 @@ pub use crate::platform::darwin::service;
 
 #[cfg(target_os = "macos")]
 pub use crate::platform::darwin::frame::{
-    default_font, metrics, metrics_for, resolve_font_list, FontSelection, Frame, Metrics,
-    TerminalFont,
+    FontSelection, Frame, Metrics, TerminalFont, default_font, metrics, metrics_for,
+    resolve_font_list,
 };
 
 #[cfg(target_os = "macos")]

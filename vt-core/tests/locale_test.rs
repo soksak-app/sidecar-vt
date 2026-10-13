@@ -7,18 +7,19 @@ mod events_test;
 
 use std::ffi::OsStr;
 
-use soksak_sidecar_vt_core::locale::{shell_locale, ShellLocale};
+use soksak_sidecar_vt_core::DaemonEvent;
+use soksak_sidecar_vt_core::locale::{ShellLocale, shell_locale};
 use soksak_sidecar_vt_core::platform::darwin::locale::installed;
 use soksak_sidecar_vt_core::pty::PtyService;
-use soksak_sidecar_vt_core::DaemonEvent;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 #[tokio::test]
 async fn a_shell_without_locale_variables_runs_in_a_utf8_locale() {
-    for name in ["LANG", "LC_ALL", "LC_CTYPE"] {
-        std::env::remove_var(name);
-    }
-    let service = PtyService::new(events_test::TestEvents::new().handle());
+    let service = PtyService::new(events_test::TestEvents::new().handle()).with_environment(
+        ["LANG", "LC_ALL", "LC_CTYPE"]
+            .map(|name| (name.to_string(), None))
+            .to_vec(),
+    );
     let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
     service
         .open(

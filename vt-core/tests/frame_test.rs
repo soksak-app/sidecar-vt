@@ -1,11 +1,11 @@
+use soksak_sidecar_vt_core::TerminalTheme;
 use soksak_sidecar_vt_core::platform::darwin::frame::{
-    cursor_blink_visible, effective_cursor_shape, metrics, CursorBlinkPolicy, CursorRender, Frame,
-    UnfocusedCursor,
+    CursorBlinkPolicy, CursorRender, Frame, UnfocusedCursor, cursor_blink_visible,
+    effective_cursor_shape, metrics,
 };
 use soksak_sidecar_vt_core::protocol::{
     Cell, Cursor, CursorShape, InlineImagePlacement, JsonRange, Preedit, Screen,
 };
-use soksak_sidecar_vt_core::TerminalTheme;
 
 fn screen(cols: u16, rows: u16) -> Screen {
     Screen {

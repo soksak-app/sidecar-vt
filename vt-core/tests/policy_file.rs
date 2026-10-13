@@ -1,12 +1,12 @@
 // The writer applies the policy file of core (docs/spec/logging.md#policy-file): it reads the file when it starts, learns of a
 // change through the file system events without a timer, refuses a file that breaks the rules and keeps the policy in force,
 // and states each policy and each count of gated events as events of its own.
-use serde_json::{json, Value};
-use soksak_sidecar_vt_core::events::{read_run_lines, EventLog, Events, Level, Options};
+use serde_json::{Value, json};
+use soksak_sidecar_vt_core::events::{EventLog, Events, Level, Options, read_run_lines};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -230,7 +230,7 @@ fn a_file_that_a_writer_is_still_writing_is_waited_on_and_reports_nothing() {
 fn the_service_reads_the_policy_file_in_the_parent_of_its_log_folder() {
     let config = Config::new();
     config.write(IO_OFF);
-    let log = EventLog::start_service(&config.directory.path().join("logs")).expect("start");
+    let log = EventLog::start_service(&config.directory.path().join("logs"), None).expect("start");
     let lines = lines(&log);
     let policy = of(&lines, "log.policy");
     assert_eq!(policy.len(), 1, "{lines:?}");

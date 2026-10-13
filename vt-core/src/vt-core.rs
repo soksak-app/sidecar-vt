@@ -18,12 +18,12 @@ pub mod stall;
 pub mod thread;
 
 pub use palette::{
-    default_terminal_color, parse_hex, TerminalTheme, ThemeMode, DEFAULT_BACKGROUND_HEX,
-    DEFAULT_BACKGROUND_RGB, DEFAULT_CURSOR_RGB, DEFAULT_FOREGROUND_HEX, DEFAULT_FOREGROUND_RGB,
-    DEFAULT_PALETTE, LIGHT_PALETTE,
+    DEFAULT_BACKGROUND_HEX, DEFAULT_BACKGROUND_RGB, DEFAULT_CURSOR_RGB, DEFAULT_FOREGROUND_HEX,
+    DEFAULT_FOREGROUND_RGB, DEFAULT_PALETTE, LIGHT_PALETTE, TerminalTheme, ThemeMode,
+    default_terminal_color, parse_hex,
 };
 pub use protocol::{
-    make_default_session_port_factory, serve, Cell, ClipboardSelection, Cursor, CursorShape,
-    DaemonEvent, Engine, EngineEvent, InlineAnchor, LocalSessionPort, Modes, Preedit, Screen,
-    Scrollback, SessionPort, ShellMarker, ShellRequest,
+    Cell, ClipboardSelection, Cursor, CursorShape, DaemonEvent, Engine, EngineEvent, InlineAnchor,
+    LocalSessionPort, Modes, Preedit, Screen, Scrollback, SessionPort, ShellMarker, ShellRequest,
+    make_default_session_port_factory, serve,
 };

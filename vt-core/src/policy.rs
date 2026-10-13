@@ -4,9 +4,9 @@
 //! the policy file with the rules and the error texts of the contract, and [`Gate`] holds the policy in force for the
 //! producers: one atomic read per question, and a count for each event that the policy refused.
 
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::events::Level;
 

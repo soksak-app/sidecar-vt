@@ -6,14 +6,14 @@ mod tracked_session_port;
 use async_trait::async_trait;
 /// fake daemon을 사용하는 serve contract 통합 테스트
 use soksak_sidecar_vt_core::protocol::{
-    serve as serve_with_events, serve_with_registry, Cell, Cursor, CursorShape, DaemonEvent,
-    Engine, EngineEvent, Modes, PersistentOwner, PersistentRegistry, Screen, SessionPort,
-    ShellRequest,
+    Cell, Cursor, CursorShape, DaemonEvent, Engine, EngineEvent, Modes, PersistentOwner,
+    PersistentRegistry, Screen, SessionPort, ShellRequest, serve as serve_with_events,
+    serve_with_registry,
 };
 use soksak_sidecar_vt_core::pty::PtyMeasurement;
 use soksak_sidecar_vt_core::{
-    inline_image::{Dimension, InlineImageCommand},
     TerminalTheme,
+    inline_image::{Dimension, InlineImageCommand},
 };
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -548,7 +548,9 @@ async fn pty_pending_reports_the_session_transport_measurement() {
         "an open session did not report its pending input count and read output bytes: {output}"
     );
     assert!(
-        output.contains(r#""body":{"error":"Session not open","event":"pty.pending"},"surface":"s2""#),
+        output.contains(
+            r#""body":{"error":"Session not open","event":"pty.pending"},"surface":"s2""#
+        ),
         "a surface without a session must answer an explicit error marked as the pty.pending reply: {output}"
     );
     assert_eq!(
@@ -717,8 +719,10 @@ async fn each_native_preedit_update_presents_a_fresh_terminal_frame() {
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .filter(|value| value["body"]["image"]["sequence"].is_number())
         .count();
-    assert!(frames >= 5,
-        "initial frame, focus frame, and all three successive preedit frames must be presented; got {frames}");
+    assert!(
+        frames >= 5,
+        "initial frame, focus frame, and all three successive preedit frames must be presented; got {frames}"
+    );
 }
 
 #[tokio::test]
@@ -768,9 +772,11 @@ async fn test_paste_rejects_non_text_payload() {
         )) as Arc<dyn SessionPort>
     });
     let _ = serve(engine_factory, reader, &mut writer, session_port_factory).await;
-    assert!(String::from_utf8(writer)
-        .unwrap()
-        .contains("paste requires text string"));
+    assert!(
+        String::from_utf8(writer)
+            .unwrap()
+            .contains("paste requires text string")
+    );
     assert!(calls.lock().unwrap().writes.is_empty());
 }
 
@@ -1254,9 +1260,11 @@ async fn test_a7_close_op_ends_the_session() {
         2,
         "repeated close must be acknowledged idempotently"
     );
-    assert!(close_replies
-        .iter()
-        .all(|message| message["surface"] == "s1"));
+    assert!(
+        close_replies
+            .iter()
+            .all(|message| message["surface"] == "s1")
+    );
 
     // close가 호출되었고 detach는 호출되지 않았는지 검증한다
     let calls_lock = calls.lock().unwrap();
@@ -1594,26 +1602,25 @@ async fn test_a2_pushed_output_reaches_screen() {
             }
         }
 
-        if let Some(event) = screen_json.get("body").and_then(|b| b.get("event")) {
-            if event == "screen" {
-                // screen event를 찾았으므로 어떤 line이 "hi"를 포함하는지 확인한다
-                let body = &screen_json["body"];
-                if let (Some(cells), Some(cols)) = (body["cells"].as_array(), body["cols"].as_u64())
-                {
-                    for row in cells.chunks(cols as usize) {
-                        let line_text: String = row
-                            .iter()
-                            .filter_map(|cell| cell["grapheme"].as_str())
-                            .collect();
-                        if line_text.trim_end() == "hi" {
-                            found_hi = true;
-                            break;
-                        }
+        if let Some(event) = screen_json.get("body").and_then(|b| b.get("event"))
+            && event == "screen"
+        {
+            // screen event를 찾았으므로 어떤 line이 "hi"를 포함하는지 확인한다
+            let body = &screen_json["body"];
+            if let (Some(cells), Some(cols)) = (body["cells"].as_array(), body["cols"].as_u64()) {
+                for row in cells.chunks(cols as usize) {
+                    let line_text: String = row
+                        .iter()
+                        .filter_map(|cell| cell["grapheme"].as_str())
+                        .collect();
+                    if line_text.trim_end() == "hi" {
+                        found_hi = true;
+                        break;
                     }
                 }
-                if found_hi {
-                    break;
-                }
+            }
+            if found_hi {
+                break;
             }
         }
     }
@@ -1756,13 +1763,12 @@ async fn test_a5_screen_read_returns_current_screen() {
     // "hi"를 포함한 screen event를 찾는다(screen.read에서 온다)
     let mut found_screen_read = false;
     for line in lines.iter().skip(1) {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-            if let Some(event) = json.get("body").and_then(|b| b.get("event")) {
-                if event == "screen" {
-                    found_screen_read = true;
-                    break;
-                }
-            }
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line)
+            && let Some(event) = json.get("body").and_then(|b| b.get("event"))
+            && event == "screen"
+        {
+            found_screen_read = true;
+            break;
         }
     }
     assert!(
@@ -1793,10 +1799,12 @@ async fn test_a6_unknown_op_returns_error() {
     assert!(!lines.is_empty());
 
     let json: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
-    assert!(json["body"]["error"]
-        .as_str()
-        .unwrap()
-        .contains("Unknown operation"));
+    assert!(
+        json["body"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown operation")
+    );
 }
 
 #[tokio::test]
@@ -1822,9 +1830,11 @@ async fn test_theme_rejects_unknown_mode_without_fallback() {
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
         .collect::<Vec<_>>();
-    assert!(outputs
-        .iter()
-        .any(|value| value["body"]["event"] == "theme"));
+    assert!(
+        outputs
+            .iter()
+            .any(|value| value["body"]["event"] == "theme")
+    );
     assert!(outputs.iter().any(|value| {
         value["body"]["error"] == "invalidParams"
             && value["body"]["reason"] == "theme.mode must be dark or light"
@@ -1866,9 +1876,11 @@ async fn test_cursor_policy_rejects_invalid_values_without_fallback() {
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
         .collect::<Vec<_>>();
-    assert!(outputs
-        .iter()
-        .any(|value| { value["body"]["event"] == "cursor" && value["body"]["blink"] == "Always" }));
+    assert!(
+        outputs.iter().any(|value| {
+            value["body"]["event"] == "cursor" && value["body"]["blink"] == "Always"
+        })
+    );
     assert!(outputs.iter().any(|value| {
         value["body"]["error"] == "invalidParams"
             && value["body"]["reason"]
@@ -2058,13 +2070,12 @@ async fn test_k4_unknown_key_returns_error() {
 
     let mut found_error = false;
     for line in lines {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-            if let Some(error) = json.get("body").and_then(|b| b.get("error")) {
-                if error.as_str().unwrap().contains("unknown key: Nope") {
-                    found_error = true;
-                    break;
-                }
-            }
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line)
+            && let Some(error) = json.get("body").and_then(|b| b.get("error"))
+            && error.as_str().unwrap().contains("unknown key: Nope")
+        {
+            found_error = true;
+            break;
         }
     }
     assert!(found_error, "should return error for unknown key");
@@ -2373,15 +2384,12 @@ async fn test_i2_no_image_envelope_until_consumed() {
     for _ in 0..20 {
         if let Ok(Ok(Some(line))) =
             tokio::time::timeout(std::time::Duration::from_millis(100), lines.next_line()).await
+            && let Ok(json) = serde_json::from_str::<serde_json::Value>(&line)
+            && let Some(img) = json.get("body").and_then(|b| b.get("image"))
+            && img["sequence"] == 2
         {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
-                if let Some(img) = json.get("body").and_then(|b| b.get("image")) {
-                    if img["sequence"] == 2 {
-                        found_sequence_2 = true;
-                        break;
-                    }
-                }
-            }
+            found_sequence_2 = true;
+            break;
         }
     }
 
@@ -2454,19 +2462,15 @@ async fn test_i3_image_response_no_error() {
     for _ in 0..10 {
         if let Ok(Ok(Some(line))) =
             tokio::time::timeout(std::time::Duration::from_millis(100), lines.next_line()).await
+            && let Ok(json) = serde_json::from_str::<serde_json::Value>(&line)
+            && let Some(error) = json.get("body").and_then(|b| b.get("error"))
+            && error
+                .as_str()
+                .map(|e| e.contains("unknown operation"))
+                .unwrap_or(false)
         {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
-                if let Some(error) = json.get("body").and_then(|b| b.get("error")) {
-                    if error
-                        .as_str()
-                        .map(|e| e.contains("unknown operation"))
-                        .unwrap_or(false)
-                    {
-                        found_error_response = true;
-                        break;
-                    }
-                }
-            }
+            found_error_response = true;
+            break;
         }
     }
     assert!(
@@ -2483,19 +2487,15 @@ async fn test_i3_image_response_no_error() {
     for _ in 0..10 {
         if let Ok(Ok(Some(line))) =
             tokio::time::timeout(std::time::Duration::from_millis(100), lines.next_line()).await
+            && let Ok(json) = serde_json::from_str::<serde_json::Value>(&line)
+            && let Some(error) = json.get("body").and_then(|b| b.get("error"))
+            && error
+                .as_str()
+                .map(|e| e.contains("unknown operation"))
+                .unwrap_or(false)
         {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
-                if let Some(error) = json.get("body").and_then(|b| b.get("error")) {
-                    if error
-                        .as_str()
-                        .map(|e| e.contains("unknown operation"))
-                        .unwrap_or(false)
-                    {
-                        found_error_response = true;
-                        break;
-                    }
-                }
-            }
+            found_error_response = true;
+            break;
         }
     }
     assert!(
@@ -2532,7 +2532,11 @@ async fn test_open_with_image_is_a_request() {
     let _ = serve(engine_factory, reader, &mut writer, session_port_factory).await;
 
     let calls_lock = calls.lock().unwrap();
-    assert_eq!(calls_lock.opens.len(), 1, "should have called open exactly once - open with image was misclassified as host response!");
+    assert_eq!(
+        calls_lock.opens.len(),
+        1,
+        "should have called open exactly once - open with image was misclassified as host response!"
+    );
     assert!(
         calls_lock.opens[0].0 > 0 && calls_lock.opens[0].1 > 0,
         "should have valid cols and rows"
@@ -3542,17 +3546,17 @@ async fn test_panicking_surface_reports_error() {
             let json: serde_json::Value =
                 serde_json::from_str(&line).expect("failed to parse JSON");
 
-            if let Some(event) = json.get("body").and_then(|b| b.get("event")) {
-                if event == "error" {
-                    found_error = true;
-                    if let Some(reason) = json.get("body").and_then(|b| b.get("reason")) {
-                        assert!(
-                            reason.as_str().unwrap().contains("surface task ended"),
-                            "error reason should mention surface task ended"
-                        );
-                    }
-                    break;
+            if let Some(event) = json.get("body").and_then(|b| b.get("event"))
+                && event == "error"
+            {
+                found_error = true;
+                if let Some(reason) = json.get("body").and_then(|b| b.get("reason")) {
+                    assert!(
+                        reason.as_str().unwrap().contains("surface task ended"),
+                        "error reason should mention surface task ended"
+                    );
                 }
+                break;
             }
         }
     }
@@ -3580,10 +3584,10 @@ async fn next_image_envelope(
             .expect("timeout waiting for an image envelope")
             .expect("failed to read an output line")
             .expect("output ended");
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
-            if json["body"]["image"].is_object() {
-                return json;
-            }
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line)
+            && json["body"]["image"].is_object()
+        {
+            return json;
         }
     }
     panic!("no image envelope arrived");
@@ -3791,13 +3795,11 @@ async fn test_no_image_envelope_while_outstanding_after_release() {
     for _ in 0..20 {
         if let Ok(Ok(Some(line))) =
             tokio::time::timeout(std::time::Duration::from_millis(100), lines.next_line()).await
+            && let Ok(json) = serde_json::from_str::<serde_json::Value>(&line)
+            && json["body"]["image"]["sequence"].as_u64() == Some(3)
         {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
-                if json["body"]["image"]["sequence"].as_u64() == Some(3) {
-                    caught_up = true;
-                    break;
-                }
-            }
+            caught_up = true;
+            break;
         }
     }
     assert!(
@@ -3871,13 +3873,11 @@ async fn test_image_error_response_reenables_drawing() {
     for _ in 0..20 {
         if let Ok(Ok(Some(line))) =
             tokio::time::timeout(std::time::Duration::from_millis(100), lines.next_line()).await
+            && let Ok(json) = serde_json::from_str::<serde_json::Value>(&line)
+            && json["body"]["image"]["sequence"].as_u64() == Some(2)
         {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
-                if json["body"]["image"]["sequence"].as_u64() == Some(2) {
-                    drew_again = true;
-                    break;
-                }
-            }
+            drew_again = true;
+            break;
         }
     }
     assert!(
@@ -4553,7 +4553,9 @@ async fn an_invalid_mouse_operation_is_rejected() {
 #[tokio::test]
 async fn focus_changes_are_reported_to_a_program_that_enables_focus_reports() {
     let focus = |focused: bool| {
-        format!("{{\"surface\":\"s1\",\"body\":{{\"operation\":\"input\",\"focus\":{{\"focused\":{focused}}}}}}}\n")
+        format!(
+            "{{\"surface\":\"s1\",\"body\":{{\"operation\":\"input\",\"focus\":{{\"focused\":{focused}}}}}}}\n"
+        )
     };
     let requests = [focus(true), focus(true), focus(false)].concat();
     let modes = Modes {
@@ -4624,7 +4626,9 @@ async fn an_inline_image_event_follows_the_presentation_that_draws_the_image() {
         truncated: false,
     });
     let consumed = |sequence: i64| {
-        format!("{{\"surface\":\"s1\",\"body\":{{\"image\":{{\"consumed\":{{\"name\":\"view\",\"generation\":1,\"raster\":1,\"sequence\":{sequence}}}}}}}}}\n")
+        format!(
+            "{{\"surface\":\"s1\",\"body\":{{\"image\":{{\"consumed\":{{\"name\":\"view\",\"generation\":1,\"raster\":1,\"sequence\":{sequence}}}}}}}}}\n"
+        )
     };
     let mut seen = Vec::new();
     let mut presented_after_output = false;
@@ -4808,7 +4812,7 @@ async fn a_mouse_point_in_the_snapping_band_is_accepted_and_a_failure_keeps_its_
 }
 
 #[link(name = "IOSurface", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     // 전역 IOSurface 를 ID 로 찾는다. 호스트가 전송 이미지를 찾는 방법과 같다.
     fn IOSurfaceLookup(id: u32) -> *const std::ffi::c_void;
     fn IOSurfaceSetValue(
@@ -4823,7 +4827,7 @@ extern "C" {
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn CFRelease(object: *const std::ffi::c_void);
     fn CFEqual(left: *const std::ffi::c_void, right: *const std::ffi::c_void) -> u8;
     fn CFStringCreateWithCString(
@@ -5048,8 +5052,8 @@ async fn a_persistent_closed_surface_keeps_its_unanswered_transfer_image_until_t
 }
 
 #[tokio::test]
-async fn a_persistent_closed_surface_releases_its_unanswered_transfer_image_when_the_connection_ends(
-) {
+async fn a_persistent_closed_surface_releases_its_unanswered_transfer_image_when_the_connection_ends()
+ {
     check_unanswered_transfer(true, LettingGo::Close, Release::ConnectionEnd).await;
 }
 

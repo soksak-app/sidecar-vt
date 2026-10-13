@@ -3,10 +3,10 @@ use crate::events::{Events, Level, Subject};
 use crate::inline_image::{Dimension, InlineImageCommand};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant, MissedTickBehavior};
@@ -46,10 +46,10 @@ impl Request {
     /// Writes the `cids` of the request into the reply line and records the reply.
     fn answer(&self, line: &mut Value) {
         let error = reply_error(line);
-        if !self.cids.is_empty() {
-            if let Some(object) = line.as_object_mut() {
-                object.insert("cids".to_string(), json!(self.cids));
-            }
+        if !self.cids.is_empty()
+            && let Some(object) = line.as_object_mut()
+        {
+            object.insert("cids".to_string(), json!(self.cids));
         }
         let mut fields = json!({
             "operation": self.operation,
@@ -272,10 +272,10 @@ impl OutputSink {
 
     async fn detach_connection(&self, previous: &Option<Connection>) {
         let mut current = self.connection.lock().await;
-        if let (Some(connection), Some(previous)) = (current.as_ref(), previous.as_ref()) {
-            if connection.sender.same_channel(&previous.sender) {
-                *current = None;
-            }
+        if let (Some(connection), Some(previous)) = (current.as_ref(), previous.as_ref())
+            && connection.sender.same_channel(&previous.sender)
+        {
+            *current = None;
         }
     }
 }
@@ -1065,7 +1065,7 @@ fn parse_cursor_policy(body: &Value) -> Result<CursorPolicy, String> {
         Some(value) => {
             return Err(format!(
                 "cursor.shape must be block, underline, or beam: {value}"
-            ))
+            ));
         }
     };
     let blink = match body.get("blink").and_then(Value::as_str) {
@@ -1077,7 +1077,7 @@ fn parse_cursor_policy(body: &Value) -> Result<CursorPolicy, String> {
         Some(value) => {
             return Err(format!(
                 "cursor.blink must be Never, Off, On, or Always: {value}"
-            ))
+            ));
         }
     };
     let interval_ms = match body.get("interval") {
@@ -2457,8 +2457,8 @@ async fn surface_task(
                     screen.cursor.focused,
                     screen.cursor.visible,
                 );
-                if last_cursor_frame != Some(signature) {
-                    if let Some(state) = image_state.as_mut() {
+                if last_cursor_frame != Some(signature)
+                    && let Some(state) = image_state.as_mut() {
                         if state.pending_draw {
                             state.dirty = true;
                         } else if !present_screen(&surface_id, &screen, state, &output_tx, "blink", &log, inputs.sequence).await {
@@ -2467,7 +2467,6 @@ async fn surface_task(
                             last_cursor_frame = Some(signature);
                         }
                     }
-                }
             }
             Some(Dispatch { command: cmd, request }) = cmd_rx.recv() => {
                 // The replies of this command answer the request that sent it.
@@ -2496,8 +2495,8 @@ async fn surface_task(
                             preserved_inline_images = release_image_state(&surface_id, previous_state);
                         }
                         pending_configuration = None;
-                        if !headless {
-                            if let Some(session_id) = session_id.as_deref() {
+                        if !headless
+                            && let Some(session_id) = session_id.as_deref() {
                             let response = json!({
                                 "surface": surface_id,
                                 "body": {"event": "session", "sessionId": session_id}
@@ -2506,7 +2505,6 @@ async fn surface_task(
                                 return;
                             }
                             }
-                        }
                     }
                     SurfaceCommand::Configure(configuration) => {
                         if let Some(state) = image_state.as_ref() {
@@ -2894,12 +2892,11 @@ async fn surface_task(
                         };
                         match bytes {
                             Some(bytes) => {
-                                if let Some(ref sid) = session_id {
-                                    if let Err(error) = inputs.write(&session_port, sid, &bytes, &cids).await {
+                                if let Some(ref sid) = session_id
+                                    && let Err(error) = inputs.write(&session_port, sid, &bytes, &cids).await {
                                         let response = json!({"surface": surface_id, "body": {"error": "scroll write failed", "reason": error}});
                                         if output_tx.reply(response).await.is_err() { return; }
                                     }
-                                }
                             }
                             None => {
                                 inputs.scroll_viewport(engine.as_mut(), session_id.as_deref(), lines);
@@ -3016,20 +3013,18 @@ async fn surface_task(
                         cursor_activity = Instant::now();
                         last_cursor_frame = None;
                         // ?1004 를 켠 프로그램에는 초점이 바뀔 때마다 알린다.
-                        if next != focused && engine.modes().focus_in_out {
-                            if let Some(ref sid) = session_id {
+                        if next != focused && engine.modes().focus_in_out
+                            && let Some(ref sid) = session_id {
                                 let report: &[u8] = if next { b"\x1b[I" } else { b"\x1b[O" };
                                 if let Err(error) = inputs.write(&session_port, sid, report, &cids).await {
                                     let response = json!({"surface": surface_id, "body": {"error": "focus report write failed", "reason": error}});
                                     if output_tx.reply(response).await.is_err() { return; }
                                 }
                             }
-                        }
                         focused = next;
                         let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-                        if let Some(ref mut state) = image_state {
-                            if !present_screen(&surface_id, &screen, state, &output_tx, "focus", &log, inputs.sequence).await { return; }
-                        }
+                        if let Some(ref mut state) = image_state
+                            && !present_screen(&surface_id, &screen, state, &output_tx, "focus", &log, inputs.sequence).await { return; }
                         let response = json!({"surface": surface_id, "body": {"ack": true}});
                         if output_tx.reply(response).await.is_err() { return; }
                     }
@@ -3237,8 +3232,8 @@ async fn surface_task(
                         break;
                     }
                     SurfaceCommand::SessionDetach => {
-                        if let Some(ref sid) = session_id {
-                            if let Err(error) = session_port.detach(sid).await {
+                        if let Some(ref sid) = session_id
+                            && let Err(error) = session_port.detach(sid).await {
                                 let response = json!({
                                     "surface": surface_id,
                                     "body": {"error": format!("Detach failed: {error}")}
@@ -3247,7 +3242,6 @@ async fn surface_task(
                                     return;
                                 }
                             }
-                        }
                         break;
                     }
                     SurfaceCommand::ImageResponse { body } => {
@@ -3335,8 +3329,8 @@ async fn surface_task(
                                     return;
                                 }
                             }
-                            if image_state.as_ref().is_none_or(|state| !state.pending_draw) {
-                                if let Some(event) = pending_selection_event.take() {
+                            if image_state.as_ref().is_none_or(|state| !state.pending_draw)
+                                && let Some(event) = pending_selection_event.take() {
                                     if output_tx.send(event).await.is_err() { return; }
                                     if let Some(deferred) = deferred_selection_end.take() {
                                         let view = ScreenView { focused, preedit: &preedit, policy: &cursor_policy };
@@ -3345,7 +3339,6 @@ async fn surface_task(
                                         }
                                     }
                                 }
-                            }
                         }
                     }
                 }
@@ -3353,8 +3346,8 @@ async fn surface_task(
             Some(event) = daemon_events_rx.recv() => {
                 match event {
                     DaemonEvent::Output { session_id: ref recv_sid, data, sequence: _, truncated } => {
-                        if let Some(ref sid) = session_id {
-                            if recv_sid == sid {
+                        if let Some(ref sid) = session_id
+                            && recv_sid == sid {
                                 cursor_activity = Instant::now();
                                 last_cursor_frame = None;
                                 if truncated {
@@ -3368,25 +3361,24 @@ async fn surface_task(
                                 if headless || hold_while_presenting(&mut image_state) { continue; }
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
 
-                                if !headless { if let Some(ref mut img_state) = image_state {
+                                if !headless && let Some(ref mut img_state) = image_state {
                                         // 그림이 호스트에 있으면 돌려받을 때까지 그리지 않고 변경 사실만 남긴다.
                                         if img_state.pending_draw {
                                             img_state.dirty = true;
                                         } else if !present_screen(&surface_id, &screen, img_state, &output_tx, "image", &log, inputs.sequence).await {
                                             return;
                                         }
-                                } }
+                                }
 
                                 if headless || image_state.is_some() { continue; }
                                 if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, inputs.sequence).await {
                                     return;
                                 }
                             }
-                        }
                     }
                     DaemonEvent::Exit { session_id: ref recv_sid } => {
-                        if let Some(ref sid) = session_id {
-                            if recv_sid == sid {
+                        if let Some(ref sid) = session_id
+                            && recv_sid == sid {
                                 let response = json!({
                                     "surface": surface_id,
                                     "body": {"event": "exit"}
@@ -3396,7 +3388,6 @@ async fn surface_task(
                                 }
                                 break;
                             }
-                        }
                     }
                     DaemonEvent::Error { session_id: ref recv_sid, error } => {
                         if session_id.as_deref() == Some(recv_sid) {
@@ -3735,13 +3726,11 @@ where
                         .get("image")
                         .and_then(Value::as_object)
                         .and_then(image_answer)
-                    {
-                        if transfers
+                        && transfers
                             .as_ref()
                             .is_some_and(|transfers| transfers.answer(&surface_id, answer))
-                        {
-                            continue;
-                        }
+                    {
+                        continue;
                     }
                     let registry_key =
                         local_surface_key(&surface_txs, env.root.as_deref(), &surface_id);
@@ -4161,8 +4150,14 @@ where
                             }
                             "font" => {
                                 let size = match body.get("size").and_then(Value::as_f64) {
-                                    Some(size) if (FONT_SIZE_MIN..=FONT_SIZE_MAX).contains(&size) => Ok(size as f32),
-                                    _ => Err(format!("font.size must be a number from {FONT_SIZE_MIN} to {FONT_SIZE_MAX} points")),
+                                    Some(size)
+                                        if (FONT_SIZE_MIN..=FONT_SIZE_MAX).contains(&size) =>
+                                    {
+                                        Ok(size as f32)
+                                    }
+                                    _ => Err(format!(
+                                        "font.size must be a number from {FONT_SIZE_MIN} to {FONT_SIZE_MAX} points"
+                                    )),
                                 };
                                 let resolved = match body.get("family").and_then(Value::as_str) {
                                     Some(list) => crate::platform::resolve_font_list(list),
@@ -4727,10 +4722,8 @@ impl<'a> RequestBody<'a> {
                 size: line.len(),
             };
         }
-        if json {
-            if let Ok(raw) = serde_json::from_str::<&serde_json::value::RawValue>(line) {
-                return Self::Raw(raw);
-            }
+        if json && let Ok(raw) = serde_json::from_str::<&serde_json::value::RawValue>(line) {
+            return Self::Raw(raw);
         }
         Self::Unparsed(line)
     }

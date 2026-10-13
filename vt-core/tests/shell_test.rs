@@ -7,9 +7,9 @@ use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
 use std::sync::{Mutex, OnceLock};
 
-use soksak_sidecar_vt_core::pty::{resolve_directory, resolve_shell, PtyService};
 use soksak_sidecar_vt_core::DaemonEvent;
-use tokio::time::{timeout, Duration};
+use soksak_sidecar_vt_core::pty::{PtyService, resolve_directory, resolve_shell};
+use tokio::time::{Duration, timeout};
 
 // 같은 워크스페이스의 PTY 검사들과 한 번에 하나씩 실행한다.
 fn native_pty_test_lock() -> std::fs::File {
@@ -141,12 +141,14 @@ async fn a_zsh_session_reads_the_user_startup_files_and_reports_prompt_and_comma
             (".zlogin", "ZLOGIN_READ=1\n"),
         ],
     );
-    // 세션 환경은 명령을 만들 때의 프로세스 환경에서 온다.
-    std::env::set_var("ZDOTDIR", &home);
-    let service = PtyService::new(events_test::TestEvents::new().handle());
+    // 세션 환경의 ZDOTDIR 은 이 검사가 정한다.
+    let service =
+        PtyService::new(events_test::TestEvents::new().handle()).with_environment(vec![(
+            "ZDOTDIR".to_string(),
+            Some(home.clone().into_os_string()),
+        )]);
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", "/bin/zsh", None, 80, 24, tx);
-    std::env::remove_var("ZDOTDIR");
     let (session, _) = opened.expect("open a zsh session");
     let mut output = String::new();
     let prompted =
@@ -199,15 +201,13 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
             "export PROFILE_READ=1\nuser_hook() { USER_HOOK_RAN=1; }\nPROMPT_COMMAND=\"${PROMPT_COMMAND:+$PROMPT_COMMAND; }user_hook\"\nPS1='T> '\n",
         )],
     );
-    let original_home = std::env::var_os("HOME");
-    std::env::set_var("HOME", &home);
-    let service = PtyService::new(events_test::TestEvents::new().handle());
+    let service =
+        PtyService::new(events_test::TestEvents::new().handle()).with_environment(vec![(
+            "HOME".to_string(),
+            Some(home.clone().into_os_string()),
+        )]);
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", "/bin/bash", None, 80, 24, tx);
-    match original_home {
-        Some(value) => std::env::set_var("HOME", value),
-        None => std::env::remove_var("HOME"),
-    }
     let (session, _) = opened.expect("open a bash session");
     let mut output = String::new();
     let prompted = collect_until(&mut rx, &mut output, |text| {
@@ -295,15 +295,13 @@ async fn a_bash_debug_trap_from_the_startup_files_is_kept_and_no_marks_are_repor
         "soksak-bash-debug-trap-test",
         &[(".bash_profile", "trap 'USER_TRAP=1' DEBUG\nPS1='T> '\n")],
     );
-    let original_home = std::env::var_os("HOME");
-    std::env::set_var("HOME", &home);
-    let service = PtyService::new(events_test::TestEvents::new().handle());
+    let service =
+        PtyService::new(events_test::TestEvents::new().handle()).with_environment(vec![(
+            "HOME".to_string(),
+            Some(home.clone().into_os_string()),
+        )]);
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", "/bin/bash", None, 80, 24, tx);
-    match original_home {
-        Some(value) => std::env::set_var("HOME", value),
-        None => std::env::remove_var("HOME"),
-    }
     let (session, _) = opened.expect("open a bash session");
     service
         .write(&session, b"printf 'TRAP=%s\\n' \"$(trap -p DEBUG)\"\n")
@@ -329,15 +327,13 @@ async fn a_resize_during_bash_startup_does_not_report_a_command_at_the_first_pro
         "soksak-bash-startup-resize-test",
         &[(".bash_profile", "PS1='T> '\n")],
     );
-    let original_home = std::env::var_os("HOME");
-    std::env::set_var("HOME", &home);
-    let service = PtyService::new(events_test::TestEvents::new().handle());
+    let service =
+        PtyService::new(events_test::TestEvents::new().handle()).with_environment(vec![(
+            "HOME".to_string(),
+            Some(home.clone().into_os_string()),
+        )]);
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", "/bin/bash", None, 80, 24, tx);
-    match original_home {
-        Some(value) => std::env::set_var("HOME", value),
-        None => std::env::remove_var("HOME"),
-    }
     let (session, _) = opened.expect("open a bash session");
     // 앱은 세션을 연 직후 표면 크기를 보낸다. 셸이 시작 파일을 읽는 동안 SIGWINCH 가 온다.
     service.resize(&session, 79, 24).unwrap();
@@ -413,15 +409,13 @@ async fn reports_its_directory(shell: &str, variable: &str, files: &[(&str, &str
     let start = home.join("a b-한글%");
     std::fs::create_dir_all(&start).unwrap();
     let start = std::fs::canonicalize(&start).unwrap();
-    let original = std::env::var_os(variable);
-    std::env::set_var(variable, &home);
-    let service = PtyService::new(events_test::TestEvents::new().handle());
+    let service =
+        PtyService::new(events_test::TestEvents::new().handle()).with_environment(vec![(
+            variable.to_string(),
+            Some(home.clone().into_os_string()),
+        )]);
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", shell, Some(start.to_str().unwrap()), 80, 24, tx);
-    match original {
-        Some(value) => std::env::set_var(variable, value),
-        None => std::env::remove_var(variable),
-    }
     let (session, _) = opened.expect("open a shell session");
     let expected = directory_uri(&start);
     let mut output = String::new();

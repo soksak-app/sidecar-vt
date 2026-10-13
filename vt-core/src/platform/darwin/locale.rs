@@ -1,6 +1,6 @@
 //! 현재 macOS locale 의 언어 코드와 지역 코드를 읽고, C library 가 locale 이름을 아는지 확인한다.
 
-use std::ffi::{c_char, c_void, CStr, CString};
+use std::ffi::{CStr, CString, c_char, c_void};
 
 type CFTypeRef = *const c_void;
 type CFIndex = isize;
@@ -9,7 +9,7 @@ type CFIndex = isize;
 const CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
 #[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     static kCFLocaleLanguageCode: CFTypeRef;
     static kCFLocaleCountryCode: CFTypeRef;
     fn CFLocaleCopyCurrent() -> CFTypeRef;

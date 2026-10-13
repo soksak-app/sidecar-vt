@@ -257,10 +257,10 @@ fn watch_loop(
             changed(&changes);
         }
     }
-    if file >= 0 {
-        if let Err(error) = close_descriptor(file) {
-            failed(format!("watch {}: {error}", path.display()));
-        }
+    if file >= 0
+        && let Err(error) = close_descriptor(file)
+    {
+        failed(format!("watch {}: {error}", path.display()));
     }
 }
 
@@ -297,10 +297,10 @@ pub fn watch_file(
         Err(error) => {
             // The thread owns none of the descriptors yet, so they are closed here.
             for descriptor in [queue, folder, file] {
-                if descriptor >= 0 {
-                    if let Err(close_error) = close_descriptor(descriptor) {
-                        eprintln!("watch {}: {close_error}", path.display());
-                    }
+                if descriptor >= 0
+                    && let Err(close_error) = close_descriptor(descriptor)
+                {
+                    eprintln!("watch {}: {close_error}", path.display());
                 }
             }
             return Err(fail(format!("the watch thread: {error}")));

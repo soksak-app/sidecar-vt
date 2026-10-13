@@ -7,9 +7,9 @@ use alacritty_terminal::term::{Config, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, Handler, NamedColor, Processor, Rgb};
 use soksak_sidecar_vt_core::directory_uri::local_path;
 use soksak_sidecar_vt_core::{
-    default_terminal_color, inline_image::parse as parse_inline_image, Cell, ClipboardSelection,
-    Cursor, CursorShape as ProtocolCursorShape, Engine, EngineEvent, InlineAnchor, Modes, Screen,
-    ShellMarker, TerminalTheme,
+    Cell, ClipboardSelection, Cursor, CursorShape as ProtocolCursorShape, Engine, EngineEvent,
+    InlineAnchor, Modes, Screen, ShellMarker, TerminalTheme, default_terminal_color,
+    inline_image::parse as parse_inline_image,
 };
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -861,7 +861,7 @@ impl AlacrittyEngine {
                     return Some(EngineEvent::Error(format!(
                         "OSC 5 special color number is not 0-4: {}",
                         pair[0]
-                    )))
+                    )));
                 }
             };
             if index == 2 {
@@ -889,7 +889,7 @@ impl AlacrittyEngine {
                         return Some(EngineEvent::Error(format!(
                             "OSC 5 color is not an X color: {}",
                             pair[1]
-                        )))
+                        )));
                     }
                 }
             }
@@ -908,14 +908,16 @@ impl AlacrittyEngine {
         for pair in parts.chunks(2) {
             match (pair[0].parse::<usize>(), pair[1].parse::<u32>()) {
                 (Ok(2), Ok(_)) => {
-                    return Some(EngineEvent::Error(format!("OSC {selector} blink color cannot apply: the grid does not keep the blink attribute")));
+                    return Some(EngineEvent::Error(format!(
+                        "OSC {selector} blink color cannot apply: the grid does not keep the blink attribute"
+                    )));
                 }
                 (Ok(index), Ok(flag)) if index < 5 => self.special_enabled[index] = flag != 0,
                 _ => {
                     return Some(EngineEvent::Error(format!(
                         "OSC {selector} pair is not a color number 0-4 and a flag: {};{}",
                         pair[0], pair[1]
-                    )))
+                    )));
                 }
             }
         }

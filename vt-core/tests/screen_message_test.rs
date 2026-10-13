@@ -1,8 +1,8 @@
 // The `screen` message of the service carries the members of the screen hash (core docs/spec/terminal-runtime.md#screen-message):
 // for each vector of the golden file the message that the service builds from the screen of the vector has the members of the
 // golden message and the hash of the vector. The golden file is owned by core (tests/fixtures/log-contract/README.md).
-use serde_json::{json, Value};
-use soksak_sidecar_vt_core::protocol::{screen_message, Cell, Cursor, Screen};
+use serde_json::{Value, json};
+use soksak_sidecar_vt_core::protocol::{Cell, Cursor, Screen, screen_message};
 use soksak_sidecar_vt_core::screen_hash::screen_hash_json;
 
 fn golden(name: &str) -> Value {

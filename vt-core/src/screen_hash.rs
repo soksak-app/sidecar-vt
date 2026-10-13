@@ -152,7 +152,7 @@ pub fn screen_bytes_json(screen: &Value) -> Result<Vec<u8>, String> {
                 return refuse(format!(
                     "{name} must be a positive integer, found {}",
                     get(name)
-                ))
+                ));
             }
         }
     }
@@ -189,13 +189,13 @@ pub fn screen_bytes_json(screen: &Value) -> Result<Vec<u8>, String> {
             return refuse(format!(
                 "cells must hold {expected} cells (rows {rows} × cols {cols}), found {}",
                 cells.len()
-            ))
+            ));
         }
         None => {
             return refuse(format!(
                 "cells must hold {expected} cells (rows {rows} × cols {cols}), found {}",
                 get("cells")
-            ))
+            ));
         }
     };
     let mut hashed = Vec::with_capacity(cells.len());
@@ -218,7 +218,7 @@ pub fn screen_bytes_json(screen: &Value) -> Result<Vec<u8>, String> {
                 return refuse(format!(
                     "{at}.width must be 0, 1 or 2, found {}",
                     field("width")
-                ))
+                ));
             }
         };
         let fg = json_color(&format!("{at}.fg"), field("fg"))?;

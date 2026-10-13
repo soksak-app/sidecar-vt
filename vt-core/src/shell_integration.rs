@@ -59,7 +59,7 @@ fn private_directory(path: &Path) -> Result<(), String> {
             return Err(format!(
                 "create shell integration directory {}: {error}",
                 path.display()
-            ))
+            ));
         }
     }
     check_private_directory(path)

@@ -1,8 +1,8 @@
 // The lines of the event writer satisfy the event contract of core (docs/spec/logging.md). The golden fixtures in
 // tests/fixtures/log-contract are copies of the fixtures of the contract; a line that the writer produces has the same
 // structure and satisfies the same catalog.
-use serde_json::{json, Value};
-use soksak_sidecar_vt_core::events::{hex, read_lines, EventLog, Level, Options, Subject};
+use serde_json::{Value, json};
+use soksak_sidecar_vt_core::events::{EventLog, Level, Options, Subject, hex, read_lines};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -319,9 +319,11 @@ fn an_event_outside_the_namespace_of_the_service_is_refused() {
     assert!(!log.emit(Level::Info, "host.window.event", &json!({})));
     log.flush(DEADLINE).unwrap();
     let lines = lines_of(log.path());
-    assert!(lines
-        .iter()
-        .all(|line| line["event"] != "host.window.event"));
+    assert!(
+        lines
+            .iter()
+            .all(|line| line["event"] != "host.window.event")
+    );
     let dropped = lines
         .iter()
         .find(|line| line["event"] == "log.dropped")
@@ -335,10 +337,12 @@ fn an_event_outside_the_namespace_of_the_service_is_refused() {
         .find(|line| line["event"] == "sidecar.vt.record.error")
         .expect("the refusal is an error record that names the event");
     assert_eq!(record["fields"]["where"], "event writer");
-    assert!(record["fields"]["text"]
-        .as_str()
-        .unwrap()
-        .contains("host.window.event"));
+    assert!(
+        record["fields"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("host.window.event")
+    );
 }
 
 #[test]

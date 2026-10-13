@@ -3,7 +3,7 @@
 // that a writer has not finished.
 use serde_json::Value;
 use soksak_sidecar_vt_core::events::Level;
-use soksak_sidecar_vt_core::policy::{is_being_written, parse_policy, Class, Policy};
+use soksak_sidecar_vt_core::policy::{Class, Policy, is_being_written, parse_policy};
 
 fn cases() -> Value {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S57: every crate builds with Rust edition 2024; the manifests declare `edition = "2024"` and the code keeps its behavior. The engine trace folder of a diagnostic build is read once at startup from `SOKSAK_VT_TRACE_DIR`.
 - S56: the close of a session ends its child before it takes the writer, so a write that waits for a child that does not read does not hold the close.
 - S55: the writes of a session and the owner close of the input loop run outside the runtime workers, so a write that waits for a child that does not read no longer blocks the other tasks of the runtime.
 - S54: the service watches the policy file through kqueue, on the folder and on the file, so a change is learned while the log folder is written; `sidecar.vt.policy.watch_started` and `sidecar.vt.policy.watch_event` are declared at level info.

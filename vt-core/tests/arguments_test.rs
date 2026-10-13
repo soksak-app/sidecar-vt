@@ -1,6 +1,6 @@
 // The command line of the service (core docs/spec/sidecars.md): `--service-dir <dir> --log-dir <dir>`. A missing
 // option, a missing value, a repeated option and an unknown argument fail with an error that names the argument.
-use soksak_sidecar_vt_core::arguments::{parse, Arguments};
+use soksak_sidecar_vt_core::arguments::{Arguments, parse};
 use std::path::PathBuf;
 
 fn parse_of(arguments: &[&str]) -> Result<Arguments, String> {

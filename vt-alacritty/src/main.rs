@@ -1,12 +1,12 @@
 pub mod engine;
 
 use engine::AlacrittyEngine;
+use soksak_sidecar_vt_core::Engine;
 use soksak_sidecar_vt_core::arguments;
 use soksak_sidecar_vt_core::events::EventLog;
 use soksak_sidecar_vt_core::platform::darwin::stall_sample::sample_threads;
 use soksak_sidecar_vt_core::service::{canonical_config_dir, record_end, serve_persistent};
 use soksak_sidecar_vt_core::stall;
-use soksak_sidecar_vt_core::Engine;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,7 +22,10 @@ async fn main() -> std::io::Result<()> {
     let engine_factory = Arc::new(|| Box::new(AlacrittyEngine::new()) as Box<dyn Engine>);
     let arguments = arguments::parse(std::env::args().skip(1)).map_err(invalid_input)?;
     let config_dir = canonical_config_dir(&arguments.service_dir).map_err(invalid_input)?;
-    let events = EventLog::start_service(&arguments.log_dir).map_err(std::io::Error::other)?;
+    // The engine trace folder of a diagnostic build is read here, once, and given to the writer.
+    let trace_dir = std::env::var_os("SOKSAK_VT_TRACE_DIR").map(std::path::PathBuf::from);
+    let events =
+        EventLog::start_service(&arguments.log_dir, trace_dir).map_err(std::io::Error::other)?;
     // A stall of the runtime is recorded with the stacks of the threads (core docs/spec/logging.md#stalls).
     stall::watch(&events, &tokio::runtime::Handle::current(), sample_threads)
         .map_err(std::io::Error::other)?;

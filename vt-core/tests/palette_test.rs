@@ -1,5 +1,5 @@
 // 페이지가 보낸 테마 색을 읽고 검사하는지 확인한다.
-use soksak_sidecar_vt_core::{parse_hex, TerminalTheme, ThemeMode, DEFAULT_PALETTE, LIGHT_PALETTE};
+use soksak_sidecar_vt_core::{DEFAULT_PALETTE, LIGHT_PALETTE, TerminalTheme, ThemeMode, parse_hex};
 
 #[test]
 fn a_theme_request_sets_the_four_colors_and_keeps_the_mode_palette() {

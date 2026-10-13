@@ -26,6 +26,15 @@ impl TestEvents {
 
     /// A writer that reads `policy` from the policy file in the parent of its log folder.
     pub fn with_policy(policy: Policy) -> Self {
+        Self::start(policy, None)
+    }
+
+    /// A writer whose engine trace folder is `trace_dir`.
+    pub fn with_trace_dir(trace_dir: &std::path::Path) -> Self {
+        Self::start(Policy::default(), Some(trace_dir.to_path_buf()))
+    }
+
+    fn start(policy: Policy, trace_dir: Option<std::path::PathBuf>) -> Self {
         let directory = tempfile::tempdir().expect("create the folder of the events");
         let file = directory.path().join("log-policy.json");
         std::fs::write(
@@ -36,6 +45,7 @@ impl TestEvents {
         let mut options = Options::service(directory.path().join("logs"), "test".to_string());
         options.policy_file = Some(file);
         options.batch_interval = Duration::from_millis(20);
+        options.trace_dir = trace_dir;
         let handle = std::sync::Arc::new(EventLog::start(options).expect("start the writer"));
         Self {
             handle,

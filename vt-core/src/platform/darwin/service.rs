@@ -1,7 +1,7 @@
 //! in-process terminal service를 위한 persistent protocol-1 transport이다.
 
 use crate::events::{Events, Level};
-use crate::protocol::{serve_with_registry, LocalSessionPort, PersistentOwner, PersistentRegistry};
+use crate::protocol::{LocalSessionPort, PersistentOwner, PersistentRegistry, serve_with_registry};
 use nix::errno::Errno;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
@@ -13,9 +13,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::task::JoinSet;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 
 pub const PROTOCOL: u64 = 1;
@@ -61,17 +61,17 @@ struct ServiceCleanup {
 
 impl Drop for ServiceCleanup {
     fn drop(&mut self) {
-        if let Err(error) = fs::remove_file(self.service_dir.join("endpoint.json")) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                self.log
-                    .record_error("service", format!("endpoint cleanup failed: {error}"));
-            }
+        if let Err(error) = fs::remove_file(self.service_dir.join("endpoint.json"))
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            self.log
+                .record_error("service", format!("endpoint cleanup failed: {error}"));
         }
-        if let Err(error) = fs::remove_dir_all(&self.socket_dir) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                self.log
-                    .record_error("service", format!("socket cleanup failed: {error}"));
-            }
+        if let Err(error) = fs::remove_dir_all(&self.socket_dir)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            self.log
+                .record_error("service", format!("socket cleanup failed: {error}"));
         }
     }
 }
@@ -165,13 +165,13 @@ fn remove_previous_socket(service_dir: &Path, log: &Events) {
         );
         return;
     };
-    if let Err(error) = fs::remove_dir_all(directory) {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            log.record_error(
-                "service",
-                format!("previous socket cleanup failed: {error}"),
-            );
-        }
+    if let Err(error) = fs::remove_dir_all(directory)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        log.record_error(
+            "service",
+            format!("previous socket cleanup failed: {error}"),
+        );
     }
 }
 

@@ -16,7 +16,7 @@ mod engine;
 use engine::AlacrittyEngine;
 use serde_json::{Map, Value};
 use soksak_sidecar_vt_core::screen_hash::screen_hash;
-use soksak_sidecar_vt_core::{parse_hex, Engine, TerminalTheme};
+use soksak_sidecar_vt_core::{Engine, TerminalTheme, parse_hex};
 use std::io::{BufRead, Write};
 
 /// An input of the session: the bytes the engine is fed with, a resize, a write to the program, or a view change.
@@ -282,13 +282,13 @@ fn run(input: impl BufRead, mut output: impl Write) -> Result<(), String> {
             ));
         }
     }
-    if let Some((_, first)) = inputs.first() {
-        if !matches!(first, Input::Theme(_)) {
-            return Err(format!(
-                "input 1 is a {} and the first input of a session is a theme",
-                first.kind()
-            ));
-        }
+    if let Some((_, first)) = inputs.first()
+        && !matches!(first, Input::Theme(_))
+    {
+        return Err(format!(
+            "input 1 is a {} and the first input of a session is a theme",
+            first.kind()
+        ));
     }
     frames.sort_unstable();
     let mut engine = AlacrittyEngine::new();
