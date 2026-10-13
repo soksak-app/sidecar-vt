@@ -754,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "soksak-sidecar-vt-alacritty"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "alacritty_terminal",
  "libc",
@@ -766,7 +766,7 @@ dependencies = [
 
 [[package]]
 name = "soksak-sidecar-vt-core"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "base64 0.21.7",
