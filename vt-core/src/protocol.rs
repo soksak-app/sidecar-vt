@@ -2518,6 +2518,19 @@ async fn surface_task(
                 };
                 match cmd {
                     SurfaceCommand::Open { image, request } => {
+                        // An open without image for a surface that was opened with an image or holds a configured image
+                        // comes from a second owner of the surface. It would make the surface headless while its image stays
+                        // shown, so the output would be fed and not drawn; it is refused and changes nothing.
+                        if image.is_none() && (requested_image.is_some() || image_state.is_some()) {
+                            let shown = requested_image.as_deref()
+                                .or(image_state.as_ref().map(|state| state.name.as_str()))
+                                .unwrap_or_default();
+                            let reason = format!("surface {surface_id} has the image {shown}; an open without image is refused");
+                            log.record_error("open", &reason);
+                            let response = json!({"surface": surface_id, "body": {"error": "imageAttached", "reason": reason}});
+                            if output_tx.reply(response).await.is_err() { return; }
+                            continue;
+                        }
                         open_requested = true;
                         requested_image = image;
                         requested_shell = request;

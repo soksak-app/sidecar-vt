@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S63.2: image와 함께 열렸거나 configure된 image를 가진 surface에 대한 `image` 없는 `open`은 `imageAttached`로 거부되고 아무것도 바꾸지 않아, surface가 session의 출력을 계속 그린다. 이전에는 그런 `open`이 surface를 headless로 만들어 Enter 뒤의 출력이 다음 key나 focus 변화가 frame을 그릴 때에만 보였다.
 - S63.1: `open`과 적용된 `image.configure`마다 surface에 남긴 그리기 mode를 `sidecar.vt.surface_mode` `{mode, cause}`로 기록해, 출력을 그리지 않고 처리하는 surface가 event log에 드러난다.
 - S62: draw에 실패한 화면은 unsent로 남아, `screen` event가 어떤 frame도 담지 않은 화면에 대해 마지막으로 보낸 frame 대신 다음 frame을 가리키고 다음 변경이 그 frame을 그린다.
 - S59: `screen` event가 그 화면을 보이는 frame의 `generation`, `raster`, `sequence`를 `frame`으로 싣는다. 그래서 screen 읽기가 표시된 frame을 이름으로 알린다. image 상태가 없으면 `frame`은 null이다.

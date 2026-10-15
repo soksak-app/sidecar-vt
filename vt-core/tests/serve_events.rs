@@ -1137,3 +1137,128 @@ async fn each_open_and_configure_records_the_drawing_mode_of_the_surface() {
             .to_vec()
     );
 }
+
+/// Waits until `count` events named `name` that `matches` accepts are in the file of `events`. The surface task records an event
+/// when it handles the request or the output, and nothing tells the test when, so it reads the file again after a short pause;
+/// the wait has a limit that ends a stalled test, and the result is judged by the events.
+async fn wait_events(
+    events: &TestEvents,
+    name: &str,
+    count: usize,
+    matches: impl Fn(&serde_json::Value) -> bool,
+) -> Vec<serde_json::Value> {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let found: Vec<_> = events
+                .named(name)
+                .into_iter()
+                .filter(|event| matches(event))
+                .collect();
+            if found.len() >= count {
+                return found;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "{count} events {name} were not stored: {:?}",
+            events.named(name)
+        )
+    })
+}
+
+// A surface that has an image keeps drawing the output of its session after an `open` without `image` for it, which the
+// background session of core sent for a terminal tab that another tab of its card hid while its surface stayed mounted (core
+// checklist item F192): the `open` is refused with an error that names the surface, and the next output is drawn.
+#[tokio::test]
+async fn an_open_without_image_for_a_surface_with_an_image_is_refused_and_its_output_is_drawn() {
+    let events = TestEvents::new();
+    let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
+    let (sender, receiver) = mpsc::channel(16);
+    let port = Arc::new(OutputPort(std::sync::Mutex::new(Some(receiver))));
+    let factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync> =
+        Arc::new(move || port.clone() as Arc<dyn SessionPort>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
+    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let handle = events.handle();
+    let task = tokio::spawn(async move {
+        let _ = serve(engine_factory, serve_in, serve_out, factory, handle).await;
+    });
+    let reader = tokio::spawn(async move {
+        let mut lines = BufReader::new(from_serve).lines();
+        let mut replies = Vec::new();
+        while let Some(line) = lines.next_line().await.unwrap() {
+            replies.push(line);
+        }
+        replies
+    });
+    // An empty input is answered by the surface task after it handled every earlier request of the surface, so its reply marks
+    // the end of the step before it.
+    let empty_input = b"{\"surface\":\"s1\",\"body\":{\"operation\":\"input\",\"bytes\":\"\"}}\n";
+    let input_replies = |events: &serde_json::Value| events["fields"]["operation"] == "input";
+    // The open with the image, the configure that opens the session and draws its first frame, and the answer to that frame.
+    to_serve
+        .write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
+"#)
+        .await
+        .unwrap();
+    to_serve.write_all(empty_input).await.unwrap();
+    wait_events(&events, "sidecar.vt.reply", 1, input_replies).await;
+    // The open without image that the background session of core sends for the same surface.
+    to_serve
+        .write_all(b"{\"surface\":\"s1\",\"root\":\"/tmp\",\"body\":{\"operation\":\"open\",\"shell\":\"/bin/sh\"}}\n")
+        .await
+        .unwrap();
+    to_serve.write_all(empty_input).await.unwrap();
+    wait_events(&events, "sidecar.vt.reply", 2, input_replies).await;
+    // The output of the program after the open, and an empty input whose reply marks the end of the handling of the output.
+    sender
+        .send(soksak_sidecar_vt_core::protocol::DaemonEvent::Output {
+            session_id: "scripted-session".to_string(),
+            data: b"prompt".to_vec(),
+            sequence: 0,
+            truncated: false,
+        })
+        .await
+        .unwrap();
+    let read = wait_events(&events, "sidecar.vt.pty_read", 1, |_| true).await;
+    let output_sequence = read[0]["fields"]["sequence"]
+        .as_u64()
+        .expect("the output has a sequence");
+    to_serve.write_all(empty_input).await.unwrap();
+    wait_events(&events, "sidecar.vt.reply", 3, input_replies).await;
+    let drawn: Vec<_> = events
+        .named("sidecar.vt.frame")
+        .into_iter()
+        .filter(|frame| {
+            frame["fields"]["sequence"]
+                .as_u64()
+                .is_some_and(|sequence| sequence >= output_sequence)
+        })
+        .collect();
+    drop(to_serve);
+    let replies = parsed(&reader.await.unwrap());
+    task.await.unwrap();
+    assert_eq!(
+        drawn.len(),
+        1,
+        "the output of sequence {output_sequence} drew no frame: {:?}",
+        events.named("sidecar.vt.frame")
+    );
+    let refusals: Vec<_> = replies
+        .iter()
+        .filter(|reply| reply["surface"] == "s1" && reply["body"]["error"] == "imageAttached")
+        .collect();
+    assert_eq!(refusals.len(), 1, "{replies:?}");
+    assert!(
+        refusals[0]["body"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("s1")),
+        "{}",
+        refusals[0]
+    );
+}
