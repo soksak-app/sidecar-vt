@@ -1100,3 +1100,40 @@ not json at all
     }
     assert_eq!(catalog_test::findings(&lines), Vec::<String>::new());
 }
+
+// Each `open` and `image.configure` records the drawing mode of the surface that it leaves (core checklist item F192): a
+// surface opened with `image` draws, and a surface opened without `image` is headless.
+#[tokio::test]
+async fn each_open_and_configure_records_the_drawing_mode_of_the_surface() {
+    let events = TestEvents::new();
+    serve_lines(
+        &events,
+        br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s2","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
+"#,
+    )
+    .await;
+    let modes: Vec<(String, String, String)> = events
+        .named("sidecar.vt.surface_mode")
+        .iter()
+        .map(|event| {
+            (
+                event["surface"].as_str().unwrap_or("").to_string(),
+                event["fields"]["cause"].as_str().unwrap_or("").to_string(),
+                event["fields"]["mode"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+    let expected = [
+        ("s1", "open", "image"),
+        ("s1", "configure", "image"),
+        ("s2", "open", "headless"),
+    ];
+    assert_eq!(
+        modes,
+        expected
+            .map(|(s, c, m)| (s.to_string(), c.to_string(), m.to_string()))
+            .to_vec()
+    );
+}

@@ -122,6 +122,16 @@
       },
       "description": "A frame of a surface was drawn: a frame record of core (docs/spec/replay.md). sequence is the sequence of the last input of the session that the screen includes, rows and cols the size of the screen, and hash the screen hash. image is the number of the image frame of the surface and raster its size in pixels, reason what caused the frame. A screen sent without a raster is a frame record too, without draw_us, raster and image."
     },
+    "sidecar.vt.surface_mode": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "mode": "string",
+        "cause": "string"
+      },
+      "description": "The drawing mode that an open or an applied image configure left on a surface: image draws the output of the session, headless feeds it without drawing. cause is open or configure."
+    },
     "sidecar.vt.consumed_wait": {
       "layer": "sidecar",
       "class": "frame",

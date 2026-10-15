@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S63.1: `open`과 적용된 `image.configure`마다 surface에 남긴 그리기 mode를 `sidecar.vt.surface_mode` `{mode, cause}`로 기록해, 출력을 그리지 않고 처리하는 surface가 event log에 드러난다.
 - S62: draw에 실패한 화면은 unsent로 남아, `screen` event가 어떤 frame도 담지 않은 화면에 대해 마지막으로 보낸 frame 대신 다음 frame을 가리키고 다음 변경이 그 frame을 그린다.
 - S59: `screen` event가 그 화면을 보이는 frame의 `generation`, `raster`, `sequence`를 `frame`으로 싣는다. 그래서 screen 읽기가 표시된 frame을 이름으로 알린다. image 상태가 없으면 `frame`은 null이다.
 - S60: `make hooks`가 `.githooks`를 hook 폴더로 정해, commit message의 형식이나 용어 규칙, record 규칙을 어긴 commit이 만들어질 때 거부된다.

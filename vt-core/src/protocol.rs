@@ -1546,6 +1546,17 @@ async fn present_screen(
     true
 }
 
+/// Records the drawing mode that an `open` or an applied `image.configure` leaves on a surface: `image` draws the output of
+/// the session, `headless` feeds it without drawing (core checklist item F192).
+fn record_surface_mode(log: &Events, surface_id: &str, headless: bool, cause: &str) {
+    log.emit_for(
+        Level::Info,
+        "sidecar.vt.surface_mode",
+        Subject::surface(surface_id),
+        &json!({"mode": if headless { "headless" } else { "image" }, "cause": cause}),
+    );
+}
+
 /// 호스트가 앞 래스터를 복사하는 중인지. 그동안의 화면 변경은 dirty 로 남기고 그리거나 화면 JSON 을 보내지
 /// 않는다. 출력이 몰릴 때 화면마다 JSON 을 보내면 페이지가 지난 화면을 처리하느라 입력과 스크롤이 밀린다.
 /// 호스트가 답하면 그때의 화면을 한 번 그리고 보낸다.
@@ -2511,6 +2522,7 @@ async fn surface_task(
                         requested_image = image;
                         requested_shell = request;
                         headless = requested_image.is_none();
+                        record_surface_mode(&log, &surface_id, headless, "open");
                         if headless && !open_headless(&surface_id, &requested_shell, &mut session_id, &mut engine, &session_port, &output_tx, &mut inputs).await { return; }
                         if !open_if_configured(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, open_requested, &requested_image, &requested_shell, &mut session_id,
                             &mut engine, &mut image_state).await {
@@ -2589,6 +2601,7 @@ async fn surface_task(
                             continue;
                         }
                         image_state = Some(new_state);
+                        record_surface_mode(&log, &surface_id, headless, "configure");
                         refresh_inline_image_positions(&mut engine, &mut image_state);
                         if let Some(sid) = session_id.as_ref() {
                             if let Err(error) = session_port.resize(sid, cols, rows).await {
@@ -3340,6 +3353,7 @@ async fn surface_task(
                                     continue;
                                 }
                                 image_state = Some(new_state);
+                                record_surface_mode(&log, &surface_id, headless, "configure");
                                 if let Some(sid) = session_id.as_ref() {
                                     if let Err(error) = session_port.resize(sid, cols, rows).await {
                                         let response = json!({"surface": surface_id,

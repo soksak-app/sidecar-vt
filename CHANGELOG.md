@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S63.1: each `open` and each applied `image.configure` records the drawing mode that it leaves on the surface as `sidecar.vt.surface_mode` `{mode, cause}`, so a surface that feeds its output without drawing it is named in the event log.
 - S62: a screen whose draw fails stays unsent, so the `screen` event names the next frame and the next change draws it, instead of naming the last sent frame for a screen that no frame holds.
 - S59: the `screen` event carries `frame` with the `generation`, `raster` and `sequence` of the frame that shows the screen, so a screen read names the presented frame; `frame` is null without an image state.
 - S60: `make hooks` sets `.githooks` as the hook folder, so a commit whose message breaks the commit form or the term rules, or whose records break the record rules, is refused when it is made.
