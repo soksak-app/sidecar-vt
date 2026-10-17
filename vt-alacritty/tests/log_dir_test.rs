@@ -8,10 +8,17 @@ use std::time::Duration;
 /// The limit that ends a stalled check. Success is judged by the exit status and the files, not by this time.
 const STALL: Duration = Duration::from_secs(60);
 
+/// The configuration folder of a service: its policy file stores every level of every class, so the events below error that
+/// the checks read are stored.
 fn directory(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("vt-log-dir-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("create the test directory");
+    std::fs::write(
+        path.join("log-policy.json"),
+        r#"{"schema":1,"classes":{"lifecycle":"trace","input":"trace","call":"trace","io":"trace","frame":"trace"}}"#,
+    )
+    .expect("write the policy file");
     path
 }
 

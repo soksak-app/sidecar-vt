@@ -1398,8 +1398,15 @@ pub mod test_support {
     }
 
     impl TestEvents {
+        /// A writer that stores every level of every class, so each event that a test emits is stored. The default policy
+        /// stores only errors (docs/spec/logging.md#policy), which the tests of the writer's own events do not use.
         pub fn new() -> Self {
-            Self::with_policy(Policy::default())
+            let every_level = Class::ALL
+                .into_iter()
+                .fold(Policy::default(), |policy, class| {
+                    policy.with(class, Some(Level::Trace))
+                });
+            Self::with_policy(every_level)
         }
 
         /// A writer that reads `policy` from the policy file in the parent of its log folder.

@@ -26,16 +26,37 @@ fn directory(name: &str) -> PathBuf {
     let path =
         std::env::temp_dir().join(format!("vt-event-contract-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
+    let _ = std::fs::remove_dir_all(config_folder(&path));
     path
 }
 
+/// The configuration folder of the writer of a folder, beside the folder. It holds only the policy file, so the watch of the
+/// policy file sees no other change.
+fn config_folder(directory: &Path) -> PathBuf {
+    directory.with_extension("config")
+}
+
+/// The policy file of the writer: it stores every level of every class, so the tests read the events below error that they
+/// emit. The default policy is tested in policy tests.
+fn policy_file(directory: &Path) -> PathBuf {
+    config_folder(directory).join("log-policy.json")
+}
+
 fn options(directory: &Path) -> Options {
+    let policy = policy_file(directory);
+    std::fs::create_dir_all(config_folder(directory)).expect("create the configuration folder");
+    std::fs::write(
+        &policy,
+        r#"{"schema":1,"classes":{"lifecycle":"trace","input":"trace","call":"trace","io":"trace","frame":"trace"}}"#,
+    )
+    .expect("write the policy file");
     Options {
         queue_events: 64,
         queue_bytes: 1 << 20,
         batch_interval: Duration::from_millis(20),
         rotate_bytes: 1 << 20,
         generations: 2,
+        policy_file: Some(policy),
         ..Options::service(directory.to_path_buf(), "b1".into())
     }
 }
@@ -125,15 +146,15 @@ fn the_levels_of_the_debug_channel_go_to_the_debug_file_with_one_seq_across_both
         vec![2, 3],
         "the debug file holds debug and trace"
     );
-    let mut seen = [false; 8];
+    let mut seen = [false; 9];
     for line in main.iter().chain(debug.iter()) {
         let seq = line["seq"].as_u64().unwrap() as usize;
-        assert!((1..=7).contains(&seq), "seq {seq} is outside the files");
+        assert!((1..=8).contains(&seq), "seq {seq} is outside the files");
         assert!(!seen[seq], "seq {seq} appears twice");
         seen[seq] = true;
     }
     assert!(
-        seen[1..=7].iter().all(|stored| *stored),
+        seen[1..=8].iter().all(|stored| *stored),
         "a seq of the two files is missing: {seen:?}"
     );
 }
@@ -247,8 +268,8 @@ fn seq_is_consecutive_from_one_and_ts_us_is_in_microseconds() {
         .collect();
     assert_eq!(
         seqs,
-        (1..=7).collect::<Vec<u64>>(),
-        "log.open, log.policy, the log.open of the debug file and the four events"
+        (1..=8).collect::<Vec<u64>>(),
+        "log.open, log.policy, the watch start of the policy file, the log.open of the debug file and the four events"
     );
     for line in &lines {
         let ts = line["ts_us"].as_u64().unwrap();
@@ -394,13 +415,13 @@ fn a_record_is_an_event_with_the_place_and_the_text() {
     log.record_info("font", "no listed font is installed");
     log.flush(DEADLINE).unwrap();
     let lines = lines_of(log.path());
-    let error = &lines[2];
+    let error = &lines[3];
     assert_eq!(error["event"], "sidecar.vt.record.error");
     assert_eq!(error["level"], "error");
     assert_eq!(error["layer"], "sidecar");
     assert_eq!(error["fields"]["where"], "surface close");
     assert_eq!(error["fields"]["text"], "first\nsecond");
-    let info = &lines[3];
+    let info = &lines[4];
     assert_eq!(info["event"], "sidecar.vt.record.info");
     assert_eq!(info["level"], "info");
     assert_eq!(info["fields"]["where"], "font");
@@ -445,7 +466,12 @@ fn fields_over_the_bound_of_an_event_are_stored_cut_and_marked_truncated() {
     assert!(log.emit(Level::Info, "sidecar.vt.test", &json!({ "text": "small" })));
     log.flush(DEADLINE).unwrap();
     let lines = lines_of(log.path());
-    let cut = &lines[2];
+    // The writer events before the test events vary in number, so the test events are found by their name.
+    let stored: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["event"] == "sidecar.vt.test")
+        .collect();
+    let cut = stored[0];
     let size = serde_json::to_string(&json!({ "text": text }))
         .unwrap()
         .len();
@@ -454,6 +480,6 @@ fn fields_over_the_bound_of_an_event_are_stored_cut_and_marked_truncated() {
     assert!(head.len() <= 4096 && head.len() > 4000, "{}", head.len());
     assert!(head.starts_with("{\"text\":\"한"));
     assert_eq!(cut["fields"].as_object().unwrap().len(), 1);
-    assert!(lines[3].get("truncated").is_none());
-    assert_eq!(lines[3]["fields"]["text"], "small");
+    assert!(stored[1].get("truncated").is_none());
+    assert_eq!(stored[1]["fields"]["text"], "small");
 }

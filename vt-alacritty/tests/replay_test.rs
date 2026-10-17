@@ -15,10 +15,23 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+/// Writes the policy file of the folder that stores every level of every class: the replay needs the input and frame events
+/// below error, which the default policy refuses.
+fn all_levels_policy(directory: &std::path::Path) -> std::path::PathBuf {
+    let file = directory.join("log-policy.json");
+    std::fs::write(
+        &file,
+        r#"{"schema":1,"classes":{"lifecycle":"trace","input":"trace","call":"trace","io":"trace","frame":"trace"}}"#,
+    )
+    .expect("write the policy file");
+    file
+}
+
 /// The events of one served session: a PTY running `cat` is opened, configured, and fed the line "한a" with a newline.
 async fn served_session() -> Vec<Value> {
     let directory = tempfile::tempdir().expect("create the folder of the events");
     let mut options = Options::service(directory.path().join("logs"), "replay".to_string());
+    options.policy_file = Some(all_levels_policy(directory.path()));
     options.batch_interval = Duration::from_millis(20);
     let log = Arc::new(EventLog::start(options).expect("start the writer"));
     let engine_factory = Arc::new(|| Box::new(AlacrittyEngine::new()) as Box<dyn Engine>);
@@ -210,6 +223,7 @@ fn last_input(lines: &[Value]) -> u64 {
 async fn viewed_session() -> Vec<Value> {
     let directory = tempfile::tempdir().expect("create the folder of the events");
     let mut options = Options::service(directory.path().join("logs"), "view".to_string());
+    options.policy_file = Some(all_levels_policy(directory.path()));
     options.batch_interval = Duration::from_millis(20);
     let log = Arc::new(EventLog::start(options).expect("start the writer"));
     let engine_factory = Arc::new(|| Box::new(AlacrittyEngine::new()) as Box<dyn Engine>);

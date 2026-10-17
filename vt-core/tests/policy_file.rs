@@ -107,15 +107,40 @@ fn emit_read(log: &Events) -> bool {
 fn without_a_file_the_default_policy_is_in_force_and_is_stated() {
     let config = Config::new();
     let log = config.start();
-    assert!(emit_read(&log));
+    assert!(!emit_read(&log));
     let lines = lines(&log);
     let policy = of(&lines, "log.policy");
     assert_eq!(policy.len(), 1, "{lines:?}");
     assert_eq!(policy[0]["fields"]["source"], "default");
-    assert_eq!(policy[0]["fields"]["classes"]["io"], "trace");
+    assert_eq!(policy[0]["fields"]["classes"]["io"], "error");
     assert_eq!(policy[0]["class"], "lifecycle");
-    assert_eq!(of(&lines, "sidecar.vt.pty_read").len(), 1);
-    assert_eq!(of(&lines, "log.gated").len(), 0);
+    assert_eq!(of(&lines, "sidecar.vt.pty_read").len(), 0);
+    let gated = of(&lines, "log.gated");
+    assert_eq!(gated.len(), 2, "{lines:?}");
+    assert_eq!(
+        gated[0]["fields"],
+        json!({"class": "lifecycle", "level": "info", "count": 1})
+    );
+    assert_eq!(
+        gated[1]["fields"],
+        json!({"class": "io", "level": "debug", "count": 1})
+    );
+}
+
+#[test]
+fn without_a_file_an_error_is_stored_and_a_debug_event_is_refused() {
+    let config = Config::new();
+    let log = config.start();
+    assert!(log.emit(
+        Level::Error,
+        "sidecar.vt.pty_read",
+        &json!({"sequence": 1, "hex": "61"}),
+    ));
+    assert!(!emit_read(&log));
+    let lines = lines(&log);
+    let stored = of(&lines, "sidecar.vt.pty_read");
+    assert_eq!(stored.len(), 1, "{lines:?}");
+    assert_eq!(stored[0]["level"], "error");
 }
 
 #[test]
@@ -145,9 +170,13 @@ fn a_policy_file_at_the_start_is_in_force_and_the_gated_events_are_counted() {
 fn a_line_of_a_declared_event_carries_the_class_of_the_catalog() {
     let config = Config::new();
     let log = config.start();
-    assert!(emit_read(&log));
     assert!(log.emit(
-        Level::Info,
+        Level::Error,
+        "sidecar.vt.pty_read",
+        &json!({"sequence": 1, "hex": "61"}),
+    ));
+    assert!(log.emit(
+        Level::Error,
         "sidecar.vt.session_start",
         &json!({"role": "vt"})
     ));
@@ -165,7 +194,7 @@ fn a_change_of_the_file_is_learned_from_the_file_system_events() {
     let config = Config::new();
     let log = config.start();
     wait_for(&log, "log.policy", 1);
-    assert!(emit_read(&log));
+    assert!(!emit_read(&log));
 
     config.write(IO_OFF);
     let changed = wait_for(&log, "log.policy", 2);
@@ -191,8 +220,8 @@ fn a_removed_file_puts_the_default_policy_in_force() {
     std::fs::remove_file(config.policy_file()).expect("remove the policy file");
     let changed = wait_for(&log, "log.policy", 2);
     assert_eq!(changed[1]["fields"]["source"], "default");
-    assert_eq!(changed[1]["fields"]["classes"]["io"], "trace");
-    assert!(emit_read(&log));
+    assert_eq!(changed[1]["fields"]["classes"]["io"], "error");
+    assert!(!emit_read(&log));
 }
 
 #[test]

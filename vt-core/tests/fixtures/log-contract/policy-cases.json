@@ -1,10 +1,11 @@
 {
-  "description": "Golden cases of the policy file `log-policy.json` (docs/spec/logging.md#policy-file). `valid` texts are accepted and give `classes`; `allows` and `refuses` are the (class, level) pairs that the policy stores and does not store. `invalid` texts are refused with `error`, in which `<file>` is the name the reader was given; a case with `error_prefix` is refused with an error that starts with it, because the text after it is the message of the JSON parser of the language.",
+  "description": "Golden cases of the policy file `log-policy.json` (docs/spec/logging.md#policy-file). `valid` texts are accepted and give `classes`; `allows` and `refuses` are the (class, level) pairs that the policy stores and does not store. `default` is the default policy, which every writer and the native ring apply before the first policy and while no policy file exists. `invalid` texts are refused with `error`, in which `<file>` is the name the reader was given; a case with `error_prefix` is refused with an error that starts with it, because the text after it is the message of the JSON parser of the language.",
   "file": "log-policy.json",
   "schema": 1,
   "classes": ["lifecycle", "input", "call", "io", "frame"],
   "values": ["off", "error", "warn", "info", "debug", "trace"],
   "levels": ["error", "warn", "info", "debug", "trace"],
+  "default": { "lifecycle": "error", "input": "error", "call": "error", "io": "error", "frame": "error" },
   "valid": [
     {
       "name": "every class stores every level",

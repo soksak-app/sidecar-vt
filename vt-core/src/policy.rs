@@ -55,10 +55,11 @@ pub struct Policy {
 }
 
 impl Default for Policy {
-    /// The policy in force while there is no file: every class at `trace`.
+    /// The policy in force before the first policy and while there is no file: every class at `error`
+    /// (docs/spec/logging.md#policy).
     fn default() -> Self {
         Self {
-            levels: [Some(Level::Trace); 5],
+            levels: [Some(Level::Error); 5],
         }
     }
 }

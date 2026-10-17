@@ -3,8 +3,9 @@
 #![allow(dead_code)]
 
 use serde_json::Value;
+use soksak_sidecar_vt_core::events::Level;
 use soksak_sidecar_vt_core::events::{EventLog, Events, Options};
-use soksak_sidecar_vt_core::policy::Policy;
+use soksak_sidecar_vt_core::policy::{Class, Policy};
 use std::time::Duration;
 
 /// A writer with its folder. The folder is removed when this value is dropped.
@@ -19,9 +20,19 @@ impl Default for TestEvents {
     }
 }
 
+/// The policy that stores every level of every class. The default policy stores only errors, and the tests of the events below
+/// error use this policy, so each event that a test emits is stored.
+fn every_level() -> Policy {
+    Class::ALL
+        .into_iter()
+        .fold(Policy::default(), |policy, class| {
+            policy.with(class, Some(Level::Trace))
+        })
+}
+
 impl TestEvents {
     pub fn new() -> Self {
-        Self::with_policy(Policy::default())
+        Self::with_policy(every_level())
     }
 
     /// A writer that reads `policy` from the policy file in the parent of its log folder.
@@ -31,7 +42,7 @@ impl TestEvents {
 
     /// A writer whose engine trace folder is `trace_dir`.
     pub fn with_trace_dir(trace_dir: &std::path::Path) -> Self {
-        Self::start(Policy::default(), Some(trace_dir.to_path_buf()))
+        Self::start(every_level(), Some(trace_dir.to_path_buf()))
     }
 
     fn start(policy: Policy, trace_dir: Option<std::path::PathBuf>) -> Self {

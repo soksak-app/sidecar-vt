@@ -85,21 +85,23 @@ fn a_text_that_a_writer_has_not_finished_is_waited_on_and_a_policy_is_not() {
 }
 
 #[test]
-fn the_default_policy_stores_every_level_of_every_class() {
+fn the_default_policy_stores_only_errors_of_every_class() {
+    let cases = cases();
     let policy = Policy::default();
+    let classes = policy.classes();
     for class in Class::ALL {
-        for level in [
-            Level::Error,
-            Level::Warn,
-            Level::Info,
-            Level::Debug,
-            Level::Trace,
-        ] {
-            assert!(policy.allows(class, level), "{class:?} {level:?}");
+        assert_eq!(
+            classes[class.name()],
+            cases["default"][class.name()],
+            "{class:?}"
+        );
+        assert!(policy.allows(class, Level::Error), "{class:?} error");
+        for level in [Level::Warn, Level::Info, Level::Debug, Level::Trace] {
+            assert!(!policy.allows(class, level), "{class:?} {level:?}");
         }
     }
     assert_eq!(
         policy.classes(),
-        serde_json::json!({"lifecycle": "trace", "input": "trace", "call": "trace", "io": "trace", "frame": "trace"})
+        serde_json::json!({"lifecycle": "error", "input": "error", "call": "error", "io": "error", "frame": "error"})
     );
 }
