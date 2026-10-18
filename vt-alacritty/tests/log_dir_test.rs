@@ -1,16 +1,47 @@
 //! The service takes the directory of its event files from `--log-dir` and refuses to start without it.
 
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::Duration;
 
 /// The limit that ends a stalled check. Success is judged by the exit status and the files, not by this time.
 const STALL: Duration = Duration::from_secs(60);
 
+/// The limit within which a service ends after SIGTERM before the check ends it with SIGKILL.
+const END: Duration = Duration::from_secs(10);
+
+/// A folder that a check created. Its drop removes the folder and reports a removal that fails, and it fails the check
+/// unless the check is already panicking.
+struct Folder(PathBuf);
+
+impl Deref for Folder {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Folder {
+    fn drop(&mut self) {
+        match std::fs::remove_dir_all(&self.0) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                eprintln!("error: the folder {} remains: {error}", self.0.display());
+                if !std::thread::panicking() {
+                    panic!("the check left {}", self.0.display());
+                }
+            }
+        }
+    }
+}
+
 /// The configuration folder of a service: its policy file stores every level of every class, so the events below error that
-/// the checks read are stored.
-fn directory(name: &str) -> PathBuf {
+/// the checks read are stored. The returned folder is removed when it is dropped.
+fn directory(name: &str) -> Folder {
     let path = std::env::temp_dir().join(format!("vt-log-dir-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("create the test directory");
@@ -19,17 +50,16 @@ fn directory(name: &str) -> PathBuf {
         r#"{"schema":1,"classes":{"lifecycle":"trace","input":"trace","call":"trace","io":"trace","frame":"trace"}}"#,
     )
     .expect("write the policy file");
-    path
+    Folder(path)
 }
 
-/// The limit within which a service ends after SIGTERM before the check ends it with SIGKILL.
-const END: Duration = Duration::from_secs(10);
-
-/// A service that a check started and the folder of that service. Whether the check passes or fails, the drop ends the
-/// process, reaps it and removes the folder, and it fails the check when the process remains.
+/// A service that a check started. Whether the check passes or fails, the drop ends the process, reaps it and removes the
+/// socket folder named by its endpoint if the service left it after SIGKILL, and it fails the check when the process or
+/// the socket folder remains.
 struct Service {
     child: Child,
-    root: PathBuf,
+    /// The socket folder of the service, read from the ready line.
+    socket_dir: Option<PathBuf>,
 }
 
 impl Service {
@@ -77,7 +107,8 @@ fn reaped_within(child: &mut Child, limit: Duration) -> Option<std::process::Exi
 impl Drop for Service {
     fn drop(&mut self) {
         let pid = self.id();
-        let mut remained = None;
+        let mut failures = Vec::new();
+        let mut killed = false;
         match self.child.try_wait() {
             Ok(Some(_)) => {}
             Ok(None) => {
@@ -87,52 +118,61 @@ impl Drop for Service {
                     eprintln!(
                         "error: the service {pid} did not end within {END:?} of SIGTERM; it is killed"
                     );
+                    killed = true;
                     if let Err(error) = self
                         .child
                         .kill()
                         .and_then(|()| self.child.wait().map(|_| ()))
                     {
-                        remained = Some(format!("the service {pid} remains: {error}"));
+                        failures.push(format!("the service {pid} remains: {error}"));
                     }
                 }
             }
             Err(error) => {
-                remained = Some(format!(
+                failures.push(format!(
                     "the state of the service {pid} is unknown: {error}"
-                ))
+                ));
             }
         }
-        let removed = match std::fs::remove_dir_all(&self.root) {
-            Ok(()) => None,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => Some(format!(
-                "the folder {} remains: {error}",
-                self.root.display()
-            )),
-        };
-        for failure in remained.iter().chain(removed.iter()) {
+        if let Some(directory) = &self.socket_dir {
+            match std::fs::remove_dir_all(directory) {
+                // A service that ended by SIGTERM removes its own socket folder, so a folder that remains is a failure.
+                // After a SIGKILL the process left the folder, and it is removed here.
+                Ok(()) if !killed => failures.push(format!(
+                    "the service {pid} left its socket folder {}",
+                    directory.display()
+                )),
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => failures.push(format!(
+                    "the socket folder {} remains: {error}",
+                    directory.display()
+                )),
+            }
+        }
+        for failure in &failures {
             eprintln!("error: {failure}");
         }
         // A second panic during the panic of a failed check aborts the run, so only a passing check panics here.
-        if (remained.is_some() || removed.is_some()) && !std::thread::panicking() {
-            panic!("the check left what it started: {remained:?} {removed:?}");
+        if !failures.is_empty() && !std::thread::panicking() {
+            panic!("the check left what it started: {failures:?}");
         }
     }
 }
 
 #[test]
 fn a_service_without_log_dir_refuses_to_start_and_says_so() {
-    let service = directory("missing");
+    let root = directory("missing");
     let child = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"))
         .arg("--service-dir")
-        .arg(&service)
+        .arg(&*root)
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .expect("run the service");
     let mut service = Service {
         child,
-        root: service,
+        socket_dir: None,
     };
     let output = service.wait_within(STALL);
     assert!(
@@ -142,7 +182,7 @@ fn a_service_without_log_dir_refuses_to_start_and_says_so() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--log-dir is required"), "{stderr}");
     assert!(
-        !service.root.join("endpoint.json").exists(),
+        !root.join("endpoint.json").exists(),
         "a refused service published an endpoint"
     );
 }
@@ -251,7 +291,7 @@ fn a_service_with_log_dir_writes_log_open_and_flushes_it_when_it_ends() {
 
 /// Starts the service and returns it with its ready line.
 fn start(root: &std::path::Path) -> (Service, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"))
+    let child = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"))
         .arg("--log-dir")
         .arg(root.join("logs"))
         .arg("--service-dir")
@@ -261,15 +301,19 @@ fn start(root: &std::path::Path) -> (Service, String) {
         .stderr(Stdio::piped())
         .spawn()
         .expect("start the service");
+    // The service is owned before the ready line is read, so a failed read still ends the process.
+    let mut service = Service {
+        child,
+        socket_dir: None,
+    };
     let mut ready = String::new();
-    BufReader::new(child.stdout.take().expect("service stdout"))
+    BufReader::new(service.child.stdout.take().expect("service stdout"))
         .read_line(&mut ready)
         .expect("read the ready line");
-    let service = Service {
-        child,
-        root: root.to_path_buf(),
-    };
     assert!(ready.contains("\"socket\""), "no ready line: {ready:?}");
+    let endpoint: serde_json::Value = serde_json::from_str(&ready).expect("ready endpoint");
+    let socket = std::path::PathBuf::from(endpoint["socket"].as_str().expect("socket path"));
+    service.socket_dir = socket.parent().map(std::path::Path::to_path_buf);
     (service, ready)
 }
 
@@ -378,11 +422,11 @@ fn alive(pid: u32) -> bool {
 #[test]
 fn a_failed_check_ends_its_service_and_removes_its_folder() {
     let root = directory("failed");
+    let path = root.to_path_buf();
     let pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let seen = pid.clone();
-    let inner = root.clone();
     let failed = std::panic::catch_unwind(move || {
-        let (service, _ready) = start(&inner);
+        let (service, _ready) = start(&root);
         seen.store(service.id(), std::sync::atomic::Ordering::SeqCst);
         panic!("the check fails after it started the service");
     });
@@ -393,10 +437,10 @@ fn a_failed_check_ends_its_service_and_removes_its_folder() {
         // SAFETY: the test ends the child process it started, which the failed check left.
         unsafe { libc::kill(pid as i32, libc::SIGKILL) };
     }
-    let folder = root.exists();
+    let folder = path.exists();
     if folder {
-        std::fs::remove_dir_all(&root).expect("remove the test directory");
+        std::fs::remove_dir_all(&path).expect("remove the test directory");
     }
     assert!(!remained, "the failed check left its service {pid} running");
-    assert!(!folder, "the failed check left {}", root.display());
+    assert!(!folder, "the failed check left {}", path.display());
 }

@@ -1,58 +1,114 @@
-//! 영속 service 가 끝날 때와 다음 service 가 시작할 때 전용 socket 디렉터리를 남기지 않는지 검사한다.
+//! Checks that a persistent service leaves no socket folder when it ends, and that the next service removes the socket folder
+//! of a service that was killed.
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::channel;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-/// 멈춘 검사를 끝내는 상한이다. 성공은 준비 줄과 끝난 process 로 판정하며 이 시간으로 판정하지 않는다.
+/// The limit of a wait for a service to end. A success is judged by the process status and the folders, not by this time.
 const STALL: Duration = Duration::from_secs(60);
 
-/// 검사가 띄운 service. 검사가 실패해도 끝나면 그 process 를 끝내고 회수한다.
-struct Service(Child);
+/// A service that a check started. Its drop ends the process with SIGTERM, and with SIGKILL when the process does not end
+/// within `STALL`. It removes the socket folder that the service named by its endpoint, and reports each failure as `error:`.
+struct Service {
+    child: Child,
+    /// The socket folder of the service, read from the ready line.
+    socket_dir: Option<PathBuf>,
+}
 
 impl Drop for Service {
     fn drop(&mut self) {
-        // 끝난 process 는 회수되어 있다. 아니면 종료를 요청해 service 가 자기 디렉터리를 정리하게 하고, STALL 안에
-        // 끝나지 않으면 강제로 끝낸다.
-        if matches!(self.0.try_wait(), Ok(Some(_)) | Err(_)) {
-            return;
+        let pid = self.child.id();
+        let mut failures = Vec::new();
+        let mut killed = false;
+        match self.child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                // SAFETY: the check asks the child process it started to end.
+                unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+                if wait_within(&mut self.child, STALL).is_none() {
+                    eprintln!(
+                        "error: the service {pid} did not end within {STALL:?} of SIGTERM; it is killed"
+                    );
+                    killed = true;
+                    if let Err(error) = self
+                        .child
+                        .kill()
+                        .and_then(|()| self.child.wait().map(|_| ()))
+                    {
+                        failures.push(format!("the service {pid} remains: {error}"));
+                    }
+                }
+            }
+            Err(error) => failures.push(format!(
+                "the state of the service {pid} is unknown: {error}"
+            )),
         }
-        // SAFETY: 이 검사가 만든 자식 process 에 종료를 요청한다.
-        unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) };
-        if reaped_within(self.0.id(), STALL).is_none() {
-            self.0.kill().expect("kill the service that did not end");
-            self.0.wait().expect("reap the service");
+        if let Some(directory) = &self.socket_dir {
+            match std::fs::remove_dir_all(directory) {
+                // A service that ended by SIGTERM removes its own socket folder, so a folder that remains is a failure.
+                // After a SIGKILL the folder is left by the process and is removed here.
+                Ok(()) if !killed => failures.push(format!(
+                    "the service {pid} left its socket folder {}",
+                    directory.display()
+                )),
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => failures.push(format!(
+                    "the socket folder {} remains: {error}",
+                    directory.display()
+                )),
+            }
+        }
+        for failure in &failures {
+            eprintln!("error: {failure}");
+        }
+        // A second panic during the panic of a failed check aborts the run, so only a passing check panics here.
+        if !failures.is_empty() && !std::thread::panicking() {
+            panic!("the check left what it started: {failures:?}");
         }
     }
 }
 
-/// 자식 process pid 를 limit 안에 회수하면 waitpid 의 결과를, 아니면 None 을 돌려준다.
-fn reaped_within(pid: u32, limit: Duration) -> Option<i32> {
-    let (sent, received) = channel();
-    std::thread::spawn(move || {
-        let mut status = 0;
-        // SAFETY: 이 검사가 만든 자식 process 를 회수한다.
-        let waited = unsafe { libc::waitpid(pid as i32, &mut status, 0) };
-        // 받는 쪽이 상한으로 끝났으면 회수 결과는 쓰이지 않는다.
-        let _ = sent.send(waited);
-    });
-    received.recv_timeout(limit).ok()
+/// Waits for `child` to end within `limit` and returns its status, or None when it did not end. The standard library offers
+/// no wait with a bound, so the wait checks `try_wait` every 10 ms.
+fn wait_within(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
+    let deadline = Instant::now() + limit;
+    loop {
+        if let Some(status) = child.try_wait().expect("check the service") {
+            return Some(status);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
-/// 검사의 service 디렉터리. 검사가 실패해도 끝나면 지운다.
+/// A folder that a check created. Its drop removes the folder and reports a removal that fails, and it fails the check
+/// unless the check is already panicking.
 struct Directory(PathBuf);
 
 impl Drop for Directory {
     fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).expect("remove the service directory");
+        match std::fs::remove_dir_all(&self.0) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                eprintln!("error: the folder {} remains: {error}", self.0.display());
+                if !std::thread::panicking() {
+                    panic!("the check left {}", self.0.display());
+                }
+            }
+        }
     }
 }
 
-/// service 를 시작하고 준비 줄의 socket 경로를 돌려준다.
+/// Starts a service in `service_dir` and returns it with the socket path of its ready line.
 fn start(service_dir: &Path) -> (Service, PathBuf) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"))
+    let child = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"))
         .arg("--service-dir")
         .arg(service_dir)
         .arg("--log-dir")
@@ -62,30 +118,36 @@ fn start(service_dir: &Path) -> (Service, PathBuf) {
         .stderr(Stdio::inherit())
         .spawn()
         .expect("start the service");
-    let stdout = child.stdout.take().expect("service stdout");
+    // The service is owned before the ready line is read, so a failed read still ends the process.
+    let mut service = Service {
+        child,
+        socket_dir: None,
+    };
+    let stdout = service.child.stdout.take().expect("service stdout");
     let (sent, received) = channel();
     std::thread::spawn(move || {
         let mut line = String::new();
         let read = BufReader::new(stdout).read_line(&mut line).map(|_| line);
-        sent.send(read).expect("the test waits for the ready line");
+        // The receiver is gone only when the check has ended, and then the line is not used.
+        let _ = sent.send(read);
     });
     let line = received
         .recv_timeout(STALL)
         .expect("the service printed no ready line")
         .expect("read the ready line");
+    assert!(!line.is_empty(), "the service printed no ready line");
     let endpoint: serde_json::Value = serde_json::from_str(&line).expect("ready endpoint");
     let socket = PathBuf::from(endpoint["socket"].as_str().expect("socket path"));
-    (Service(child), socket)
+    service.socket_dir = socket.parent().map(Path::to_path_buf);
+    (service, socket)
 }
 
-/// 끝나기를 STALL 까지 기다린다.
-fn wait(service: &mut Service) {
-    let pid = service.0.id();
-    let waited = reaped_within(pid, STALL).expect("the service did not end");
-    assert_eq!(waited, pid as i32, "waitpid failed");
+/// Waits for the service to end within `STALL`.
+fn wait(service: &mut Service) -> ExitStatus {
+    wait_within(&mut service.child, STALL).expect("the service did not end")
 }
 
-/// 검사 service 디렉터리의 경로.
+/// The path of a service folder for a check.
 fn service_directory_name() -> PathBuf {
     std::env::temp_dir().join(format!("vt-cleanup-{}-{}", std::process::id(), uuid()))
 }
@@ -101,8 +163,8 @@ fn service_dir() -> Directory {
     Directory(directory)
 }
 
-/// 이 process 안에서 겹치지 않는 이름 조각. 시계는 마이크로초 단위라 같은 순간에 만든 이름이 같아지므로 증가 번호를
-/// 붙인다.
+/// A name fragment that does not repeat within this process. The clock has microsecond resolution, so names made at the
+/// same instant repeat, and an increasing number is added.
 fn uuid() -> String {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let time = std::time::SystemTime::now()
@@ -123,9 +185,9 @@ fn a_terminated_service_removes_its_socket_directory() {
         "the service did not create {}",
         socket_dir.display()
     );
-    // SAFETY: 이 검사가 만든 자식 process 에 종료를 요청한다.
+    // SAFETY: the check asks the child process it started to end.
     assert_eq!(
-        unsafe { libc::kill(service.0.id() as i32, libc::SIGTERM) },
+        unsafe { libc::kill(service.child.id() as i32, libc::SIGTERM) },
         0,
         "SIGTERM failed"
     );
@@ -150,27 +212,34 @@ fn a_new_service_removes_the_socket_directory_of_a_killed_one() {
     let directory = service_dir();
     let (mut service, socket) = start(&directory.0);
     let socket_dir = socket.parent().expect("socket directory").to_path_buf();
-    // 강제 종료는 정리할 기회를 주지 않는다.
-    service.0.kill().expect("kill the first service");
+    // The check kills the service so that it cannot clean up: this is the crash that the next service recovers from.
+    service.child.kill().expect("kill the first service");
     wait(&mut service);
     assert!(
         socket_dir.exists(),
         "the killed service removed {}",
         socket_dir.display()
     );
-    let (_next, _) = start(&directory.0);
+    let (mut next, _) = start(&directory.0);
     let left = socket_dir.exists();
     if left {
         std::fs::remove_dir_all(&socket_dir).expect("remove the socket directory the service left");
     }
     assert!(!left, "the next service left {}", socket_dir.display());
+    // SAFETY: the check asks the child process it started to end.
+    assert_eq!(
+        unsafe { libc::kill(next.child.id() as i32, libc::SIGTERM) },
+        0,
+        "SIGTERM failed"
+    );
+    wait(&mut next);
 }
 
-// 같은 process 에서 병렬로 도는 검사들의 service 디렉터리는 서로 달라야 한다. 이름이 같으면 한 검사의 service 가
-// 다른 검사의 잠금이나 endpoint 를 보고 실패한다(S15).
+// The service folders of the checks that run in parallel in one process must differ. An equal name makes one check's
+// service read the lock or the endpoint of another check and fail (S15).
 #[test]
 fn service_directories_are_unique_within_the_test_process() {
-    // 검사들처럼 여러 thread 가 같은 순간에 이름을 만든다.
+    // The checks make names from several threads at the same instant.
     let start = std::sync::Arc::new(std::sync::Barrier::new(16));
     let threads: Vec<_> = (0..16)
         .map(|_| {
