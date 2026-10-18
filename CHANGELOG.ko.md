@@ -6,6 +6,8 @@
 
 - S66: persistent service는 service folder가 지워지면(`folder-removed`), `endpoint.json`이 지워지면(`endpoint-removed`), `endpoint.json`이 다른 service를 가리키면(`endpoint-replaced`) 정상 정리를 거쳐 끝나며, 끝남은 그 reason과 함께 `sidecar.vt.session_stop`으로 기록된다. service는 `endpoint.json`이 자기를 가리킬 때만 그것을 지우므로, folder를 가져간 다른 service의 endpoint는 남는다. service 검사는 자신의 folder를 삭제 실패를 보고하는 guard로 지우고, SIGKILL로 끝난 service의 socket folder를 지운다.
 
+- S67: `vt-core/tests/event_contract.rs`의 검사는 끝날 때 자신의 folder와 그 옆의 설정 folder를 통과하든 실패하든 지우며, 지우기 실패는 `error:`로 보고한다. 전에는 어떤 검사도 자신의 folder를 지우지 않아 실행마다 임시 folder에 `vt-event-contract-*` 항목이 남았다.
+
 - S63.3: version 0.0.11이 S63, S64와 S65를 릴리즈한다.
 - S65: `vt-alacritty/tests/log_dir_test.rs`의 검사는 통과하든 실패하든 시작한 service를 끝내고 그 folder를 지우며, service나 folder가 남으면 실패한다. 전에는 실패한 검사가 parent 1인 service와 그 folder를 남겼다.
 - S64: 기본 정책은 모든 class에서 `error`만 저장하며, 첫 정책 전과 `log-policy.json`이 없는 동안 적용된다. 그러므로 `warn`, `info`, `debug`, `trace` event는 거부된다. 골든 사례 `vt-core/tests/fixtures/log-contract/policy-cases.json`은 core에서 복사했다. 테스트의 writer는 모든 level을 저장하므로 error보다 낮은 event를 검사하는 테스트에서도 저장된다.

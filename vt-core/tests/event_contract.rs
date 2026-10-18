@@ -3,6 +3,7 @@
 // structure and satisfies the same catalog.
 use serde_json::{Value, json};
 use soksak_sidecar_vt_core::events::{EventLog, Level, Options, Subject, hex, read_lines};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -22,12 +23,58 @@ fn fixture_lines(name: &str) -> Vec<Value> {
         .collect()
 }
 
-fn directory(name: &str) -> PathBuf {
+/// A folder that a test uses, with the configuration folder beside it. Its drop removes both folders and reports each
+/// removal that fails, and it fails the test unless the test is already panicking.
+struct Folder {
+    path: PathBuf,
+    config: PathBuf,
+}
+
+impl Deref for Folder {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for Folder {
+    fn drop(&mut self) {
+        let mut remains = false;
+        for path in [&self.path, &self.config] {
+            if let Err(error) = remove_folder(path) {
+                eprintln!("error: {error}");
+                remains = true;
+            }
+        }
+        if remains && !std::thread::panicking() {
+            panic!("the test left a folder of its temporary files");
+        }
+    }
+}
+
+/// Removes a folder that may be absent. A removal that fails returns its error with the folder.
+fn remove_folder(path: &Path) -> Result<(), String> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("the folder {} remains: {error}", path.display())),
+    }
+}
+
+/// The folder of a test, removed before the test starts so that a folder of an earlier run with the same process id is
+/// not used. The returned folder is removed when it is dropped.
+fn directory(name: &str) -> Folder {
     let path =
         std::env::temp_dir().join(format!("vt-event-contract-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&path);
-    let _ = std::fs::remove_dir_all(config_folder(&path));
-    path
+    let folder = Folder {
+        config: config_folder(&path),
+        path,
+    };
+    for path in [&folder.path, &folder.config] {
+        remove_folder(path).unwrap_or_else(|error| panic!("{error}"));
+    }
+    folder
 }
 
 /// The configuration folder of the writer of a folder, beside the folder. It holds only the policy file, so the watch of the
@@ -198,7 +245,7 @@ fn the_folder_is_private_and_the_file_is_private() {
     let dir = directory("modes");
     let log = EventLog::start(options(&dir)).unwrap();
     log.flush(DEADLINE).unwrap();
-    let folder = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+    let folder = std::fs::metadata(&*dir).unwrap().permissions().mode() & 0o777;
     let file = std::fs::metadata(log.path()).unwrap().permissions().mode() & 0o777;
     assert_eq!((folder, file), (0o700, 0o600));
 }
@@ -431,7 +478,7 @@ fn a_record_is_an_event_with_the_place_and_the_text() {
 #[test]
 fn a_reader_rejects_a_file_of_another_schema_and_names_the_file() {
     let dir = directory("schema");
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&*dir).unwrap();
     let path = dir.join("vt-old.jsonl");
     std::fs::write(
         &path,

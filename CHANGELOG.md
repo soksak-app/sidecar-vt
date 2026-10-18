@@ -6,6 +6,8 @@
 
 - S66: a persistent service ends with its normal cleanup when its service folder is removed (`folder-removed`), when `endpoint.json` is removed (`endpoint-removed`) or when `endpoint.json` names another service (`endpoint-replaced`); the end is recorded as `sidecar.vt.session_stop` with that reason. The service removes `endpoint.json` only while it names itself, so the endpoint of a service that took the folder is kept. The tests of the service remove their folders through a guard that reports a failed removal and remove the socket folder of a service that was killed.
 
+- S67: the tests of `vt-core/tests/event_contract.rs` remove their folders and the configuration folders beside them when they end, whether they pass or fail, and report a removal that fails as `error:`; before, no test removed its folders, so every run left `vt-event-contract-*` entries in the temporary folder.
+
 - S63.3: version 0.0.11 releases S63, S64 and S65.
 - S65: the checks of `vt-alacritty/tests/log_dir_test.rs` end the service they started and remove its folder whether they pass or fail, and fail when the service or the folder remains; before, a failed check left the service running with parent 1 and left its folder.
 - S64: The default policy stores only `error` in every class, before the first policy and while no `log-policy.json` exists, so `warn`, `info`, `debug` and `trace` events are refused. The golden cases `vt-core/tests/fixtures/log-contract/policy-cases.json` are copied from core. The writers of the tests store every level, so the events they check below error are stored.
