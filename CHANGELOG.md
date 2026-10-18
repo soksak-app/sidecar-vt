@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- S65: the checks of `vt-alacritty/tests/log_dir_test.rs` end the service they started and remove its folder whether they pass or fail, and fail when the service or the folder remains; before, a failed check left the service running with parent 1 and left its folder.
 - S64: The default policy stores only `error` in every class, before the first policy and while no `log-policy.json` exists, so `warn`, `info`, `debug` and `trace` events are refused. The golden cases `vt-core/tests/fixtures/log-contract/policy-cases.json` are copied from core. The writers of the tests store every level, so the events they check below error are stored.
 - S63.2: an `open` without `image` for a surface that was opened with an image or holds a configured image is refused with `imageAttached` and changes nothing, so the surface keeps drawing the output of its session; before, such an `open` made the surface headless and the output after Enter appeared only when a later key or a focus change drew a frame.
 - S63.1: each `open` and each applied `image.configure` records the drawing mode that it leaves on the surface as `sidecar.vt.surface_mode` `{mode, cause}`, so a surface that feeds its output without drawing it is named in the event log.

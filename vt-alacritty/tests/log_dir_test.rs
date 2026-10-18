@@ -2,7 +2,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::time::Duration;
 
 /// The limit that ends a stalled check. Success is judged by the exit status and the files, not by this time.
@@ -22,6 +22,104 @@ fn directory(name: &str) -> PathBuf {
     path
 }
 
+/// The limit within which a service ends after SIGTERM before the check ends it with SIGKILL.
+const END: Duration = Duration::from_secs(10);
+
+/// A service that a check started and the folder of that service. Whether the check passes or fails, the drop ends the
+/// process, reaps it and removes the folder, and it fails the check when the process remains.
+struct Service {
+    child: Child,
+    root: PathBuf,
+}
+
+impl Service {
+    /// The process id of the service.
+    fn id(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Waits for the service to end by itself within `limit` and returns its status and output.
+    fn wait_within(&mut self, limit: Duration) -> Output {
+        let status = reaped_within(&mut self.child, limit)
+            .unwrap_or_else(|| panic!("the service {} did not end within {limit:?}", self.id()));
+        let mut output = Output {
+            status,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        if let Some(mut stdout) = self.child.stdout.take() {
+            std::io::Read::read_to_end(&mut stdout, &mut output.stdout)
+                .expect("read the standard output");
+        }
+        if let Some(mut stderr) = self.child.stderr.take() {
+            std::io::Read::read_to_end(&mut stderr, &mut output.stderr)
+                .expect("read the standard error");
+        }
+        output
+    }
+}
+
+/// Waits for `child` to end within `limit`. The standard library offers no wait with a bound and no event of the end of a
+/// child, so the wait checks `try_wait` every 10 ms.
+fn reaped_within(child: &mut Child, limit: Duration) -> Option<std::process::ExitStatus> {
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        if let Some(status) = child.try_wait().expect("check the service") {
+            return Some(status);
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+impl Drop for Service {
+    fn drop(&mut self) {
+        let pid = self.id();
+        let mut remained = None;
+        match self.child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                // SAFETY: the check asks the child process it started to end.
+                unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+                if reaped_within(&mut self.child, END).is_none() {
+                    eprintln!(
+                        "error: the service {pid} did not end within {END:?} of SIGTERM; it is killed"
+                    );
+                    if let Err(error) = self
+                        .child
+                        .kill()
+                        .and_then(|()| self.child.wait().map(|_| ()))
+                    {
+                        remained = Some(format!("the service {pid} remains: {error}"));
+                    }
+                }
+            }
+            Err(error) => {
+                remained = Some(format!(
+                    "the state of the service {pid} is unknown: {error}"
+                ))
+            }
+        }
+        let removed = match std::fs::remove_dir_all(&self.root) {
+            Ok(()) => None,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => Some(format!(
+                "the folder {} remains: {error}",
+                self.root.display()
+            )),
+        };
+        for failure in remained.iter().chain(removed.iter()) {
+            eprintln!("error: {failure}");
+        }
+        // A second panic during the panic of a failed check aborts the run, so only a passing check panics here.
+        if (remained.is_some() || removed.is_some()) && !std::thread::panicking() {
+            panic!("the check left what it started: {remained:?} {removed:?}");
+        }
+    }
+}
+
 #[test]
 fn a_service_without_log_dir_refuses_to_start_and_says_so() {
     let service = directory("missing");
@@ -32,20 +130,11 @@ fn a_service_without_log_dir_refuses_to_start_and_says_so() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("run the service");
-    let pid = child.id();
-    let (sent, received) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        // The receiver is gone only when the test already failed.
-        let _ = sent.send(child.wait_with_output());
-    });
-    let output = match received.recv_timeout(STALL) {
-        Ok(output) => output.expect("wait for the service"),
-        Err(_) => {
-            // SAFETY: the test ends the child process it started, which did not end by itself.
-            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
-            panic!("the service without --log-dir did not end: it started");
-        }
+    let mut service = Service {
+        child,
+        root: service,
     };
+    let output = service.wait_within(STALL);
     assert!(
         !output.status.success(),
         "the service started without --log-dir"
@@ -53,32 +142,17 @@ fn a_service_without_log_dir_refuses_to_start_and_says_so() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--log-dir is required"), "{stderr}");
     assert!(
-        !service.join("endpoint.json").exists(),
+        !service.root.join("endpoint.json").exists(),
         "a refused service published an endpoint"
     );
-    std::fs::remove_dir_all(&service).expect("remove the test directory");
 }
 
 #[test]
 fn a_service_with_log_dir_writes_log_open_and_flushes_it_when_it_ends() {
     let root = directory("started");
     let logs = root.join("logs");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"))
-        .arg("--log-dir")
-        .arg(&logs)
-        .arg("--service-dir")
-        .arg(&root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("start the service");
-    let pid = child.id();
-    let mut ready = String::new();
-    BufReader::new(child.stdout.take().expect("service stdout"))
-        .read_line(&mut ready)
-        .expect("read the ready line");
-    assert!(ready.contains("\"socket\""), "no ready line: {ready:?}");
+    let (mut service, ready) = start(&root);
+    let pid = service.id();
     // A client with a wrong token is an error record, and the standard error stays empty.
     let mut rejected = std::os::unix::net::UnixStream::connect(endpoint_socket(&ready))
         .expect("connect to the service");
@@ -110,7 +184,7 @@ fn a_service_with_log_dir_writes_log_open_and_flushes_it_when_it_ends() {
     assert!(reply.contains("\"ok\":true"), "{reply}");
     // SAFETY: the test asks the child process it started to end.
     assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGTERM) }, 0);
-    let output = child.wait_with_output().expect("wait for the service");
+    let output = service.wait_within(STALL);
     let status = output.status;
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
@@ -173,11 +247,10 @@ fn a_service_with_log_dir_writes_log_open_and_flushes_it_when_it_ends() {
     assert!(stop < end, "{names:?}");
     assert_eq!(events[stop]["fields"]["reason"], "SIGTERM");
     assert_eq!(events[end]["fields"]["ok"], true);
-    std::fs::remove_dir_all(&root).expect("remove the test directory");
 }
 
 /// Starts the service and returns it with its ready line.
-fn start(root: &std::path::Path) -> (std::process::Child, String) {
+fn start(root: &std::path::Path) -> (Service, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"))
         .arg("--log-dir")
         .arg(root.join("logs"))
@@ -192,8 +265,12 @@ fn start(root: &std::path::Path) -> (std::process::Child, String) {
     BufReader::new(child.stdout.take().expect("service stdout"))
         .read_line(&mut ready)
         .expect("read the ready line");
+    let service = Service {
+        child,
+        root: root.to_path_buf(),
+    };
     assert!(ready.contains("\"socket\""), "no ready line: {ready:?}");
-    (child, ready)
+    (service, ready)
 }
 
 /// Connects a client that authenticates as `owner`.
@@ -228,10 +305,10 @@ fn events_of(root: &std::path::Path) -> Vec<serde_json::Value> {
 #[test]
 fn a_service_stopped_by_sigint_records_the_signal() {
     let root = directory("sigint");
-    let (child, _ready) = start(&root);
+    let (mut service, _ready) = start(&root);
     // SAFETY: the test asks the child process it started to end.
-    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
-    let output = child.wait_with_output().expect("wait for the service");
+    assert_eq!(unsafe { libc::kill(service.id() as i32, libc::SIGINT) }, 0);
+    let output = service.wait_within(STALL);
     assert!(output.status.success(), "{:?}", output.status);
     let events = events_of(&root);
     let stop = events
@@ -240,7 +317,6 @@ fn a_service_stopped_by_sigint_records_the_signal() {
         .expect("the service records its stop");
     assert_eq!(stop["fields"]["reason"], "SIGINT");
     assert_eq!(stop["fields"]["clients"], 0);
-    std::fs::remove_dir_all(&root).expect("remove the test directory");
 }
 
 // A client that sends `shutdown` and leaves stops the service when no client remains: the disconnect of the client and the
@@ -248,7 +324,7 @@ fn a_service_stopped_by_sigint_records_the_signal() {
 #[test]
 fn a_client_that_disconnects_and_a_shutdown_are_events() {
     let root = directory("shutdown");
-    let (child, ready) = start(&root);
+    let (mut service, ready) = start(&root);
     let mut client = connect(&ready, "owner-z");
     writeln!(
         client,
@@ -261,7 +337,7 @@ fn a_client_that_disconnects_and_a_shutdown_are_events() {
         .read_line(&mut reply)
         .expect("read the shutdown reply");
     assert!(reply.contains("\"ok\":true"), "{reply}");
-    let output = child.wait_with_output().expect("wait for the service");
+    let output = service.wait_within(STALL);
     assert!(output.status.success(), "{:?}", output.status);
     let events = events_of(&root);
     let names: Vec<&str> = events
@@ -281,7 +357,6 @@ fn a_client_that_disconnects_and_a_shutdown_are_events() {
     assert_eq!(events[disconnect]["fields"]["ok"], true);
     assert_eq!(events[stop]["fields"]["reason"], "shutdown");
     assert_eq!(events[stop]["fields"]["clients"], 0);
-    std::fs::remove_dir_all(&root).expect("remove the test directory");
 }
 
 /// The socket path of the ready line.
@@ -291,4 +366,37 @@ fn endpoint_socket(ready: &str) -> String {
         .as_str()
         .expect("socket path")
         .to_string()
+}
+
+/// Whether the process `pid` exists, a zombie included.
+fn alive(pid: u32) -> bool {
+    // SAFETY: signal 0 checks that the process exists and sends nothing.
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+// A check that fails after it started the service ends that service and removes its folder.
+#[test]
+fn a_failed_check_ends_its_service_and_removes_its_folder() {
+    let root = directory("failed");
+    let pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let seen = pid.clone();
+    let inner = root.clone();
+    let failed = std::panic::catch_unwind(move || {
+        let (service, _ready) = start(&inner);
+        seen.store(service.id(), std::sync::atomic::Ordering::SeqCst);
+        panic!("the check fails after it started the service");
+    });
+    assert!(failed.is_err());
+    let pid = pid.load(std::sync::atomic::Ordering::SeqCst);
+    let remained = alive(pid);
+    if remained {
+        // SAFETY: the test ends the child process it started, which the failed check left.
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    }
+    let folder = root.exists();
+    if folder {
+        std::fs::remove_dir_all(&root).expect("remove the test directory");
+    }
+    assert!(!remained, "the failed check left its service {pid} running");
+    assert!(!folder, "the failed check left {}", root.display());
 }

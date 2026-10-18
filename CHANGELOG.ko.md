@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S65: `vt-alacritty/tests/log_dir_test.rs`의 검사는 통과하든 실패하든 시작한 service를 끝내고 그 folder를 지우며, service나 folder가 남으면 실패한다. 전에는 실패한 검사가 parent 1인 service와 그 folder를 남겼다.
 - S64: 기본 정책은 모든 class에서 `error`만 저장하며, 첫 정책 전과 `log-policy.json`이 없는 동안 적용된다. 그러므로 `warn`, `info`, `debug`, `trace` event는 거부된다. 골든 사례 `vt-core/tests/fixtures/log-contract/policy-cases.json`은 core에서 복사했다. 테스트의 writer는 모든 level을 저장하므로 error보다 낮은 event를 검사하는 테스트에서도 저장된다.
 - S63.2: image와 함께 열렸거나 configure된 image를 가진 surface에 대한 `image` 없는 `open`은 `imageAttached`로 거부되고 아무것도 바꾸지 않아, surface가 session의 출력을 계속 그린다. 이전에는 그런 `open`이 surface를 headless로 만들어 Enter 뒤의 출력이 다음 key나 focus 변화가 frame을 그릴 때에만 보였다.
 - S63.1: `open`과 적용된 `image.configure`마다 surface에 남긴 그리기 mode를 `sidecar.vt.surface_mode` `{mode, cause}`로 기록해, 출력을 그리지 않고 처리하는 surface가 event log에 드러난다.
