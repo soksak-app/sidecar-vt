@@ -255,7 +255,7 @@
         "reason": "string",
         "clients": "number"
       },
-      "description": "The service stops. reason is SIGTERM, SIGINT or shutdown (the shutdown request of the last client), and clients is the number of client tasks the service still holds."
+      "description": "The service stops. reason is SIGTERM, SIGINT, shutdown (the shutdown request of the last client), folder-removed (the service folder was removed), endpoint-removed (endpoint.json was removed) or endpoint-replaced (endpoint.json names another service). clients is the number of client tasks the service still holds."
     },
     "sidecar.vt.session_end": {
       "layer": "sidecar",

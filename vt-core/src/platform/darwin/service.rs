@@ -1,6 +1,7 @@
 //! in-process terminal service를 위한 persistent protocol-1 transport이다.
 
 use crate::events::{Events, Level};
+use crate::platform::darwin::file_watch::{Change, Changed, Failed, watch_file};
 use crate::protocol::{LocalSessionPort, PersistentOwner, PersistentRegistry, serve_with_registry};
 use nix::errno::Errno;
 use serde::{Deserialize, Serialize};
@@ -55,17 +56,28 @@ pub struct AlreadyRunning {
 
 struct ServiceCleanup {
     service_dir: PathBuf,
+    token: String,
     socket_dir: PathBuf,
     log: Events,
 }
 
 impl Drop for ServiceCleanup {
     fn drop(&mut self) {
-        if let Err(error) = fs::remove_file(self.service_dir.join("endpoint.json"))
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            self.log
-                .record_error("service", format!("endpoint cleanup failed: {error}"));
+        // The endpoint is removed only while it names this service: another service that took the folder publishes its
+        // own endpoint, and that endpoint is kept.
+        match endpoint_left(&self.service_dir, &self.token) {
+            Ok(Some("endpoint-replaced")) => {}
+            Ok(_) => {
+                if let Err(error) = fs::remove_file(self.service_dir.join("endpoint.json"))
+                    && error.kind() != std::io::ErrorKind::NotFound
+                {
+                    self.log
+                        .record_error("service", format!("endpoint cleanup failed: {error}"));
+                }
+            }
+            Err(error) => self
+                .log
+                .record_error("service", format!("endpoint cleanup failed: {error}")),
         }
         if let Err(error) = fs::remove_dir_all(&self.socket_dir)
             && error.kind() != std::io::ErrorKind::NotFound
@@ -132,6 +144,35 @@ fn read_endpoint(service_dir: &Path) -> Result<Endpoint, String> {
     let path = service_dir.join("endpoint.json");
     let bytes = fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
     serde_json::from_slice(&bytes).map_err(|error| format!("decode {}: {error}", path.display()))
+}
+
+/// Returns why the endpoint of the service in `service_dir` no longer names the service with `token`: the folder was removed,
+/// the endpoint file was removed, or another endpoint replaced it. `Ok(None)` means the endpoint still names the service.
+fn endpoint_left(service_dir: &Path, token: &str) -> Result<Option<&'static str>, String> {
+    if !service_dir.exists() {
+        return Ok(Some("folder-removed"));
+    }
+    match fs::read(service_dir.join("endpoint.json")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Some("endpoint-removed")),
+        Err(error) => Err(format!("read the endpoint: {error}")),
+        // The endpoint is written by rename, so a read holds a whole endpoint; one that is not an endpoint of this service
+        // was published by another writer.
+        Ok(bytes) => match serde_json::from_slice::<Endpoint>(&bytes) {
+            Ok(endpoint) if endpoint.token == token => Ok(None),
+            Ok(_) | Err(_) => Ok(Some("endpoint-replaced")),
+        },
+    }
+}
+
+/// Stops the watch of the endpoint when the service returns.
+struct EndpointWatch(Option<Box<dyn FnOnce() + Send>>);
+
+impl Drop for EndpointWatch {
+    fn drop(&mut self) {
+        if let Some(stop) = self.0.take() {
+            stop();
+        }
+    }
 }
 
 /// 잠금을 얻었으면 이전 service 는 끝났다. 강제 종료나 충돌로 정리하지 못하고 끝난 이전 service 의 socket 디렉터리를
@@ -269,12 +310,13 @@ pub async fn serve_persistent(
     remove_previous_socket(service_dir, &log);
     let (socket_dir, socket) = socket_path()?;
     let listener = UnixListener::bind(&socket).map_err(|e| format!("bind service socket: {e}"))?;
+    let token = Uuid::new_v4().to_string();
     let _cleanup = ServiceCleanup {
         service_dir: service_dir.to_path_buf(),
+        token: token.clone(),
         socket_dir,
         log: log.clone(),
     };
-    let token = Uuid::new_v4().to_string();
     let endpoint = Endpoint {
         protocol: PROTOCOL,
         pid: std::process::id(),
@@ -288,6 +330,32 @@ pub async fn serve_persistent(
     let mut interrupt =
         signal(SignalKind::interrupt()).map_err(|e| format!("interrupt signal: {e}"))?;
     write_endpoint(service_dir, &endpoint)?;
+    // The watch is started before the ready line, so a check that removes the folder after the ready line is seen by it.
+    // The kernel reports each change of the folder and of the endpoint, and the state is read only on a change.
+    let (ended_sender, mut ended) = tokio::sync::mpsc::unbounded_channel::<&'static str>();
+    let watched_dir = service_dir.to_path_buf();
+    let watched_token = endpoint.token.clone();
+    let watch_log = log.clone();
+    let changed: Changed = Arc::new(move |_changes: &[Change]| {
+        match endpoint_left(&watched_dir, &watched_token) {
+            Ok(Some(reason)) => {
+                // The loop takes the first reason, and a later one is not used after the loop ended.
+                let _ = ended_sender.send(reason);
+            }
+            Ok(None) => {}
+            Err(error) => watch_log.record_error("service", format!("endpoint watch: {error}")),
+        }
+    });
+    let failed: Failed = {
+        let log = log.clone();
+        Arc::new(move |error: String| {
+            log.record_error("service", format!("endpoint watch: {error}"))
+        })
+    };
+    let _endpoint_watch = EndpointWatch(Some(
+        watch_file(&service_dir.join("endpoint.json"), changed, failed)
+            .map_err(|e| format!("watch the endpoint: {e}"))?,
+    ));
     let mut ready =
         serde_json::to_vec(&endpoint).map_err(|e| format!("encode ready endpoint: {e}"))?;
     ready.push(b'\n');
@@ -370,6 +438,10 @@ pub async fn serve_persistent(
             }
             }
                 });
+            }
+            Some(reason) = ended.recv() => {
+                record_stop(&log, reason, clients.len());
+                return Ok(());
             }
             Some(joined) = clients.join_next(), if had_client => {
                 record_client_end(&log, joined);
