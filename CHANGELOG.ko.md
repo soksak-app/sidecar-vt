@@ -4,6 +4,8 @@
 
 ## 미배포
 
+- S68: 새 커밋의 작성자는 `min-0-max <max@blue.tools>`다. `.mailmap`이 이전 이름 `min-median-max`를 잇고, 게시된 커밋은 다시 쓰지 않는다.
+
 - S66: persistent service는 service folder가 지워지면(`folder-removed`), `endpoint.json`이 지워지면(`endpoint-removed`), `endpoint.json`이 다른 service를 가리키면(`endpoint-replaced`) 정상 정리를 거쳐 끝나며, 끝남은 그 reason과 함께 `sidecar.vt.session_stop`으로 기록된다. service는 `endpoint.json`이 자기를 가리킬 때만 그것을 지우므로, folder를 가져간 다른 service의 endpoint는 남는다. service 검사는 자신의 folder를 삭제 실패를 보고하는 guard로 지우고, SIGKILL로 끝난 service의 socket folder를 지운다.
 
 - S67: `vt-core/tests/event_contract.rs`의 검사는 끝날 때 자신의 folder와 그 옆의 설정 folder를 통과하든 실패하든 지우며, 지우기 실패는 `error:`로 보고한다. 전에는 어떤 검사도 자신의 folder를 지우지 않아 실행마다 임시 folder에 `vt-event-contract-*` 항목이 남았다.
