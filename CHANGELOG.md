@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- S69: The process writes one record as its first action, before any setup: the text record `<UTC time> info sidecar vt: started` on the standard error, which the host stores as a record of the layer `sidecar`, so the time from the spawn of the process to its first own record is visible. The record goes to the standard error and not to the event file, because the file of the contract starts with `log.open`. A clean run now writes exactly that record on its standard error.
+
 - S68: new commits are authored as `min-0-max <max@blue.tools>`; `.mailmap` maps the former name `min-median-max`, and published commits are not rewritten.
 
 - S66: a persistent service ends with its normal cleanup when its service folder is removed (`folder-removed`), when `endpoint.json` is removed (`endpoint-removed`) or when `endpoint.json` names another service (`endpoint-replaced`); the end is recorded as `sidecar.vt.session_stop` with that reason. The service removes `endpoint.json` only while it names itself, so the endpoint of a service that took the folder is kept. The tests of the service remove their folders through a guard that reports a failed removal and remove the socket folder of a service that was killed.

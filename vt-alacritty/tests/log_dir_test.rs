@@ -160,6 +160,62 @@ impl Drop for Service {
     }
 }
 
+/// Asserts that stderr is exactly the start record of the process, in the form of a text record (docs/spec/diagnostics.md#forms),
+/// and returns the time that the record states. The host stores each line of the standard error of the service as a record of
+/// level info, so the record shows the time from the spawn of the process to its first own record (S69).
+fn start_record(stderr: &str) -> time::OffsetDateTime {
+    let message = format!("the line is not the start record of the process: {stderr:?}");
+    let mut lines = stderr.lines();
+    let line = lines.next().unwrap_or_default();
+    assert!(lines.next().is_none(), "{message}");
+    let parts: Vec<&str> = line.splitn(5, ' ').collect();
+    assert_eq!(parts.len(), 5, "{message}");
+    assert_eq!(parts[1], "info", "{message}");
+    assert_eq!(parts[2], "sidecar", "{message}");
+    assert_eq!(parts[3], "vt:", "{message}");
+    assert_eq!(parts[4], "started", "{message}");
+    // The form of the time of a text record: the UTC time `YYYY-MM-DDTHH:MM:SS.mmmZ` of the diagnostics specification of
+    // the soksak core repository (docs/spec/diagnostics.md#forms).
+    let format = time::macros::format_description!(
+        "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
+    );
+    // The literal `Z` of the form states UTC, so the parsed time is completed with the UTC offset.
+    time::PrimitiveDateTime::parse(parts[0], &format)
+        .expect(&message)
+        .assume_utc()
+}
+
+// The first action of the service is one text record on the standard error, which the host stores as a record of the layer
+// sidecar, so the time from the spawn to the first own record is visible; it precedes the log.open of the writer.
+#[test]
+fn a_service_starts_with_its_own_record() {
+    let root = directory("start-record");
+    let (mut service, _ready) = start(&root);
+    // SAFETY: the test asks the child process it started to end.
+    assert_eq!(unsafe { libc::kill(service.id() as i32, libc::SIGTERM) }, 0);
+    let output = service.wait_within(STALL);
+    assert!(output.status.success(), "{:?}", output.status);
+    let at = start_record(&String::from_utf8_lossy(&output.stderr));
+    let age = time::OffsetDateTime::now_utc() - at;
+    assert!(
+        !age.is_negative() && age < time::Duration::MINUTE,
+        "the start record time {at} is not the time of this run"
+    );
+    // The record is written before the setup of the service, so it precedes the log.open that the writer writes after the
+    // setup.
+    let events = events_of(&root);
+    let open = events
+        .iter()
+        .find(|event| event["event"] == "log.open")
+        .expect("the event file holds log.open");
+    let opened_us = open["ts_us"].as_i64().expect("the ts_us of log.open");
+    assert!(
+        i128::from(opened_us) >= at.unix_timestamp_nanos() / 1000,
+        "log.open at {opened_us} us precedes the start record at {} us",
+        at.unix_timestamp_nanos() / 1000
+    );
+}
+
 #[test]
 fn a_service_without_log_dir_refuses_to_start_and_says_so() {
     let root = directory("missing");
@@ -226,11 +282,8 @@ fn a_service_with_log_dir_writes_log_open_and_flushes_it_when_it_ends() {
     assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGTERM) }, 0);
     let output = service.wait_within(STALL);
     let status = output.status;
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        "",
-        "the standard error holds only what the process or the system writes"
-    );
+    // The start record is the only line of the standard error of a clean run.
+    start_record(&String::from_utf8_lossy(&output.stderr));
     assert!(status.success(), "{status:?}");
     let files: Vec<_> = std::fs::read_dir(&logs)
         .expect("the service created the log directory")
