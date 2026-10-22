@@ -2,7 +2,9 @@
 // tests/fixtures/log-contract are copies of the fixtures of the contract; a line that the writer produces has the same
 // structure and satisfies the same catalog.
 use serde_json::{Value, json};
-use soksak_sidecar_vt_core::events::{EventLog, Level, Options, Subject, hex, read_lines};
+use soksak_sidecar_vt_core::events::{
+    EventLog, Level, Options, Subject, hex, read_lines, read_run_lines,
+};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -529,4 +531,23 @@ fn fields_over_the_bound_of_an_event_are_stored_cut_and_marked_truncated() {
     assert_eq!(cut["fields"].as_object().unwrap().len(), 1);
     assert!(stored[1].get("truncated").is_none());
     assert_eq!(stored[1]["fields"]["text"], "small");
+}
+
+// A line of a run without a seq is refused by the run reader with the file and the line that lacks it, because the reader
+// orders the lines of both files by seq and a line without one has no place in that order.
+#[test]
+fn a_line_without_seq_is_refused_by_the_run_reader() {
+    let dir = directory("line-without-seq");
+    std::fs::create_dir_all(&*dir).unwrap();
+    let open = json!({"ts_us": 1, "mono_ns": 1, "seq": 1, "level": "info", "layer": "sidecar", "event": "log.open", "fields": {"schema": 2, "role": "vt", "boot": "b1", "pid": 1}});
+    let without_seq = json!({"ts_us": 2, "mono_ns": 2, "level": "info", "layer": "sidecar", "event": "sidecar.vt.test", "fields": {}});
+    let main = dir.join("vt-b1.jsonl");
+    std::fs::write(&main, format!("{open}\n{without_seq}\n")).unwrap();
+    let debug_open = json!({"ts_us": 3, "mono_ns": 3, "seq": 2, "level": "debug", "layer": "sidecar", "event": "log.open", "fields": {"schema": 2, "role": "vt", "boot": "b1", "pid": 1}});
+    std::fs::write(dir.join("vt-b1.debug.jsonl"), format!("{debug_open}\n")).unwrap();
+    let error = read_run_lines(&main).expect_err("the run reader ordered a line without seq");
+    assert!(
+        error.contains("vt-b1.jsonl:2"),
+        "the error does not name the line: {error}"
+    );
 }

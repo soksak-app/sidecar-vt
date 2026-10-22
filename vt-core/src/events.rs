@@ -1326,14 +1326,28 @@ fn write_loop(
 /// Reads the lines of both files of a writer of one run in the order of their `seq`: the main file and the debug file,
 /// which exists once the first line of its channel was written.
 pub fn read_run_lines(main: &Path) -> Result<Vec<serde_json::Value>, String> {
-    let mut lines = read_lines(main)?;
+    let mut lines = read_run_file(main)?;
     let debug = main.with_extension("debug.jsonl");
     if debug.exists() {
-        lines.extend(read_lines(&debug)?);
-        // default: a line without a readable seq keeps its place after the lines before it.
-        lines.sort_by_key(|line| line["seq"].as_u64().unwrap_or(0));
+        lines.extend(read_run_file(&debug)?);
+        lines.sort_by_key(|(seq, _)| *seq);
     }
-    Ok(lines)
+    Ok(lines.into_iter().map(|(_, line)| line).collect())
+}
+
+/// Reads a file of a run with the seq of each line. A line without a seq is refused with its file and line, because the
+/// order of the run is the order of seq.
+fn read_run_file(path: &Path) -> Result<Vec<(u64, serde_json::Value)>, String> {
+    read_lines(path)?
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let seq = line["seq"]
+                .as_u64()
+                .ok_or_else(|| format!("{}:{}: the line has no seq", path.display(), index + 1))?;
+            Ok((seq, line))
+        })
+        .collect()
 }
 
 pub fn read_lines(path: &Path) -> Result<Vec<serde_json::Value>, String> {
