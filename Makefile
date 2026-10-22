@@ -1,5 +1,5 @@
 # 터미널 engine sidecar repository 의 test, build, release(docs/features.md). release 는 core 의 sok 를 쓴다.
-.PHONY: test build release repeat hooks
+.PHONY: test build release repeat push-check hooks
 
 MACOS_MINIMUM = 14.4
 PROFILE ?= debug
@@ -38,6 +38,11 @@ build:
 release: build
 	@test -n "$(OUT)" || { echo "make release OUT=<folder>" >&2; exit 2; }
 	$(SOK) sidecar release vt-alacritty $(OUT)
+
+# The checks that a push needs: make test (which builds first), and the commit messages of the pushed range.
+# RANGE holds the commits of the pushed refs; the pre-push hook sets it, and it defaults to origin/main..HEAD.
+push-check: test
+	pnpm exec soksak-commits "$(or $(RANGE),origin/main..HEAD)"
 
 # Repeats the tests of PACKAGE, or only the test TEST, COUNT times and reports each run with its elapsed time; the
 # first failing run prints its output and fails. Intermittent failures are reproduced and accepted with this target.

@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- S72: The pre-push hook runs `make push-check`, which runs `make test` (after `make build`) and the commit message check of the pushed range, as the ci workflow does. Red: `tests/make-targets.test.mjs` failed on the missing recipe and the missing hook. Green: 2 of 2 tests pass, and `make push-check` passes.
+
 - S69: The process writes one record as its first action, before any setup: the text record `<UTC time> info sidecar vt: started` on the standard error, which the host stores as a record of the layer `sidecar`, so the time from the spawn of the process to its first own record is visible. The record goes to the standard error and not to the event file, because the file of the contract starts with `log.open`. A clean run now writes exactly that record on its standard error.
 
 - S68: new commits are authored as `min-0-max <max@blue.tools>`; `.mailmap` maps the former name `min-median-max`, and published commits are not rewritten.
