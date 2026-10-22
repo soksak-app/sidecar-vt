@@ -5,6 +5,8 @@
 
 터미널 사이드카(`@soksak/sidecar-vt-core`)는 [영속 서비스](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.ko.md)이 정의한 영속 서비스의 클라이언트 모듈이다. 서비스는 애플리케이션 설정 디렉터리마다 하나의 프로세스로 실행되며 독립 PTY·셸 프로세스·VT 상태·스크롤백·IOSurface 렌더링을 소유한다. 사이드카는 터미널 세션 제어 요청을 받고 영역에 화면 그림을 공급한다.
 
+파싱되지 않는 봉투는 `surface`가 문자열이면 그 표면에 `{surface, body: {error: "invalidParams", reason}}`로 답한다. 그래서 답이 보낸 표면에 닿는다. `cids`가 문자열 목록이 아니면 `reason`은 `cids must be a list of strings`이고, 그 밖이면 `Parse error: <text>`다. 읽을 수 있는 `surface`가 없는 줄은 빈 surface와 `Parse error: <text>`로 답한다.
+
 | 요청 | 본문 | 의미 |
 | --- | --- | --- |
 | `open` | `{image?: 이름}` | 영속 서비스에서 터미널 세션을 만들거나 연결하고 호스트의 그림 `configure`를 받은 뒤 영역용 그림을 할당하고 그린다. 같은 생성 식별자에 대한 `open` 호출이 여러 번이면 아무것도 하지 않는다. |

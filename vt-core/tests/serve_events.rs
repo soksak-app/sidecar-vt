@@ -799,9 +799,14 @@ async fn cids_that_are_not_a_list_of_strings_are_rejected_with_an_error() {
             "{{\"surface\":\"s1\",\"root\":\"/tmp\",\"cids\":{cids},\"body\":{{\"operation\":\"open\",\"shell\":\"/bin/sh\"}}}}\n"
         );
         let replies = serve_lines(&events, line.as_bytes()).await;
+        // The answer goes to the surface of the request and names the cids. It stated the parse error before, which named
+        // no surface, so the answer did not reach the surface that sent the request.
         assert!(
-            replies.iter().any(|reply| reply.contains("Parse error")),
-            "cids {cids} was accepted: {replies:?}"
+            replies
+                .iter()
+                .any(|reply| reply.contains(r#""surface":"s1""#)
+                    && reply.contains("cids must be a list of strings")),
+            "cids {cids} was not answered on its surface: {replies:?}"
         );
     }
 }

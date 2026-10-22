@@ -5322,3 +5322,36 @@ async fn a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it() {
     drop(to_serve);
     task.await.unwrap().unwrap();
 }
+
+// An envelope whose `cids` is not a list of strings is answered on its surface with an error that names the cids.
+#[tokio::test]
+async fn an_envelope_with_invalid_cids_is_answered_on_its_surface() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let input = r#"{"surface":"s1","cids":[1],"body":{"operation":"input","bytes":"aGk="}}
+"#;
+    let reader = std::io::Cursor::new(input.as_bytes());
+    let mut writer = Vec::new();
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let factory_calls = calls.clone();
+    let session_port_factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "invalid-cids".to_string(),
+            factory_calls.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+    let _ = serve(engine_factory, reader, &mut writer, session_port_factory).await;
+    let output = String::from_utf8(writer).unwrap();
+    let reply: serde_json::Value = serde_json::from_str(output.lines().next().unwrap_or(""))
+        .unwrap_or_else(|error| panic!("no reply line: {error}: {output}"));
+    assert_eq!(
+        reply["surface"], "s1",
+        "the reply is not on the surface: {output}"
+    );
+    assert_eq!(reply["body"]["error"], "invalidParams", "{output}");
+    assert!(
+        reply["body"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("cids")),
+        "the reason does not name the cids: {output}"
+    );
+}

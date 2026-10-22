@@ -4628,10 +4628,34 @@ where
                 }
             }
             Err(e) => {
-                let response = json!({
-                    "surface": "",
-                    "body": {"error": format!("Parse error: {}", e)}
-                });
+                // The surface and the cids are read from the line again, so an envelope that does not parse is answered on its
+                // surface when the surface is a string; a line without one is answered with an empty surface.
+                let line = serde_json::from_str::<Value>(trimmed).ok();
+                let surface = line
+                    .as_ref()
+                    .and_then(|value| value.get("surface"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let cids_invalid = line
+                    .as_ref()
+                    .and_then(|value| value.get("cids"))
+                    .is_some_and(|cids| {
+                        serde_json::from_value::<Vec<String>>(cids.clone()).is_err()
+                    });
+                let response = match surface {
+                    Some(surface) if cids_invalid => json!({
+                        "surface": surface,
+                        "body": {"error": "invalidParams", "reason": "cids must be a list of strings"}
+                    }),
+                    Some(surface) => json!({
+                        "surface": surface,
+                        "body": {"error": "invalidParams", "reason": format!("Parse error: {}", e)}
+                    }),
+                    None => json!({
+                        "surface": "",
+                        "body": {"error": format!("Parse error: {}", e)}
+                    }),
+                };
                 if reply_tx.reply(response).await.is_err() {
                     // output channel이 닫혔으므로 serve를 끝낸다
                     break;

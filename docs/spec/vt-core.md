@@ -5,6 +5,8 @@
 
 The terminal sidecar (`@soksak/sidecar-vt-core`) is the client module for the persistent terminal service defined by [persistent services](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.md). The service is one process per application configuration directory and owns the independent PTYs, shell processes, VT state, scrollback, and IOSurface-backed rendering. The sidecar accepts requests to control a terminal session and supplies screen images to a region.
 
+An envelope that does not parse is answered with `{surface, body: {error: "invalidParams", reason}}` on its surface when its `surface` is a string, so the answer reaches the surface that sent it; `reason` is `cids must be a list of strings` when `cids` is not a list of strings, and `Parse error: <text>` otherwise. A line without a readable `surface` is answered with an empty surface and `Parse error: <text>`.
+
 | Request | Body | Meaning |
 | --- | --- | --- |
 | `open` | `{image?: name}` | Create or attach to a terminal session in the persistent service and wait for the host's image `configure` before allocating and drawing the image region. Multiple `open` calls for the same creation identifier do nothing. |
