@@ -357,6 +357,9 @@ pub struct EventLog {
     /// The stop of the watch of the policy file; it runs before the writer ends.
     policy_watch: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     writer: Mutex<Option<JoinHandle<()>>>,
+    /// Test-only: the number of times drop joined the writer thread.
+    #[cfg(feature = "fault-injection")]
+    joins: Arc<AtomicUsize>,
 }
 
 /// The writer that the connections, the surfaces and the sessions of the service share.
@@ -482,6 +485,8 @@ impl EventLog {
             trace_dir: options.trace_dir.clone(),
             policy_watch: Mutex::new(policy_watch),
             writer: Mutex::new(Some(writer)),
+            #[cfg(feature = "fault-injection")]
+            joins: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -638,6 +643,17 @@ impl EventLog {
 }
 
 impl EventLog {
+    /// Test-only: poisons the lock of the writer handle, as a panic in its holder does, and returns the count of joins that
+    /// drop makes. The drop of the log must join the writer.
+    #[cfg(feature = "fault-injection")]
+    pub fn poison_writer_for_test(&self) -> Arc<AtomicUsize> {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = self.writer.lock().unwrap();
+            panic!("the writer lock is poisoned by the fault-injection feature");
+        }));
+        self.joins.clone()
+    }
+
     /// Test-only: stores `stop` as the stop of the policy watch and poisons the lock that guards it, as a panic in the
     /// holder of the lock does. The drop of the log must still run the stop.
     #[cfg(feature = "fault-injection")]
@@ -666,11 +682,17 @@ impl Drop for EventLog {
         if let Err(error) = self.sender.send(Message::Stop) {
             eprintln!("event writer: the stop request was not taken: {error}");
         }
-        if let Ok(mut writer) = self.writer.lock()
-            && let Some(handle) = writer.take()
-            && handle.join().is_err()
-        {
-            eprintln!("event writer: the writer thread panicked");
+        // default: a poisoned lock still holds the handle of the writer, so the writer is joined; the poisoning is reported on the standard error.
+        let mut writer = self.writer.lock().unwrap_or_else(|poisoned| {
+            eprintln!("event writer: the writer lock was poisoned; the writer is joined");
+            poisoned.into_inner()
+        });
+        if let Some(handle) = writer.take() {
+            #[cfg(feature = "fault-injection")]
+            self.joins.fetch_add(1, Ordering::SeqCst);
+            if handle.join().is_err() {
+                eprintln!("event writer: the writer thread panicked");
+            }
         }
     }
 }

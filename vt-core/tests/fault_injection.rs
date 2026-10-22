@@ -7,6 +7,7 @@ use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use soksak_sidecar_vt_core::events::{EventLog, Level, Options};
 use soksak_sidecar_vt_core::pty::{PtyService, fault};
 
 /// The PTY tests of this binary run one at a time, because a process group of one test must not be seen by another.
@@ -66,5 +67,33 @@ fn a_poisoned_policy_watch_lock_is_recovered_and_its_stop_runs() {
     assert!(
         stopped.load(Ordering::SeqCst),
         "the policy watch was not stopped after its lock was poisoned"
+    );
+}
+
+// A poisoned writer lock does not stop the drop of the log from joining the writer, and the last event of the log is stored
+// when the drop returns.
+#[test]
+fn a_poisoned_writer_lock_is_recovered_and_the_writer_is_joined() {
+    let directory = tempfile::tempdir().expect("create the folder of the events");
+    let mut options = Options::service(directory.path().join("logs"), "test".to_string());
+    options.batch_interval = std::time::Duration::from_millis(20);
+    let log = Arc::new(EventLog::start(options).expect("start the writer"));
+    let path = log.path().to_path_buf();
+    let joins = log.poison_writer_for_test();
+    assert!(log.emit(
+        Level::Error,
+        "sidecar.vt.test",
+        &serde_json::json!({"index": 1})
+    ));
+    drop(log);
+    assert_eq!(
+        joins.load(Ordering::SeqCst),
+        1,
+        "drop did not join the writer"
+    );
+    let text = std::fs::read_to_string(&path).expect("read the event file");
+    assert!(
+        text.contains(r#""index":1"#),
+        "the last event is not stored: {text}"
     );
 }
