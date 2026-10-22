@@ -637,12 +637,28 @@ impl EventLog {
     }
 }
 
+impl EventLog {
+    /// Test-only: stores `stop` as the stop of the policy watch and poisons the lock that guards it, as a panic in the
+    /// holder of the lock does. The drop of the log must still run the stop.
+    #[cfg(feature = "fault-injection")]
+    pub fn poison_policy_watch_for_test(&self, stop: impl FnOnce() + Send + 'static) {
+        *self.policy_watch.lock().unwrap() = Some(Box::new(stop));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = self.policy_watch.lock().unwrap();
+            panic!("the policy watch lock is poisoned by the fault-injection feature");
+        }));
+    }
+}
+
 impl Drop for EventLog {
     fn drop(&mut self) {
         // The watch ends first, so no notification is sent to a queue that is being closed.
-        if let Ok(mut policy_watch) = self.policy_watch.lock()
-            && let Some(stop) = policy_watch.take()
-        {
+        // default: a poisoned lock still holds the stop of the watch, so the stop runs; the poisoning is reported on the standard error.
+        let mut policy_watch = self.policy_watch.lock().unwrap_or_else(|poisoned| {
+            eprintln!("event writer: the policy watch lock was poisoned; its stop runs");
+            poisoned.into_inner()
+        });
+        if let Some(stop) = policy_watch.take() {
             stop();
         }
         // The stop waits for room in the queue: the writer takes events while it runs. A writer that ended can no longer

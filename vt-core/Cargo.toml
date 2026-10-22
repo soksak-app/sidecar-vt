@@ -13,6 +13,9 @@ path = "src/vt-core.rs"
 [features]
 # 진단 build 의 engine 입력 기록(engine_trace.rs).
 diagnostics = []
+# Test-only faults (src/pty.rs `fault`, src/events.rs `poison_policy_watch_for_test`). The tests of this feature run with
+# `--features fault-injection`, which the make test target passes.
+fault-injection = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -27,6 +30,10 @@ portable-pty = "0.8"
 unicode-segmentation = "1.12"
 unicode-width = "0.2"
 sha2 = "0.10"
+
+[[test]]
+name = "fault_injection"
+required-features = ["fault-injection"]
 
 [build-dependencies]
 cc = "1"

@@ -55,6 +55,15 @@
       },
       "description": "The child of a session was reaped; status is the exit status."
     },
+    "sidecar.vt.wait_failed": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "error",
+      "fields": {
+        "error": "string"
+      },
+      "description": "Waiting for the child of a session failed. The record is stored whether or not a view is attached."
+    },
     "sidecar.vt.pty_eof": {
       "layer": "sidecar",
       "class": "lifecycle",

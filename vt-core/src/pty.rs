@@ -605,7 +605,7 @@ fn reap_child(session: Arc<Session>) {
     let process_id = session.child.lock().unwrap().child.process_id();
     let exited = process_id
         .ok_or_else(|| "PTY child has no process id".to_string())
-        .and_then(wait_for_exit);
+        .and_then(|pid| wait_for_child_exit(&session.id, pid));
     let result = {
         let mut child = session.child.lock().unwrap();
         let result = exited.and_then(|()| {
@@ -627,6 +627,13 @@ fn reap_child(session: Arc<Session>) {
     };
     session.child_reaped.notify_all();
     if let Err(error) = result {
+        // The record is stored whether or not a view is attached; a broadcast reaches only the attached views.
+        session.log.emit_for(
+            Level::Error,
+            "sidecar.vt.wait_failed",
+            Subject::session(&session.id, &[]),
+            &serde_json::json!({"error": error}),
+        );
         broadcast(
             &session,
             DaemonEvent::Error {
@@ -641,6 +648,55 @@ fn reap_child(session: Arc<Session>) {
             session_id: session.id.clone(),
         },
     );
+}
+
+/// Waits for the child of the session to exit. A build with the fault-injection feature fails the wait of a session that a test
+/// named with `fault::fail_wait_of`; the failure is taken after the child exited, because the reaper starts its wait at the
+/// start of the session.
+fn wait_for_child_exit(session_id: &str, pid: u32) -> Result<(), String> {
+    wait_for_exit(pid)?;
+    injected_wait_failure(session_id, pid)
+}
+
+#[cfg(feature = "fault-injection")]
+fn injected_wait_failure(session_id: &str, pid: u32) -> Result<(), String> {
+    if fault::take_wait_failure(session_id) {
+        return Err(format!(
+            "wait for PTY child {pid} to exit: failed by the fault-injection feature"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "fault-injection"))]
+fn injected_wait_failure(_session_id: &str, _pid: u32) -> Result<(), String> {
+    Ok(())
+}
+
+/// Test-only faults of the session reaper, compiled only with the fault-injection feature.
+#[cfg(feature = "fault-injection")]
+pub mod fault {
+    use std::sync::Mutex;
+
+    /// The identifiers of the sessions whose next wait fails.
+    static FAILING_WAITS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    /// Makes the next wait of the child of the session `session_id` fail.
+    pub fn fail_wait_of(session_id: &str) {
+        FAILING_WAITS.lock().unwrap().push(session_id.to_string());
+    }
+
+    /// Whether the next wait of the session fails; the failure is taken once.
+    pub(crate) fn take_wait_failure(session_id: &str) -> bool {
+        let mut failing = FAILING_WAITS.lock().unwrap();
+        match failing.iter().position(|id| id == session_id) {
+            Some(index) => {
+                failing.remove(index);
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 /// Records the SIGKILL that closing a session sent to its process group or its child, and what it reached.

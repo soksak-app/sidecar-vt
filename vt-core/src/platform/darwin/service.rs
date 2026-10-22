@@ -177,9 +177,15 @@ impl Drop for EndpointWatch {
 
 /// 잠금을 얻었으면 이전 service 는 끝났다. 강제 종료나 충돌로 정리하지 못하고 끝난 이전 service 의 socket 디렉터리를
 /// 지운다. 이 service 가 만드는 /tmp/spv-* 디렉터리만 지우며, 지우지 못하면 그 까닭을 보고한다.
-fn remove_previous_socket(service_dir: &Path, log: &Events) {
-    if !service_dir.join("endpoint.json").exists() {
-        return;
+pub fn remove_previous_socket(service_dir: &Path, log: &Events) {
+    // try_exists reports a failed check as an error, which is not the absence of the endpoint.
+    match service_dir.join("endpoint.json").try_exists() {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(error) => {
+            log.record_error("service", format!("previous endpoint: {error}"));
+            return;
+        }
     }
     let endpoint = match read_endpoint(service_dir) {
         Ok(endpoint) => endpoint,
