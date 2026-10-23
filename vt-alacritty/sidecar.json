@@ -1,5 +1,6 @@
 {
   "executable": "build/soksak-vt-alacritty",
+  "displayName": "soksak://sidecar/vt",
   "protocol": 1,
   "transport": "persistent",
   "events": "events.json",

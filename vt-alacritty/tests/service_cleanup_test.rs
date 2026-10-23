@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 /// The limit of a wait for a service to end. A success is judged by the process status and the folders, not by this time.
 const STALL: Duration = Duration::from_secs(60);
+const DISPLAY_NAME_TIMEOUT: Duration = Duration::from_secs(5);
+const DISPLAY_NAME: &str = "soksak://sidecar/vt";
 
 /// A service that a check started. Its drop ends the process with SIGTERM, and with SIGKILL when the process does not end
 /// within `STALL`. It removes the socket folder that the service named by its endpoint, and reports each failure as `error:`.
@@ -114,6 +116,7 @@ fn start(service_dir: &Path) -> (Service, PathBuf) {
 /// Starts a service in `service_dir` that writes its event files to `logs`.
 fn start_with_logs(service_dir: &Path, logs: &Path) -> (Service, PathBuf) {
     let child = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"))
+        .env("SOKSAK_SIDECAR_DISPLAY_NAME", DISPLAY_NAME)
         .arg("--service-dir")
         .arg(service_dir)
         .arg("--log-dir")
@@ -145,6 +148,103 @@ fn start_with_logs(service_dir: &Path, logs: &Path) -> (Service, PathBuf) {
     let socket = PathBuf::from(endpoint["socket"].as_str().expect("socket path"));
     service.socket_dir = socket.parent().map(Path::to_path_buf);
     (service, socket)
+}
+
+/// Returns the LaunchServices label of `pid`, or None while LaunchServices has no entry for it.
+fn launch_services_display_name(pid: u32) -> Result<Option<String>, String> {
+    let output = Command::new("/usr/bin/lsappinfo")
+        .arg("list")
+        .output()
+        .map_err(|error| format!("launch lsappinfo: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "lsappinfo exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let text = String::from_utf8(output.stdout)
+        .map_err(|error| format!("lsappinfo output is not UTF-8: {error}"))?;
+    let lines: Vec<_> = text.lines().collect();
+    let needle = format!("pid = {pid} ");
+    let Some(pid_line) = lines.iter().position(|line| line.contains(&needle)) else {
+        return Ok(None);
+    };
+    for line in lines[..=pid_line].iter().rev() {
+        if line.contains(" ASN:") {
+            let Some((_, rest)) = line.trim_start().split_once(") \"") else {
+                return Err(format!("lsappinfo ASN line has no quoted name: {line}"));
+            };
+            let Some((name, _)) = rest.split_once("\" ASN:") else {
+                return Err(format!("lsappinfo ASN line has no display name: {line}"));
+            };
+            return Ok(Some(name.to_string()));
+        }
+    }
+    Err(format!("lsappinfo has no ASN entry for pid {pid}"))
+}
+
+/// Waits for LaunchServices to report the requested sidecar label. LaunchServices exposes no check-in notification to this
+/// process, so the check queries its process list until the bounded deadline and judges the exact pid entry.
+fn wait_for_display_name(service: &mut Service, requested: &str) -> Result<String, String> {
+    let deadline = Instant::now() + DISPLAY_NAME_TIMEOUT;
+    loop {
+        if let Some(name) = launch_services_display_name(service.child.id())? {
+            return if name == requested {
+                Ok(name)
+            } else {
+                Err(format!(
+                    "LaunchServices name is {name:?}, want {requested:?}"
+                ))
+            };
+        }
+        if let Some(status) = service
+            .child
+            .try_wait()
+            .map_err(|error| error.to_string())?
+        {
+            return Err(format!(
+                "service ended before LaunchServices check-in: {status}"
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "LaunchServices has no process entry for pid {} after {DISPLAY_NAME_TIMEOUT:?}",
+                service.child.id()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn persistent_service_uses_its_declared_launch_services_display_name() {
+    let root = service_dir();
+    let (mut service, _) = start(&root.0);
+    let name = wait_for_display_name(&mut service, DISPLAY_NAME)
+        .unwrap_or_else(|error| panic!("service process identity: {error}"));
+    assert_eq!(name, DISPLAY_NAME);
+}
+
+#[test]
+fn missing_process_display_name_is_reported_after_the_start_record() {
+    let output = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"))
+        .env_remove("SOKSAK_SIDECAR_DISPLAY_NAME")
+        .output()
+        .expect("start the service without its required display name");
+    assert!(
+        !output.status.success(),
+        "service accepted a missing display name"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("service standard error is UTF-8");
+    assert!(
+        stderr.contains("info sidecar vt: started"),
+        "start record is missing: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("SOKSAK_SIDECAR_DISPLAY_NAME"),
+        "startup error does not name the missing environment value: {stderr:?}"
+    );
 }
 
 /// Waits for the service to end within `STALL`.

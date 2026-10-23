@@ -77,6 +77,7 @@ test("every event that a source of vt-core names is declared", () => {
 test("the manifest of the sidecar names the catalog and the release packs it", () => {
   const manifest = JSON.parse(readFileSync(join(root, "vt-alacritty/sidecar.json"), "utf8"));
   const packed = JSON.parse(readFileSync(join(root, "vt-alacritty/package.json"), "utf8")).files;
+  assert.equal(manifest.displayName, "soksak://sidecar/vt");
   assert.equal(manifest.events, "events.json");
   assert.ok(packed.includes(manifest.events), `package.json files ${JSON.stringify(packed)} lack ${manifest.events}`);
 });

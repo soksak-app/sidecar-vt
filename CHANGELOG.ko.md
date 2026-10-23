@@ -4,6 +4,8 @@
 
 ## 미배포
 
+- S73: VT service는 선언된 process display identity를 필수로 받아 runtime 초기화 전에 LaunchServices에 등록하며 executable 이름과 첫 시작 기록을 유지한다. Red: 변경 전 service에는 LaunchServices 항목이 없었고 identity 누락도 보고하지 않았다. Green: service cleanup test 8개, scoped event/records 검사, format 검사와 macOS arm64 local version 0.0.12 build가 통과한다.
+
 - S72: pre-push 훅이 `make push-check`를 실행한다. 이것은 ci workflow와 같이 (`make build` 다음의) `make test`와 push 범위의 commit message 검사를 실행한다. Red: `tests/make-targets.test.mjs`가 없는 recipe와 없는 훅에서 실패했다. Green: 시험 2개 중 2개가 통과하고, `make push-check`가 통과한다.
 
 - S69: 프로세스가 어떤 setup보다 먼저 첫 동작으로 기록을 한 번 쓴다. 표준 오류에 쓰는 text record `<UTC time> info sidecar vt: started`이고, host는 그것을 layer `sidecar`의 record로 저장하므로, 프로세스의 spawn부터 첫 기록까지의 시간이 보인다. 기록은 event file이 아니라 표준 오류로 간다. contract가 정한 file의 첫 줄은 `log.open`이기 때문이다. 깨끗하게 끝나는 실행은 이제 표준 오류에 정확히 이 기록만을 쓴다.

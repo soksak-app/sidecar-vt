@@ -11,6 +11,15 @@ SOK ?= sok
 # the catalog vt-alacritty/events.json.
 SOKSAK_EVENTS ?= pnpm exec soksak-events
 
+ifeq ($(shell uname -s),Darwin)
+PROCESS_IDENTITY_PKGCONFIG = $(shell node -e 'const path=require("node:path");const {createRequire}=require("node:module");const r=createRequire(path.join(process.cwd(),"package.json"));process.stdout.write(path.join(path.dirname(r.resolve("@soksak/native-process-identity-darwin/package.json")),"lib/pkgconfig"))')
+PROCESS_IDENTITY_ENV = PKG_CONFIG_PATH="$(PROCESS_IDENTITY_PKGCONFIG)$(if $(PKG_CONFIG_PATH),:$(PKG_CONFIG_PATH))"
+.PHONY: process-identity-check
+process-identity-check: node_modules
+	@node -e 'const fs=require("node:fs");const path=require("node:path");const {createRequire}=require("node:module");const r=createRequire(path.join(process.cwd(),"package.json"));const root=path.dirname(r.resolve("@soksak/native-process-identity-darwin/package.json"));for(const f of ["include/soksak_process_identity.h","lib/libsoksak-process-identity.a","lib/pkgconfig/soksak-process-identity.pc"]){if(!fs.existsSync(path.join(root,f)))throw new Error(`native process identity package is missing ${f}`)}'
+build: node_modules process-identity-check
+endif
+
 node_modules: package.json
 	pnpm install
 	touch node_modules
@@ -20,17 +29,17 @@ node_modules: package.json
 # compared with the engine (scripts/check-terminal-protocol-inventory.mjs).
 test: build node_modules
 	cargo fmt --all --check
-	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test --workspace
-	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -p soksak-sidecar-vt-core --features diagnostics --test engine_trace_test
-	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -p soksak-sidecar-vt-core --features fault-injection --test fault_injection
-	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo clippy --workspace --all-targets --features diagnostics -- -D warnings
+	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test --workspace
+	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -p soksak-sidecar-vt-core --features diagnostics --test engine_trace_test
+	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -p soksak-sidecar-vt-core --features fault-injection --test fault_injection
+	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo clippy --workspace --all-targets --features diagnostics -- -D warnings
 	$(SOKSAK_EVENTS) --census census.json --catalog vt-alacritty/events.json .
 	node --test tests/
 	pnpm exec soksak-records
 
 # sidecar.json 이 가리키는 vt-alacritty/build/soksak-vt-alacritty 를 쓴다.
 build:
-	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo build $(CARGO_PROFILE) -p soksak-sidecar-vt-alacritty
+	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo build $(CARGO_PROFILE) -p soksak-sidecar-vt-alacritty
 	mkdir -p vt-alacritty/build
 	cp target/$(PROFILE)/soksak-vt-alacritty vt-alacritty/build/soksak-vt-alacritty
 	cp target/$(PROFILE)/soksak-vt-replay vt-alacritty/build/soksak-vt-replay
@@ -49,10 +58,10 @@ push-check: test
 repeat:
 	@case "$(PACKAGE)" in '') echo "make repeat PACKAGE=<package> COUNT=<n> [TEST=<name>]" >&2; exit 2;; esac
 	@case "$(COUNT)" in ''|*[!0-9]*|0) echo "make repeat requires COUNT=<n> with n >= 1" >&2; exit 2;; esac
-	@MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -q -p $(PACKAGE) --no-run
+	@$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -q -p $(PACKAGE) --no-run
 	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT; run=1; while [ $$run -le $(COUNT) ]; do \
 	  started=$$(date +%s); \
-	  if ! MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -q -p $(PACKAGE) $(if $(TEST),-- --exact $(TEST)) > "$$output" 2>&1; then \
+	  if ! $(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -q -p $(PACKAGE) $(if $(TEST),-- --exact $(TEST)) > "$$output" 2>&1; then \
 	    cat "$$output"; echo "FAIL run $$run of $(COUNT) after $$(( $$(date +%s) - started )) s"; exit 1; fi; \
 	  echo "PASS run $$run of $(COUNT) in $$(( $$(date +%s) - started )) s"; run=$$((run + 1)); done
 
