@@ -1,5 +1,5 @@
 # 터미널 engine sidecar repository 의 test, build, release(docs/features.md). release 는 core 의 sok 를 쓴다.
-.PHONY: test build release repeat push-check hooks
+.PHONY: test build release candidate-release repeat push-check hooks
 
 MACOS_MINIMUM = 14.4
 PROFILE ?= debug
@@ -51,6 +51,18 @@ build:
 release: build
 	@test -n "$(OUT)" || { echo "make release OUT=<folder>" >&2; exit 2; }
 	$(SOK) sidecar release vt-alacritty $(OUT)
+
+# Build and verify the local diagnostic candidate as one operation. Ordinary release stays non-diagnostic.
+candidate-release:
+	@test -n "$(OUT)" || { echo "make candidate-release OUT=<folder>" >&2; exit 2; }
+	@test "$(shell uname -s)" = Darwin || { echo "candidate-release requires macOS" >&2; exit 2; }
+	@mkdir -p "$(OUT)"
+	@test -z "$$(find "$(OUT)" -maxdepth 1 -type f -name 'soksak-sidecar-vt-alacritty-*.tar.gz' -print -quit)" || { echo "candidate-release requires an output folder without an existing VT release" >&2; exit 2; }
+	$(MAKE) release PROFILE=$(PROFILE) FEATURES=diagnostics OUT="$(OUT)" SOK="$(SOK)"
+	@release="$$(find "$(OUT)" -maxdepth 1 -type f -name 'soksak-sidecar-vt-alacritty-*.tar.gz' -print)"; \
+	  test -n "$$release" || { echo "candidate-release found no VT release in $(OUT)" >&2; exit 2; }; \
+	  test "$$(printf '%s\n' "$$release" | wc -l | tr -d ' ')" = 1 || { echo "candidate-release found multiple VT releases in $(OUT)" >&2; exit 2; }; \
+	  SOKSAK_DIAGNOSTIC_PACKAGE_RELEASE="$$release" node --test --test-concurrency=1 tests/versions.test.mjs tests/diagnostic_package.test.mjs
 
 # The checks that a push needs: make test (which builds first), and the commit messages of the pushed range.
 # RANGE holds the commits of the pushed refs; the pre-push hook sets it, and it defaults to origin/main..HEAD.

@@ -4,6 +4,19 @@
 
 ## 미배포
 
+- S83: diagnostics가 포함된 VT 0.0.16 local candidate를 준비한다. 일반
+  `make release`는 non-diagnostic 상태를 유지하고, `make candidate-release`는
+  `FEATURES=diagnostics`를 강제해 packaged binary smoke check를 실행한다.
+  Red: `SOKSAK_VT_TRACE_DIR`를 설정해도 변경 없는 0.0.15 archive는
+  `{generation:1,raster:1,sequence:1}` frame과 `render:null`을 보냈다. Green:
+  0.0.16 archive는 실제 draw frame의 render metadata, 제어된 PTY 출력, 그
+  출력이 기록된 engine trace를 확인한다. Version 및 package smoke 검사는
+  2/2 통과하고 locked Cargo metadata와 Node syntax 검사도 통과한다. Local
+  darwin-arm64 archive SHA-256은
+  `f022206b32e5b44f03a7f236bad5b47f26c6c94fc4144039359f6ed28491bb85`다.
+  Build는 macOS 최소 버전 14.4를 사용했고 compiler warning은 없었다. GUI,
+  native input, application launch, public release는 실행하지 않았다.
+
 - S82: S81을 담은 VT 0.0.15 local candidate를 준비한다. Package
   metadata, 두 Rust crate, Cargo.lock이 0.0.15를 선언한다.
   `tests/versions.test.mjs` 1/1과 locked Cargo metadata가 통과한다.

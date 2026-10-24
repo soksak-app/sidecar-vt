@@ -4,6 +4,19 @@
 
 ## Unreleased
 
+- S83: Prepare a local VT 0.0.16 diagnostics candidate. Ordinary `make release`
+  remains non-diagnostic; `make candidate-release` forces
+  `FEATURES=diagnostics` and runs the packaged-binary smoke check. Red: the
+  unchanged 0.0.15 archive with `SOKSAK_VT_TRACE_DIR` set sent frame
+  `{generation:1,raster:1,sequence:1}` with `render:null`. Green: the 0.0.16
+  archive reports render metadata for its drawn frame, renders controlled PTY
+  output, and records that output in the engine trace. The version and package
+  smoke checks pass 2/2; locked Cargo metadata and Node syntax checks pass. The
+  local darwin-arm64 archive SHA-256 is
+  `f022206b32e5b44f03a7f236bad5b47f26c6c94fc4144039359f6ed28491bb85`. The
+  build uses macOS minimum 14.4 and emits no compiler warnings. No GUI, native
+  input, application launch, or public release was performed.
+
 - S82: Prepare the local VT 0.0.15 candidate containing S81. Package
   metadata, both Rust crates, and Cargo.lock declare 0.0.15;
   `tests/versions.test.mjs` passes 1/1 and locked Cargo metadata resolves.
