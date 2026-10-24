@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- S77.3: Restore compilation of the VT core library test target by initializing the new detach request ledger in four protocol test fixtures. Red: unchanged-source compilation failed with E0063 at all four initializers. Green: the same command compiles (its requested test name is not present, so it selects 0 tests); all 19 protocol tests and formatting checks pass.
+
 - S77.2: Document the local native-package install and link order. Dependency-sensitive checks run before pnpm local linking; `require.resolve` and required package files are checked before build and release. Keep generated workspace/lock overrides out of commits and preserve the archive before later pnpm resolution. The documented link, build, and release sequence resolves core package 0.0.21 and produces the same local VT 0.0.13 archive hash. No deployment pin or public release changed.
 
 - S77.1: Return declaration read, JSON parse, and display-name validation failures through the build script's `Result` path with their `sidecar.json` context. Red: the unchanged event census rejected all three `unwrap_or_else` panic sites because they had no reason annotation. Green: the census passes; three Cargo build-script interface cases preserve explicit failures for a missing declaration, invalid JSON, and missing `displayName`; the valid macOS arm64 package build passes with the local core native package. `cargo fmt --all --check` and records checks pass. The first test fixture lacked a Cargo target and stopped before the script; the fixture was corrected and all three cases passed.
