@@ -242,7 +242,21 @@ struct OutputSink {
     detachable: bool,
     /// The request that the replies of this sink answer; a sink of events has none.
     request: Option<Arc<Request>>,
+    submission_observer: Option<OutputSubmissionObserver>,
 }
+
+/// Submission stages reported to an explicitly supplied output observer.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OutputSubmissionStage {
+    Attempt,
+    Queued,
+    Failed,
+}
+
+/// Test observation hook for messages at the connection queue boundary.
+#[doc(hidden)]
+pub type OutputSubmissionObserver = Arc<dyn Fn(OutputSubmissionStage, &str) + Send + Sync>;
 
 impl OutputSink {
     fn direct(connection: Connection) -> Self {
@@ -250,6 +264,7 @@ impl OutputSink {
             connection: Arc::new(tokio::sync::Mutex::new(Some(connection))),
             detachable: false,
             request: None,
+            submission_observer: None,
         }
     }
 
@@ -260,6 +275,7 @@ impl OutputSink {
             connection: Arc::new(tokio::sync::Mutex::new(Some(connection))),
             detachable: true,
             request: None,
+            submission_observer: None,
         }
     }
 
@@ -269,6 +285,11 @@ impl OutputSink {
             request: Some(request),
             ..self.clone()
         }
+    }
+
+    fn with_submission_observer(mut self, observer: Option<OutputSubmissionObserver>) -> Self {
+        self.submission_observer = observer;
+        self
     }
 
     /// Sends the reply to the request of this sink: the line gets the `cids` of the request and the reply is recorded before
@@ -288,20 +309,54 @@ impl OutputSink {
     async fn send_carried(&self, message: String) -> Result<Option<Arc<TransferStore>>, ()> {
         let connection = self.connection.lock().await.clone();
         match connection {
-            Some(connection) => match connection.sender.send(message).await {
-                Ok(()) => Ok(Some(connection.transfers)),
-                Err(_) if self.detachable => {
-                    let mut current = self.connection.lock().await;
-                    if current
-                        .as_ref()
-                        .is_some_and(|current| current.sender.same_channel(&connection.sender))
-                    {
-                        *current = None;
-                    }
-                    Ok(None)
+            Some(connection) => {
+                let observed_message = self.submission_observer.as_ref().map(|_| message.clone());
+                if let Some(observer) = &self.submission_observer {
+                    observer(OutputSubmissionStage::Attempt, &message);
                 }
-                Err(_) => Err(()),
-            },
+                match connection.sender.send(message).await {
+                    Ok(()) => {
+                        if let Some(observer) = &self.submission_observer {
+                            observer(
+                                OutputSubmissionStage::Queued,
+                                observed_message
+                                    .as_deref()
+                                    .expect("observer message is present"),
+                            );
+                        }
+                        Ok(Some(connection.transfers))
+                    }
+                    Err(_) if self.detachable => {
+                        if let Some(observer) = &self.submission_observer {
+                            observer(
+                                OutputSubmissionStage::Failed,
+                                observed_message
+                                    .as_deref()
+                                    .expect("observer message is present"),
+                            );
+                        }
+                        let mut current = self.connection.lock().await;
+                        if current
+                            .as_ref()
+                            .is_some_and(|current| current.sender.same_channel(&connection.sender))
+                        {
+                            *current = None;
+                        }
+                        Ok(None)
+                    }
+                    Err(_) => {
+                        if let Some(observer) = &self.submission_observer {
+                            observer(
+                                OutputSubmissionStage::Failed,
+                                observed_message
+                                    .as_deref()
+                                    .expect("observer message is present"),
+                            );
+                        }
+                        Err(())
+                    }
+                }
+            }
             None => Ok(None),
         }
     }
@@ -1004,6 +1059,7 @@ enum SurfaceCommand {
     Input {
         bytes: Vec<u8>,
         cids: Vec<String>,
+        compose: Option<Option<Preedit>>,
     },
     InputKeys {
         keys: Vec<InputKey>,
@@ -3023,13 +3079,18 @@ async fn surface_task(
                             return;
                         }
                     }
-                    SurfaceCommand::Input { bytes, cids } => {
+                    SurfaceCommand::Input { bytes, cids, compose } => {
+                        let has_compose = compose.is_some();
+                        if let Some(next) = compose {
+                            preedit = next;
+                        }
                         cursor_activity = Instant::now();
                         last_cursor_frame = None;
                         // 입력은 뷰포트를 가장 새 출력으로 되돌린 뒤 쓴다.
-                        if inputs.scroll_to_newest(engine.as_mut(), session_id.as_deref()) {
+                        let scrolled = inputs.scroll_to_newest(engine.as_mut(), session_id.as_deref());
+                        if scrolled {
                             refresh_inline_image_positions(&mut engine, &mut image_state);
-                            if !hold_while_presenting(&mut image_state) {
+                            if !has_compose && !hold_while_presenting(&mut image_state) {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
                                 if let Some(state) = image_state.as_mut() {
                                     if !present_screen(&surface_id, &screen, state, &output_tx, "input", &log, inputs.sequence).await { return; }
@@ -3065,6 +3126,12 @@ async fn surface_task(
                             if output_tx.reply(response).await.is_err() {
                                 return;
                             }
+                        }
+                        if has_compose && !hold_while_presenting(&mut image_state) {
+                            let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
+                            if let Some(state) = image_state.as_mut() {
+                                if !present_screen(&surface_id, &screen, state, &output_tx, "input", &log, inputs.sequence).await { return; }
+                            } else if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, inputs.sequence, image_state.as_ref()).await { return; }
                         }
                     }
                     SurfaceCommand::Paste { text, cids } => {
@@ -3868,6 +3935,39 @@ where
             owner: String::new(),
             log,
             detach_requests: Arc::new(ImageDetachRequestLedger::default()),
+            submission_observer: None,
+        },
+    )
+    .await
+}
+
+/// Runs the service with an observer called at the connection queue boundary.
+/// This interface is used by owning contract tests; normal services use `serve`.
+#[doc(hidden)]
+pub async fn serve_with_submission_observer<R, W>(
+    engine_factory: Arc<dyn Fn() -> Box<dyn Engine> + Send + Sync>,
+    reader: R,
+    writer: W,
+    session_port_factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync>,
+    log: Events,
+    observer: OutputSubmissionObserver,
+) -> std::io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    serve_with_options(
+        reader,
+        writer,
+        ServeOptions {
+            engine_factory,
+            session_port_factory,
+            owner_close: None,
+            registry: None,
+            owner: String::new(),
+            log,
+            detach_requests: Arc::new(ImageDetachRequestLedger::default()),
+            submission_observer: Some(observer),
         },
     )
     .await
@@ -3904,6 +4004,7 @@ where
             registry: Some(owner.registry),
             owner: owner.owner,
             log: owner.log,
+            submission_observer: None,
         },
     )
     .await
@@ -3918,6 +4019,7 @@ struct ServeOptions {
     owner: String,
     log: Events,
     detach_requests: Arc<ImageDetachRequestLedger>,
+    submission_observer: Option<OutputSubmissionObserver>,
 }
 
 async fn serve_with_options<R, W>(
@@ -3937,7 +4039,8 @@ where
         OutputSink::detachable(connection)
     } else {
         OutputSink::direct(connection)
-    };
+    }
+    .with_submission_observer(options.submission_observer.clone());
 
     let output_trace = options.log.clone();
     let input_task = async {
@@ -3968,6 +4071,7 @@ where
         owner,
         log,
         detach_requests,
+        submission_observer: _,
     } = options;
     // 연결 순번. 같은 소유자의 연결을 trace 에서 구별한다.
     static CONNECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -4383,192 +4487,176 @@ where
                                 }
                             }
                             "input" => {
-                                if let Some(value) = body.get("compose") {
-                                    let parsed = if value.is_null() {
-                                        Ok(None)
-                                    } else {
-                                        serde_json::from_value::<Preedit>(value.clone())
+                                let compose = match body.get("compose") {
+                                    None => None,
+                                    Some(Value::Null) => Some(None),
+                                    Some(value) => {
+                                        match serde_json::from_value::<Preedit>(value.clone())
                                             .map_err(|error| error.to_string())
                                             .and_then(|preedit| {
                                                 preedit.validate_marked_range().map(|()| preedit)
-                                            })
-                                            .map(Some)
-                                    };
-                                    match parsed {
-                                        Ok(preedit) => {
-                                            if tx
-                                                .send(SurfaceCommand::Compose { preedit })
-                                                .await
-                                                .is_err()
-                                            {
-                                                break;
+                                            }) {
+                                            Ok(preedit) => Some(Some(preedit)),
+                                            Err(error) => {
+                                                let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": format!("compose: {error}")}});
+                                                if reply_tx.reply(response).await.is_err() {
+                                                    break;
+                                                }
+                                                continue;
                                             }
                                         }
-                                        Err(error) => {
-                                            let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": format!("compose: {error}")}});
+                                    }
+                                };
+                                let focus = match body.get("focus") {
+                                    None => None,
+                                    Some(value) => {
+                                        match value.get("focused").and_then(Value::as_bool) {
+                                            Some(focused) => Some(focused),
+                                            None => {
+                                                let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "focus.focused must be boolean"}});
+                                                if reply_tx.reply(response).await.is_err() {
+                                                    break;
+                                                }
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                };
+                                let command = match body.get("command") {
+                                    None => None,
+                                    Some(value) => match value
+                                        .get("selector")
+                                        .and_then(Value::as_str)
+                                    {
+                                        Some(selector) => match key_for_native_command(selector) {
+                                            Ok(key) => Some(key),
+                                            Err(reason) => {
+                                                let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": reason}});
+                                                if reply_tx.reply(response).await.is_err() {
+                                                    break;
+                                                }
+                                                continue;
+                                            }
+                                        },
+                                        None => {
+                                            let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "command.selector must be string"}});
                                             if reply_tx.reply(response).await.is_err() {
                                                 break;
                                             }
+                                            continue;
                                         }
-                                    }
-                                }
-                                if let Some(value) = body.get("focus") {
-                                    if let Some(focused) =
-                                        value.get("focused").and_then(Value::as_bool)
-                                    {
-                                        if tx
-                                            .send(SurfaceCommand::Focus {
-                                                focused,
-                                                cids: cids.clone(),
-                                            })
-                                            .await
-                                            .is_err()
-                                        {
-                                            break;
+                                    },
+                                };
+                                let bytes = match body.get("bytes") {
+                                    None => None,
+                                    Some(Value::String(encoded)) => match base64_decode(encoded) {
+                                        Ok(bytes) => Some(bytes),
+                                        Err(error) => {
+                                            let response = json!({"surface": surface_id, "body": {"error": format!("Base64 error: {error}")}});
+                                            if reply_tx.reply(response).await.is_err() {
+                                                break;
+                                            }
+                                            continue;
                                         }
-                                    } else {
-                                        let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "focus.focused must be boolean"}});
+                                    },
+                                    Some(_) => {
+                                        let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "bytes must be a string"}});
                                         if reply_tx.reply(response).await.is_err() {
                                             break;
                                         }
+                                        continue;
                                     }
-                                }
-                                if let Some(value) = body.get("command") {
-                                    if let Some(selector) =
-                                        value.get("selector").and_then(Value::as_str)
-                                    {
-                                        match key_for_native_command(selector) {
-                                            Ok(key) => {
-                                                if tx
-                                                    .send(SurfaceCommand::InputKeys {
-                                                        keys: vec![key],
-                                                        cids: cids.clone(),
-                                                    })
-                                                    .await
-                                                    .is_err()
-                                                {
+                                };
+                                let keys = match body.get("keys") {
+                                    None => None,
+                                    Some(Value::Array(keys)) => {
+                                        match serde_json::from_value::<Vec<InputKey>>(Value::Array(
+                                            keys.clone(),
+                                        )) {
+                                            Ok(keys) => Some(keys),
+                                            Err(error) => {
+                                                let response = json!({"surface": surface_id, "body": {"error": format!("Keys parse error: {error}")}});
+                                                if reply_tx.reply(response).await.is_err() {
                                                     break;
                                                 }
-                                            }
-                                            Err(reason) => {
-                                                let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": reason}});
-                                                if output_tx
-                                                    .send(response.to_string())
-                                                    .await
-                                                    .is_err()
-                                                {
-                                                    break;
-                                                }
+                                                continue;
                                             }
                                         }
-                                    } else {
-                                        let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "command.selector must be string"}});
+                                    }
+                                    Some(_) => {
+                                        let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "keys must be an array"}});
                                         if reply_tx.reply(response).await.is_err() {
                                             break;
                                         }
+                                        continue;
                                     }
-                                }
-                                // compose/focus/command가 있으면 bytes와 keys는 계속 선택 사항이다.
-                                let has_bytes = body.get("bytes").is_some();
-                                let has_keys = body.get("keys").is_some();
-                                let has_native_input = body.get("compose").is_some()
-                                    || body.get("focus").is_some()
-                                    || body.get("command").is_some();
-
-                                if !has_bytes && !has_keys && !has_native_input {
-                                    let response = json!({
-                                        "surface": surface_id,
-                                        "body": {"error": "invalidParams", "reason": "input requires bytes or keys field"}
-                                    });
+                                };
+                                if bytes.is_none()
+                                    && keys.is_none()
+                                    && compose.is_none()
+                                    && focus.is_none()
+                                    && command.is_none()
+                                {
+                                    let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "input requires bytes or keys field"}});
                                     if reply_tx.reply(response).await.is_err() {
                                         break;
                                     }
-                                } else {
-                                    // bytes를 먼저 처리한다(있는 경우)
-                                    if let Some(bytes_b64) =
-                                        body.get("bytes").and_then(|v| v.as_str())
-                                    {
-                                        match base64_decode(bytes_b64) {
-                                            Ok(bytes) => {
-                                                if tx
-                                                    .send(SurfaceCommand::Input {
-                                                        bytes,
-                                                        cids: cids.clone(),
-                                                    })
-                                                    .await
-                                                    .is_err()
-                                                {
-                                                    break;
-                                                }
-                                            }
-                                            Err(e) => {
-                                                let response = json!({
-                                                    "surface": surface_id,
-                                                    "body": {"error": format!("Base64 error: {}", e)}
-                                                });
-                                                if output_tx
-                                                    .send(response.to_string())
-                                                    .await
-                                                    .is_err()
-                                                {
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    } else if has_bytes {
-                                        // bytes field가 있지만 string이 아니다
-                                        let response = json!({
-                                            "surface": surface_id,
-                                            "body": {"error": "invalidParams", "reason": "bytes must be a string"}
-                                        });
-                                        if reply_tx.reply(response).await.is_err() {
-                                            break;
-                                        }
-                                    }
+                                    continue;
+                                }
 
-                                    // 그다음 keys를 처리한다(있는 경우)
-                                    if let Some(keys_arr) =
-                                        body.get("keys").and_then(|v| v.as_array())
-                                    {
-                                        match serde_json::from_value::<Vec<InputKey>>(Value::Array(
-                                            keys_arr.clone(),
-                                        )) {
-                                            Ok(keys) => {
-                                                if tx
-                                                    .send(SurfaceCommand::InputKeys {
-                                                        keys,
-                                                        cids: cids.clone(),
-                                                    })
-                                                    .await
-                                                    .is_err()
-                                                {
-                                                    break;
-                                                }
-                                            }
-                                            Err(e) => {
-                                                let response = json!({
-                                                    "surface": surface_id,
-                                                    "body": {"error": format!("Keys parse error: {}", e)}
-                                                });
-                                                if output_tx
-                                                    .send(response.to_string())
-                                                    .await
-                                                    .is_err()
-                                                {
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    } else if has_keys {
-                                        // keys field가 있지만 array가 아니다
-                                        let response = json!({
-                                            "surface": surface_id,
-                                            "body": {"error": "invalidParams", "reason": "keys must be an array"}
-                                        });
-                                        if reply_tx.reply(response).await.is_err() {
-                                            break;
-                                        }
-                                    }
+                                if let Some(compose) = compose.clone()
+                                    && bytes.is_none()
+                                    && tx
+                                        .send(SurfaceCommand::Compose { preedit: compose })
+                                        .await
+                                        .is_err()
+                                {
+                                    break;
+                                }
+                                if let Some(focused) = focus
+                                    && tx
+                                        .send(SurfaceCommand::Focus {
+                                            focused,
+                                            cids: cids.clone(),
+                                        })
+                                        .await
+                                        .is_err()
+                                {
+                                    break;
+                                }
+                                if let Some(command) = command
+                                    && tx
+                                        .send(SurfaceCommand::InputKeys {
+                                            keys: vec![command],
+                                            cids: cids.clone(),
+                                        })
+                                        .await
+                                        .is_err()
+                                {
+                                    break;
+                                }
+                                if let Some(bytes) = bytes
+                                    && tx
+                                        .send(SurfaceCommand::Input {
+                                            bytes,
+                                            cids: cids.clone(),
+                                            compose,
+                                        })
+                                        .await
+                                        .is_err()
+                                {
+                                    break;
+                                }
+                                if let Some(keys) = keys
+                                    && tx
+                                        .send(SurfaceCommand::InputKeys {
+                                            keys,
+                                            cids: cids.clone(),
+                                        })
+                                        .await
+                                        .is_err()
+                                {
+                                    break;
                                 }
                             }
                             "theme" => {

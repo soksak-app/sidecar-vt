@@ -4,11 +4,12 @@ mod events_test;
 mod tracked_session_port;
 
 use async_trait::async_trait;
+use soksak_sidecar_vt_core::platform::darwin::frame::{Frame, metrics};
 /// fake daemon을 사용하는 serve contract 통합 테스트
 use soksak_sidecar_vt_core::protocol::{
-    Cell, Cursor, CursorShape, DaemonEvent, Engine, EngineEvent, Modes, PersistentOwner,
-    PersistentRegistry, Screen, SessionPort, ShellRequest, serve as serve_with_events,
-    serve_with_registry,
+    Cell, Cursor, CursorShape, DaemonEvent, Engine, EngineEvent, Modes, OutputSubmissionObserver,
+    OutputSubmissionStage, PersistentOwner, PersistentRegistry, Screen, SessionPort, ShellRequest,
+    serve as serve_with_events, serve_with_registry, serve_with_submission_observer,
 };
 use soksak_sidecar_vt_core::pty::PtyMeasurement;
 use soksak_sidecar_vt_core::{
@@ -67,6 +68,7 @@ struct MockEngine {
     selection: Option<String>,
     selected_cells: Arc<Mutex<Vec<(u16, u16)>>>,
     viewport: Arc<Mutex<Vec<String>>>,
+    cursor_at_end: bool,
 }
 
 impl MockEngine {
@@ -81,6 +83,7 @@ impl MockEngine {
             selection: Some("selected".to_string()),
             selected_cells: Arc::new(Mutex::new(Vec::new())),
             viewport: Arc::new(Mutex::new(Vec::new())),
+            cursor_at_end: false,
         }
     }
 
@@ -95,7 +98,13 @@ impl MockEngine {
             selection: Some("selected".to_string()),
             selected_cells: Arc::new(Mutex::new(Vec::new())),
             viewport: Arc::new(Mutex::new(Vec::new())),
+            cursor_at_end: false,
         }
+    }
+
+    fn with_cursor_at_end(mut self) -> Self {
+        self.cursor_at_end = true;
+        self
     }
 }
 
@@ -223,6 +232,12 @@ impl Engine for MockEngine {
                         ..Default::default()
                     };
                     row.push(cell);
+                    if self.cursor_at_end && width == 2 {
+                        row.push(Cell {
+                            width: 0,
+                            ..Cell::default()
+                        });
+                    }
                 }
                 if !row.is_empty() {
                     row.truncate(usize::from(self.cols));
@@ -233,12 +248,27 @@ impl Engine for MockEngine {
         // A terminal shows the last `rows` lines; the screen message holds exactly `rows` x `cols` cells.
         let hidden = lines.len().saturating_sub(usize::from(self.rows));
         lines.drain(..hidden);
+        let (cursor_row, cursor_col) = if self.cursor_at_end {
+            lines
+                .last()
+                .map(|line| {
+                    let col = line
+                        .iter()
+                        .map(|cell| u16::from(cell.width))
+                        .sum::<u16>()
+                        .min(self.cols.saturating_sub(1));
+                    (lines.len().saturating_sub(1) as u16, col)
+                })
+                .unwrap_or((0, 0))
+        } else {
+            (0, 0)
+        };
         Screen {
             cols: self.cols,
             rows: self.rows,
             cursor: Cursor {
-                col: 0,
-                row: 0,
+                col: cursor_col,
+                row: cursor_row,
                 shape: CursorShape::Block,
                 visible: true,
                 blinking: false,
@@ -313,10 +343,24 @@ struct Calls {
     opens: Vec<(u16, u16)>,
     directories: Vec<Option<String>>,
     writes: Vec<(String, Vec<u8>)>,
+    writes_completed: usize,
+    echoes_enqueued: usize,
+    timeline: Vec<TimelineEntry>,
     resizes: Vec<(String, u16, u16)>,
     detaches: Vec<String>,
     closes: Vec<String>,
     pendings: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct TimelineEntry {
+    kind: &'static str,
+    frame_sequence: Option<u64>,
+    glyphs: Option<usize>,
+    preedit: Option<String>,
+    writes_started: usize,
+    writes_completed: usize,
+    echoes_enqueued: usize,
 }
 
 struct FakeSessionPort {
@@ -324,6 +368,7 @@ struct FakeSessionPort {
     calls: Arc<Mutex<Calls>>,
     event_tx: mpsc::UnboundedSender<DaemonEvent>,
     event_rx: Arc<tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<DaemonEvent>>>>,
+    echo_input: std::sync::atomic::AtomicBool,
 }
 
 impl FakeSessionPort {
@@ -334,6 +379,7 @@ impl FakeSessionPort {
             calls,
             event_tx,
             event_rx: Arc::new(tokio::sync::Mutex::new(Some(event_rx))),
+            echo_input: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -342,6 +388,11 @@ impl FakeSessionPort {
             self.event_tx.send(event).is_ok(),
             "fake session event receiver closed"
         );
+    }
+
+    fn echo_input(&self) {
+        self.echo_input
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -355,10 +406,24 @@ impl SessionPort for FakeSessionPort {
     }
 
     async fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
-        {
+        let sequence = {
             let mut calls = self.calls.lock().unwrap();
             calls.writes.push((session_id.to_string(), data.to_vec()));
-        }
+            let sequence = calls.writes.len() as i64;
+            let writes_started = calls.writes.len();
+            let writes_completed = calls.writes_completed;
+            let echoes_enqueued = calls.echoes_enqueued;
+            calls.timeline.push(TimelineEntry {
+                kind: "write-start",
+                frame_sequence: None,
+                glyphs: None,
+                preedit: None,
+                writes_started,
+                writes_completed,
+                echoes_enqueued,
+            });
+            sequence
+        };
         if data == b"\x1b]7;file:///tmp/project\x07" {
             let _ = self.event_tx.send(DaemonEvent::Output {
                 session_id: self.session_id.clone(),
@@ -367,6 +432,44 @@ impl SessionPort for FakeSessionPort {
                 truncated: false,
             });
         }
+        if self.echo_input.load(std::sync::atomic::Ordering::SeqCst) {
+            self.event_tx
+                .send(DaemonEvent::Output {
+                    session_id: self.session_id.clone(),
+                    data: data.to_vec(),
+                    sequence,
+                    truncated: false,
+                })
+                .expect("immediate fake PTY echo is observed");
+            let mut calls = self.calls.lock().unwrap();
+            calls.echoes_enqueued += 1;
+            let writes_started = calls.writes.len();
+            let writes_completed = calls.writes_completed;
+            let echoes_enqueued = calls.echoes_enqueued;
+            calls.timeline.push(TimelineEntry {
+                kind: "echo-enqueued",
+                frame_sequence: None,
+                glyphs: None,
+                preedit: None,
+                writes_started,
+                writes_completed,
+                echoes_enqueued,
+            });
+        }
+        let mut calls = self.calls.lock().unwrap();
+        calls.writes_completed += 1;
+        let writes_started = calls.writes.len();
+        let writes_completed = calls.writes_completed;
+        let echoes_enqueued = calls.echoes_enqueued;
+        calls.timeline.push(TimelineEntry {
+            kind: "write-complete",
+            frame_sequence: None,
+            glyphs: None,
+            preedit: None,
+            writes_started,
+            writes_completed,
+            echoes_enqueued,
+        });
         Ok(())
     }
 
@@ -726,6 +829,304 @@ async fn each_native_preedit_update_presents_a_fresh_terminal_frame() {
 }
 
 #[tokio::test]
+async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo() {
+    let engine_factory =
+        Arc::new(|| Box::new(MockEngine::new().with_cursor_at_end()) as Box<dyn Engine>);
+
+    // The split-request control starts from six committed glyphs plus two marked glyphs.
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new("split-ime".into(), calls.clone()));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory.clone(), serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let initial = next_image_envelope(&mut lines).await;
+    let mut sequence = initial["body"]["image"]["sequence"].as_u64().unwrap();
+    acknowledge_image(&mut to_serve, &initial).await;
+    let mut acknowledgements = 0;
+    port.echo_input();
+    to_serve
+        .write_all(
+            br#"{"surface":"s1","body":{"operation":"input","bytes":"44WP44WP44WP44WP44WP44WP"}}
+"#,
+        )
+        .await
+        .unwrap();
+    let (next, glyphs, _, _, _, _, _) = next_measured_frame_after(
+        &mut lines,
+        &mut to_serve,
+        sequence,
+        &mut acknowledgements,
+        &calls,
+    )
+    .await;
+    assert_eq!(
+        glyphs, 6,
+        "the six-character input document is the controlled baseline"
+    );
+    sequence = next;
+    to_serve.write_all("{\"surface\":\"s1\",\"body\":{\"operation\":\"input\",\"compose\":{\"text\":\"ㅏㅏ\",\"markedRange\":{\"location\":0,\"length\":2},\"selectedRange\":{\"location\":2,\"length\":0},\"replacementRange\":null,\"attributed\":false}}}\n".as_bytes()).await.unwrap();
+    let (next, glyphs, _, _, _, _, _) = next_measured_frame_after(
+        &mut lines,
+        &mut to_serve,
+        sequence,
+        &mut acknowledgements,
+        &calls,
+    )
+    .await;
+    assert_eq!(
+        glyphs, 8,
+        "the marked suffix adds two glyphs to the six-character document"
+    );
+    sequence = next;
+    to_serve
+        .write_all(
+            br#"{"surface":"s1","body":{"operation":"input","bytes":"44WP44WP"}}
+"#,
+        )
+        .await
+        .unwrap();
+    let (_, split_echo_glyphs, _, _, _, _, screen) = next_measured_frame_after(
+        &mut lines,
+        &mut to_serve,
+        sequence,
+        &mut acknowledgements,
+        &calls,
+    )
+    .await;
+    assert_eq!(
+        split_echo_glyphs, 10,
+        "separate byte delivery and immediate echo retain old preedit glyphs: {screen}"
+    );
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+
+    // A fresh surface starts from the same six-plus-two state for the combined request.
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new("combined-ime".into(), calls.clone()));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let observer_calls = calls.clone();
+    let observer: OutputSubmissionObserver = Arc::new(move |stage, message| {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(message) else {
+            return;
+        };
+        let body = &value["body"];
+        let is_frame = body["event"] == "screen";
+        let (frame_sequence, glyphs, preedit) = if is_frame {
+            (
+                body["frame"]["sequence"].as_u64(),
+                Some(rendered_glyph_count(&value)),
+                body["cursor"]["preedit"]["text"]
+                    .as_str()
+                    .map(str::to_owned),
+            )
+        } else {
+            (None, None, None)
+        };
+        let kind = match (stage, is_frame, body["ack"] == true) {
+            (OutputSubmissionStage::Attempt, true, _) => "frame-attempt",
+            (OutputSubmissionStage::Queued, true, _) => "frame-queued",
+            (OutputSubmissionStage::Failed, true, _) => "frame-failed",
+            (OutputSubmissionStage::Attempt, false, true) => "ack-attempt",
+            (OutputSubmissionStage::Queued, false, true) => "ack-queued",
+            (OutputSubmissionStage::Failed, false, true) => "ack-failed",
+            (OutputSubmissionStage::Attempt, false, false) => "output-attempt",
+            (OutputSubmissionStage::Queued, false, false) => "output-queued",
+            (OutputSubmissionStage::Failed, false, false) => "output-failed",
+        };
+        let mut calls = observer_calls.lock().unwrap();
+        let writes_started = calls.writes.len();
+        let writes_completed = calls.writes_completed;
+        let echoes_enqueued = calls.echoes_enqueued;
+        calls.timeline.push(TimelineEntry {
+            kind,
+            frame_sequence,
+            glyphs,
+            preedit,
+            writes_started,
+            writes_completed,
+            echoes_enqueued,
+        });
+    });
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve_with_submission_observer(
+        engine_factory,
+        serve_in,
+        serve_out,
+        factory,
+        events_test::TestEvents::new().handle(),
+        observer,
+    ));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+    to_serve.write_all(br#"{"surface":"s2","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s2","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let initial = next_image_envelope(&mut lines).await;
+    let mut sequence = initial["body"]["image"]["sequence"].as_u64().unwrap();
+    acknowledge_image(&mut to_serve, &initial).await;
+    let mut acknowledgements = 0;
+    port.echo_input();
+    to_serve
+        .write_all(
+            br#"{"surface":"s2","body":{"operation":"input","bytes":"44WP44WP44WP44WP44WP44WP"}}
+"#,
+        )
+        .await
+        .unwrap();
+    let (next, glyphs, _, _, _, _, _) = next_measured_frame_after(
+        &mut lines,
+        &mut to_serve,
+        sequence,
+        &mut acknowledgements,
+        &calls,
+    )
+    .await;
+    assert_eq!(
+        glyphs, 6,
+        "the combined case begins from the same six committed glyphs"
+    );
+    sequence = next;
+    to_serve.write_all("{\"surface\":\"s2\",\"body\":{\"operation\":\"input\",\"compose\":{\"text\":\"ㅏㅏ\",\"markedRange\":{\"location\":0,\"length\":2},\"selectedRange\":{\"location\":2,\"length\":0},\"replacementRange\":null,\"attributed\":false}}}\n".as_bytes()).await.unwrap();
+    let (next, glyphs, _, _, _, _, _) = next_measured_frame_after(
+        &mut lines,
+        &mut to_serve,
+        sequence,
+        &mut acknowledgements,
+        &calls,
+    )
+    .await;
+    assert_eq!(
+        glyphs, 8,
+        "the combined case has the same two-glyph marked suffix"
+    );
+    sequence = next;
+
+    let sequence_before_combined = sequence;
+    let timeline_start_before_combined = calls.lock().unwrap().timeline.len();
+    to_serve.write_all(br#"{"surface":"s2","body":{"operation":"input","bytes":"44WP44WP","compose":{"text":"","markedRange":null,"selectedRange":{"location":0,"length":0},"replacementRange":null,"attributed":false}}}
+"#).await.unwrap();
+    let mut frames = Vec::new();
+    loop {
+        let (frame_sequence, glyphs, ack_count, writes, completed, echoes, screen) =
+            next_measured_frame_after(
+                &mut lines,
+                &mut to_serve,
+                sequence,
+                &mut acknowledgements,
+                &calls,
+            )
+            .await;
+        frames.push((
+            frame_sequence,
+            glyphs,
+            ack_count,
+            writes,
+            completed,
+            echoes,
+            screen["body"]["cursor"]["preedit"]["text"].clone(),
+        ));
+        sequence = frame_sequence;
+        if glyphs >= 8 && screen["body"]["cursor"]["preedit"]["text"] == "" {
+            break;
+        }
+    }
+    assert!(
+        !frames.is_empty(),
+        "combined input produced no measured image: {frames:?}"
+    );
+    assert!(
+        frames.iter().all(|frame| frame.1 <= 8),
+        "combined input must not render the retained preedit twice: split-request baseline={split_echo_glyphs}, frames={frames:?}"
+    );
+    assert_eq!(
+        frames.last().unwrap().1,
+        8,
+        "the echoed commit is eight visible glyphs with no preedit overlay: {frames:?}"
+    );
+    let timeline = calls.lock().unwrap().timeline[timeline_start_before_combined..].to_vec();
+    let combined_write_start = timeline
+        .iter()
+        .position(|event| event.kind == "write-start" && event.writes_started == 2)
+        .expect("combined bytes write start is recorded");
+    let combined_echo = timeline
+        .iter()
+        .position(|event| event.kind == "echo-enqueued" && event.echoes_enqueued == 2)
+        .expect("the fake immediately enqueues its PTY echo");
+    let combined_write_complete = timeline
+        .iter()
+        .position(|event| event.kind == "write-complete" && event.writes_completed == 2)
+        .expect("combined bytes write completion is recorded");
+    assert!(
+        combined_write_start < combined_echo && combined_echo < combined_write_complete,
+        "the fake echo is enqueued during the combined write, before its completion: {timeline:?}"
+    );
+    let resulting_frames = timeline
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| {
+            event.kind == "frame-attempt"
+                && event
+                    .frame_sequence
+                    .is_some_and(|frame| frame > sequence_before_combined)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !resulting_frames.is_empty(),
+        "combined request submits no screen frame: {timeline:?}"
+    );
+    assert!(
+        resulting_frames
+            .iter()
+            .all(|(index, _)| *index > combined_write_start),
+        "a frame with the new compose snapshot was submitted before the combined bytes write started: split-request baseline={split_echo_glyphs}, timeline={timeline:?}"
+    );
+    assert!(
+        resulting_frames
+            .iter()
+            .all(|(_, event)| event.preedit.as_deref() == Some("")),
+        "each combined frame uses the resulting empty preedit snapshot: {timeline:?}"
+    );
+    assert!(
+        resulting_frames
+            .iter()
+            .all(|(_, event)| event.writes_completed == 2),
+        "each frame submission follows combined write completion: {timeline:?}"
+    );
+    assert!(
+        resulting_frames
+            .iter()
+            .all(|(_, event)| event.glyphs.unwrap_or(usize::MAX) <= 8),
+        "combined input must not render the retained preedit twice: {timeline:?}"
+    );
+    assert!(
+        resulting_frames
+            .iter()
+            .any(|(_, event)| event.glyphs == Some(8)),
+        "the frame after the immediate fake echo must show eight committed glyphs: {timeline:?}"
+    );
+    assert!(
+        resulting_frames
+            .iter()
+            .all(|(index, event)| timeline[index + 1..]
+                .iter()
+                .any(|queued| queued.kind == "frame-queued"
+                    && queued.frame_sequence == event.frame_sequence)),
+        "every frame submission attempt must reach the output queue: {timeline:?}"
+    );
+    eprintln!("combined request submission timeline: {timeline:?}");
+
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn an_invalid_marked_range_is_rejected_before_preedit_changes_surface_state() {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let factory_calls = calls.clone();
@@ -785,6 +1186,164 @@ async fn an_invalid_marked_range_is_rejected_before_preedit_changes_surface_stat
     assert_eq!(
         frames, 2,
         "the later valid focus redraw must present after rejecting markedRange: {summary:?}"
+    );
+}
+
+#[tokio::test]
+async fn malformed_compose_with_bytes_rejects_without_writing_or_replying_twice() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let calls_for_factory = calls.clone();
+    let factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "malformed-compose-bytes".to_string(),
+            calls_for_factory.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+    let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
+{"surface":"s1","body":{"operation":"input","compose":{"text":"ㅏ","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":false}}}
+{"surface":"s1","body":{"operation":"screen.read"}}
+{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":2}}}}
+{"surface":"s1","cids":["malformed-compose-bytes"],"body":{"operation":"input","bytes":"eA==","compose":{"text":"","markedRange":{"location":0,"length":1},"selectedRange":null,"replacementRange":null,"attributed":false}}}
+{"surface":"s1","body":{"operation":"screen.read"}}
+"#;
+    let mut writer = Vec::new();
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        serve(
+            engine_factory,
+            std::io::Cursor::new(input.as_bytes()),
+            &mut writer,
+            factory,
+        ),
+    )
+    .await
+    .expect("malformed combined input returns within 2 s")
+    .unwrap();
+    let messages: Vec<serde_json::Value> = String::from_utf8(writer)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("output is JSON"))
+        .collect();
+    let replies = messages
+        .iter()
+        .filter(|message| message["cids"] == serde_json::json!(["malformed-compose-bytes"]))
+        .collect::<Vec<_>>();
+    let screen_preedit = messages
+        .iter()
+        .filter(|message| message["body"]["event"] == "screen")
+        .map(|message| message["body"]["cursor"]["preedit"]["text"].clone())
+        .collect::<Vec<_>>();
+    let image_sequences = messages
+        .iter()
+        .filter_map(|message| message["body"]["image"]["sequence"].as_u64())
+        .collect::<Vec<_>>();
+    let last_screen_frame = messages
+        .iter()
+        .filter(|message| message["body"]["event"] == "screen")
+        .filter_map(|message| message["body"]["frame"]["sequence"].as_u64())
+        .last();
+    let writes = calls.lock().unwrap().writes.clone();
+    let mut violations = Vec::new();
+    if replies.len() != 1 || replies[0]["body"]["error"] != "invalidParams" {
+        violations.push(format!("request replies={replies:?}"));
+    }
+    if !writes.is_empty() {
+        violations.push(format!("session writes={writes:?}"));
+    }
+    if screen_preedit.last() != Some(&serde_json::json!("ㅏ")) {
+        violations.push(format!("preedit snapshots={screen_preedit:?}"));
+    }
+    if image_sequences != [1, 2] || last_screen_frame != Some(2) {
+        violations.push(format!(
+            "image sequences={image_sequences:?}, last screen frame={last_screen_frame:?}"
+        ));
+    }
+    assert!(
+        violations.is_empty(),
+        "invalid compose must reject the whole input without writing or changing preedit: {violations:?}; output={messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn malformed_bytes_with_compose_do_not_change_preedit_or_reply_twice() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let calls_for_factory = calls.clone();
+    let factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "malformed-bytes-compose".to_string(),
+            calls_for_factory.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+    let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
+{"surface":"s1","cids":["malformed-bytes-compose"],"body":{"operation":"input","bytes":"not-base64!","compose":{"text":"ㅏ","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":false}}}
+{"surface":"s1","body":{"operation":"screen.read"}}
+"#;
+    let mut writer = Vec::new();
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        serve(
+            engine_factory,
+            std::io::Cursor::new(input.as_bytes()),
+            &mut writer,
+            factory,
+        ),
+    )
+    .await
+    .expect("malformed combined input and screen read return within 2 s")
+    .unwrap();
+    let messages: Vec<serde_json::Value> = String::from_utf8(writer)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("output is JSON"))
+        .collect();
+    let errors = messages
+        .iter()
+        .filter(|message| message["body"]["error"].is_string())
+        .collect::<Vec<_>>();
+    let screen_preedit = messages
+        .iter()
+        .filter(|message| message["body"]["event"] == "screen")
+        .map(|message| message["body"]["cursor"]["preedit"]["text"].clone())
+        .collect::<Vec<_>>();
+    let image_sequences = messages
+        .iter()
+        .filter_map(|message| message["body"]["image"]["sequence"].as_u64())
+        .collect::<Vec<_>>();
+    let last_screen_frame = messages
+        .iter()
+        .filter(|message| message["body"]["event"] == "screen")
+        .filter_map(|message| message["body"]["frame"]["sequence"].as_u64())
+        .last();
+    let writes = calls.lock().unwrap().writes.clone();
+    let mut violations = Vec::new();
+    if errors.len() != 1
+        || !errors[0]["body"]["error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with("Base64 error:"))
+        || errors[0]["cids"] != serde_json::json!(["malformed-bytes-compose"])
+    {
+        violations.push(format!("errors={errors:?}"));
+    }
+    if !writes.is_empty() {
+        violations.push(format!("session writes={writes:?}"));
+    }
+    if screen_preedit.iter().any(|preedit| preedit == "ㅏ") {
+        violations.push(format!("preedit snapshots={screen_preedit:?}"));
+    }
+    if image_sequences != [1] || last_screen_frame != Some(1) {
+        violations.push(format!(
+            "image sequences={image_sequences:?}, last screen frame={last_screen_frame:?}"
+        ));
+    }
+    assert!(
+        violations.is_empty(),
+        "malformed bytes must reject the whole input without compose mutation: {violations:?}; output={messages:?}"
     );
 }
 
@@ -5655,6 +6214,143 @@ async fn next_screen_line<R: tokio::io::AsyncBufRead + Unpin>(
             return serde_json::from_str(&line).unwrap();
         }
     }
+}
+
+async fn next_measured_frame_after(
+    lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
+    to_serve: &mut tokio::io::DuplexStream,
+    after: u64,
+    acknowledgements: &mut usize,
+    calls: &Arc<Mutex<Calls>>,
+) -> (u64, usize, usize, usize, usize, usize, serde_json::Value) {
+    let mut screens = std::collections::HashMap::new();
+    let mut images = std::collections::HashMap::new();
+    loop {
+        let line = tokio::time::timeout(std::time::Duration::from_secs(2), lines.next_line())
+            .await
+            .expect("measured frame arrives within 2 s")
+            .expect("output read succeeds")
+            .expect("sidecar output remains open");
+        let message: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if message["body"]["ack"] == true {
+            *acknowledgements += 1;
+        }
+        if message["body"]["event"] == "screen" {
+            let sequence = message["body"]["frame"]["sequence"].as_u64().unwrap_or(0);
+            if sequence > after {
+                screens.insert(sequence, message.clone());
+            }
+        }
+        if let Some(image) = message["body"].get("image") {
+            let sequence = image["sequence"].as_u64().unwrap_or(0);
+            if sequence > after {
+                let calls = calls.lock().unwrap();
+                images.insert(
+                    sequence,
+                    (
+                        *acknowledgements,
+                        calls.writes.len(),
+                        calls.writes_completed,
+                        calls.echoes_enqueued,
+                    ),
+                );
+                drop(calls);
+                acknowledge_image(to_serve, &message).await;
+            }
+        }
+        if let Some(sequence) = screens
+            .keys()
+            .copied()
+            .find(|sequence| images.contains_key(sequence))
+        {
+            let screen = screens.remove(&sequence).unwrap();
+            let (ack_count, writes, completed, echoes) = images[&sequence];
+            return (
+                sequence,
+                rendered_glyph_count(&screen),
+                ack_count,
+                writes,
+                completed,
+                echoes,
+                screen,
+            );
+        }
+    }
+}
+
+fn rendered_glyph_count(message: &serde_json::Value) -> usize {
+    let body = &message["body"];
+    let cols = body["cols"].as_u64().unwrap() as u16;
+    let rows = body["rows"].as_u64().unwrap() as u16;
+    let cells = body["cells"].as_array().unwrap();
+    let lines = cells
+        .chunks(usize::from(cols))
+        .map(|line| {
+            line.iter()
+                .map(|cell| Cell {
+                    ch: cell["grapheme"]
+                        .as_str()
+                        .filter(|text| !text.is_empty())
+                        .map(str::to_string),
+                    width: cell["width"].as_u64().unwrap() as u8,
+                    ..Cell::default()
+                })
+                .collect()
+        })
+        .collect();
+    let screen = Screen {
+        cols,
+        rows,
+        cursor: serde_json::from_value(body["cursor"].clone()).unwrap(),
+        scrollback: Default::default(),
+        background: body["background"].as_str().unwrap().to_string(),
+        lines,
+    };
+    let metrics = metrics(13.0, 1.0);
+    let width = (metrics.cell_width * f32::from(cols)).ceil() as u32;
+    let height = (metrics.cell_height * f32::from(rows)).ceil() as u32;
+    let frame = Frame::new(width, height).unwrap();
+    frame.draw(&screen, &metrics).unwrap();
+    let background = frame.read_pixel(0, 0).unwrap();
+    let has_ink = |row: u16, col: u16, width_cells: u16| {
+        let x0 = (f32::from(col) * metrics.cell_width).floor() as u32;
+        let x1 = (f32::from(col + width_cells) * metrics.cell_width).ceil() as u32;
+        let y0 = (f32::from(row) * metrics.cell_height).floor() as u32;
+        let y1 = (f32::from(row + 1) * metrics.cell_height).ceil() as u32;
+        (x0..x1).any(|x| {
+            (y0..y1).any(|y| {
+                frame
+                    .read_pixel(x, y)
+                    .is_some_and(|pixel| pixel != background)
+            })
+        })
+    };
+    let mut count = 0;
+    for row in 0..rows {
+        let mut col = 0;
+        while col < cols {
+            if row == screen.cursor.row && col == screen.cursor.col {
+                if let Some(preedit) = screen.cursor.preedit.as_ref() {
+                    for _ in preedit.text.chars() {
+                        if has_ink(row, col, 2) {
+                            count += 1;
+                        }
+                        col = col.saturating_add(2);
+                    }
+                }
+            }
+            let cell = &screen.lines[usize::from(row)][usize::from(col.min(cols - 1))];
+            if cell.ch.as_ref().is_some_and(|text| !text.is_empty()) {
+                if has_ink(row, col, u16::from(cell.width.max(1))) {
+                    count += 1;
+                }
+                col = col.saturating_add(u16::from(cell.width.max(1)));
+            } else {
+                col += 1;
+            }
+        }
+    }
+    count
 }
 
 #[cfg(feature = "diagnostics")]
