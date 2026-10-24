@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- S77.1: Return declaration read, JSON parse, and display-name validation failures through the build script's `Result` path with their `sidecar.json` context. Red: the unchanged event census rejected all three `unwrap_or_else` panic sites because they had no reason annotation. Green: the census passes; three Cargo build-script interface cases preserve explicit failures for a missing declaration, invalid JSON, and missing `displayName`; the valid macOS arm64 package build passes with the local core native package. `cargo fmt --all --check` and records checks pass. The first test fixture lacked a Cargo target and stopped before the script; the fixture was corrected and all three cases passed.
+
 - S77: Add a correlated `image.detach` request and `image.detached` result that release the current render owner while preserving the terminal session and PTY. Detach is fenced by image name and generation; request replay is bound to its tuple and remains idempotent across reconnect until a newer owner appears. In-flight transfers remain immutable until their exact response or connection end, and late replies must match the full frame identity. Red: the unchanged server did not answer detach, a wrong-frame reply released a newer pending draw, and replay after reconnect returned `requestMismatch`. Green: seven targeted `serve_contract` cases pass. The local VT 0.0.13 macOS arm64 build and official archive command pass; the candidate archive SHA-256 is `7fb7c038dad01828f06c185d82040c5c14d3a7ff761f2593eaf9ed5d764a8a27`. No public release was published. The event census still identifies three missing reason annotations in `vt-alacritty/build.rs`; S77.1 tracks them.
 
 - S75.1: Build and package the local VT 0.0.13 candidate with pnpm's local
