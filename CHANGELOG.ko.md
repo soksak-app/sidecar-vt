@@ -4,6 +4,8 @@
 
 ## 미배포
 
+- S77: Terminal session과 PTY를 유지하면서 현재 render owner를 해제하는 상관관계 `image.detach` 요청과 `image.detached` 결과를 추가한다. Detach는 image name과 generation으로 범위를 제한한다. Request replay는 tuple에 결합되며 새 owner가 나타나기 전까지 reconnect 뒤에도 idempotent하다. 이미 전송된 transfer는 정확한 응답 또는 연결 종료까지 불변으로 유지하고, 늦은 응답은 전체 frame identity가 일치해야 한다. Red: 변경 전 server는 detach에 응답하지 않았고, 잘못된 frame 응답이 새 pending draw를 해제했으며, reconnect 뒤 replay는 `requestMismatch`를 반환했다. Green: targeted `serve_contract` test 7개가 통과한다. Local VT 0.0.13 macOS arm64 build와 공식 archive 명령이 통과한다. Candidate archive SHA-256은 `7fb7c038dad01828f06c185d82040c5c14d3a7ff761f2593eaf9ed5d764a8a27`다. Public release는 게시하지 않았다. Event census가 `vt-alacritty/build.rs`에서 reason annotation 누락 3개를 계속 찾으며 S77.1이 이를 추적한다.
+
 - S75.1: pnpm local link로 core process identity package 0.0.21을 연결해
   VT 0.0.13 candidate를 build하고 package한다. Sidecar deployment Git pin은
   그대로다. 공식 build와 release 명령이 통과했으며 archive는 local에만 있다.

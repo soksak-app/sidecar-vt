@@ -1520,6 +1520,379 @@ async fn test_repeated_image_open_resets_native_frame_without_closing_session() 
 }
 
 #[tokio::test]
+async fn detaching_an_image_keeps_the_session_for_headless_open_and_later_image_attach() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new("detach-session".into(), calls.clone()));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let first = next_image(&mut lines).await;
+    assert_eq!(
+        (first["name"].as_str(), first["generation"].as_u64()),
+        (Some("view"), Some(1)),
+        "the initial frame does not belong to the configured owner: {first}"
+    );
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
+"#).await.unwrap();
+
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"detach":{"request":"detach-1","name":"view","generation":1}}}}
+"#).await.unwrap();
+    let detached_line = next_line_except_screen(&mut lines).await;
+    let detached: serde_json::Value = serde_json::from_str(&detached_line).unwrap();
+    assert_eq!(detached["surface"], "s1", "{detached_line}");
+    assert_eq!(
+        detached["body"]["image"]["detached"],
+        serde_json::json!({
+            "request": "detach-1",
+            "name": "view",
+            "generation": 1,
+            "ok": true,
+            "result": "detached"
+        }),
+        "detach did not acknowledge its owner: {detached_line}"
+    );
+
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
+{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":2,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","body":{"operation":"input","bytes":"YQ=="}}
+{"surface":"s1","body":{"operation":"close"}}
+"#).await.unwrap();
+    let second = next_image(&mut lines).await;
+    assert_eq!(
+        (second["name"].as_str(), second["generation"].as_u64()),
+        (Some("view"), Some(2)),
+        "the later image did not attach to the preserved session: {second}"
+    );
+    wait_for_reply(&mut lines, LettingGo::Close).await;
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(
+        calls.opens.len(),
+        1,
+        "detach replaced the PTY session: {calls:?}"
+    );
+    assert_eq!(
+        calls.writes,
+        vec![("detach-session".to_string(), b"a".to_vec())],
+        "headless open or later image attach did not reuse the session: {calls:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_image_response_with_wrong_frame_identity_does_not_release_a_newer_pending_draw() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new(
+        "image-response-session".into(),
+        calls.clone(),
+    ));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let first = next_image(&mut lines).await;
+    assert_eq!(first["generation"], 1, "{first}");
+
+    to_serve
+        .write_all(
+            br#"{"surface":"s1","body":{"operation":"reconnect"}}
+"#,
+        )
+        .await
+        .unwrap();
+    wait_for_reply(&mut lines, LettingGo::Reconnect).await;
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":2,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let current = next_image(&mut lines).await;
+    assert_eq!(current["generation"], 2, "{current}");
+
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":2,"raster":2,"width":1600,"height":768,"scale":1.0}}}}
+{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":2,"sequence":1}}}}
+{"surface":"s1","body":{"operation":"input","bytes":"YQ=="},"cids":["stale-response-barrier"]}
+"#).await.unwrap();
+    let mut stale_frames = Vec::new();
+    loop {
+        let line = next_line_except_screen(&mut lines).await;
+        let message: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if message["body"].get("image").is_some() {
+            stale_frames.push(message["body"]["image"].clone());
+        }
+        if message["cids"] == serde_json::json!(["stale-response-barrier"]) {
+            break;
+        }
+    }
+
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":2,"raster":1,"sequence":1}}}}
+{"surface":"s1","body":{"operation":"close"}}
+"#).await.unwrap();
+    wait_for_reply(&mut lines, LettingGo::Close).await;
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+
+    assert!(
+        stale_frames
+            .iter()
+            .all(|image| image["generation"] != 2 || image["raster"] != 2),
+        "a response with stale frame identity released the newer draw: {stale_frames:?}"
+    );
+}
+
+#[tokio::test]
+async fn detaching_a_requested_image_before_configure_allows_headless_open_and_replay() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new(
+        "requested-image-session".into(),
+        calls.clone(),
+    ));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"detach":{"request":"requested-detach","name":"view","generation":1}}}}
+"#).await.unwrap();
+    let first = next_image_detach_reply(&mut lines, "requested-detach").await;
+    assert_eq!(first["body"]["image"]["detached"]["ok"], true, "{first}");
+    assert_eq!(
+        first["body"]["image"]["detached"]["result"], "detached",
+        "{first}"
+    );
+
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"detach":{"request":"requested-detach","name":"view","generation":1}}}}
+{"surface":"s1","body":{"image":{"detach":{"request":"requested-detach-again","name":"view","generation":1}}}}
+"#).await.unwrap();
+    let replay = next_image_detach_reply(&mut lines, "requested-detach").await;
+    assert_eq!(
+        replay["body"]["image"]["detached"]["result"], "detached",
+        "{replay}"
+    );
+    let duplicate = next_image_detach_reply(&mut lines, "requested-detach-again").await;
+    assert_eq!(
+        duplicate["body"]["image"]["detached"]["result"], "alreadyDetached",
+        "{duplicate}"
+    );
+
+    to_serve
+        .write_all(
+            br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
+{"surface":"s1","body":{"operation":"input","bytes":"YQ=="},"cids":["headless-input"]}
+{"surface":"s1","body":{"operation":"close"}}
+"#,
+        )
+        .await
+        .unwrap();
+    wait_for_reply(&mut lines, LettingGo::Close).await;
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(
+        calls.opens.len(),
+        1,
+        "headless open did not create its PTY: {calls:?}"
+    );
+    assert_eq!(
+        calls.writes,
+        vec![("requested-image-session".to_string(), b"a".to_vec())],
+        "headless input did not reach the opened session: {calls:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_image_detach_replay_survives_reconnect_without_a_newer_owner() {
+    let factory = Arc::new(|| {
+        Arc::new(FakeSessionPort::new(
+            "detach-reconnect-session".into(),
+            Arc::new(Mutex::new(Calls::default())),
+        )) as Arc<dyn SessionPort>
+    });
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","body":{"image":{"detach":{"request":"retry-after-reconnect","name":"view","generation":1}}}}
+{"surface":"s1","body":{"operation":"reconnect"}}
+{"surface":"s1","body":{"image":{"detach":{"request":"retry-after-reconnect","name":"view","generation":1}}}}
+{"surface":"s1","body":{"operation":"close"}}
+"#).await.unwrap();
+
+    let ack = next_image_detach_reply(&mut lines, "retry-after-reconnect").await;
+    assert_eq!(ack["body"]["image"]["detached"]["ok"], true, "{ack}");
+    let retry = next_image_detach_reply(&mut lines, "retry-after-reconnect").await;
+    assert_eq!(
+        retry["body"]["image"]["detached"]["ok"], true,
+        "reconnect without a newer owner must preserve idempotent detach replay: {retry}"
+    );
+    assert_eq!(
+        retry["body"]["image"]["detached"]["result"], "detached",
+        "{retry}"
+    );
+    wait_for_reply(&mut lines, LettingGo::Close).await;
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn an_image_detach_request_id_cannot_be_reused_with_another_tuple() {
+    let factory = Arc::new(|| {
+        Arc::new(FakeSessionPort::new(
+            "request-id-surface".into(),
+            Arc::new(Mutex::new(Calls::default())),
+        )) as Arc<dyn SessionPort>
+    });
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+
+    to_serve.write_all(br#"{"surface":"first","body":{"image":{"detach":{"request":"invalid","name":"view","generation":0}}}}
+"#).await.unwrap();
+    let invalid_line = next_line_except_screen(&mut lines).await;
+    let invalid: serde_json::Value = serde_json::from_str(&invalid_line).unwrap();
+    assert_eq!(invalid["body"]["error"], "invalidParams", "{invalid_line}");
+
+    to_serve.write_all(br#"{"surface":"first","body":{"image":{"detach":{"request":"global-request","name":"view","generation":1}}}}
+"#).await.unwrap();
+    let first = next_image_detach_reply(&mut lines, "global-request").await;
+    to_serve.write_all(br#"{"surface":"first","body":{"image":{"detach":{"request":"global-request","name":"other","generation":1}}}}
+"#).await.unwrap();
+    let second = next_image_detach_reply(&mut lines, "global-request").await;
+    to_serve.write_all(br#"{"surface":"second","body":{"image":{"detach":{"request":"global-request","name":"view","generation":1}}}}
+"#).await.unwrap();
+    let third = next_image_detach_reply(&mut lines, "global-request").await;
+    assert_eq!(first["surface"], "first", "{first}");
+    assert_eq!(
+        first["body"]["image"]["detached"]["result"], "alreadyAbsent",
+        "{first}"
+    );
+    assert_eq!(second["surface"], "first", "{second}");
+    assert_eq!(
+        second["body"]["image"]["detached"]["error"], "requestMismatch",
+        "{second}"
+    );
+    assert_eq!(third["surface"], "second", "{third}");
+    assert_eq!(
+        third["body"]["image"]["detached"]["error"], "requestMismatch",
+        "{third}"
+    );
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn stale_future_and_mismatched_detach_requests_preserve_the_newer_attachment() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new(
+        "generation-fence".into(),
+        calls.clone(),
+    ));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":2,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let first = next_image(&mut lines).await;
+    assert_eq!(first["generation"], 2, "{first}");
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":3,"raster":1,"width":900,"height":432,"scale":1.0}}}}
+{"surface":"s1","body":{"image":{"detach":{"request":"stale-two","name":"view","generation":2}}}}
+"#).await.unwrap();
+    let stale = next_image_detach_reply(&mut lines, "stale-two").await;
+    assert_eq!(
+        stale["body"]["image"]["detached"]["error"], "staleGeneration",
+        "{stale}"
+    );
+    assert_eq!(
+        stale["body"]["image"]["detached"]["currentGeneration"], 3,
+        "{stale}"
+    );
+
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":2,"raster":1,"sequence":1}}}}
+"#).await.unwrap();
+    let current = next_image(&mut lines).await;
+    assert_eq!(
+        current["generation"], 3,
+        "a stale detach removed pending generation 3: {current}"
+    );
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"detach":{"request":"stale-two","name":"view","generation":2}}}}
+"#).await.unwrap();
+    let stale_replay = next_image_detach_reply(&mut lines, "stale-two").await;
+    assert_eq!(
+        stale_replay["body"]["image"]["detached"]["error"], "staleGeneration",
+        "{stale_replay}"
+    );
+
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"detach":{"request":"future-four","name":"view","generation":4}}}}
+{"surface":"s1","body":{"image":{"detach":{"request":"wrong-name","name":"other","generation":3}}}}
+{"surface":"s1","body":{"image":{"detach":{"request":"detach-three","name":"view","generation":3}}}}
+"#).await.unwrap();
+    let future = next_image_detach_reply(&mut lines, "future-four").await;
+    assert_eq!(
+        future["body"]["image"]["detached"]["error"], "futureGeneration",
+        "{future}"
+    );
+    let wrong_name = next_image_detach_reply(&mut lines, "wrong-name").await;
+    assert_eq!(
+        wrong_name["body"]["image"]["detached"]["error"], "imageNameMismatch",
+        "{wrong_name}"
+    );
+    let detached = next_image_detach_reply(&mut lines, "detach-three").await;
+    assert_eq!(
+        detached["body"]["image"]["detached"]["result"], "detached",
+        "{detached}"
+    );
+
+    to_serve
+        .write_all(
+            br#"{"surface":"s1","body":{"operation":"close"}}
+"#,
+        )
+        .await
+        .unwrap();
+    wait_for_reply(&mut lines, LettingGo::Close).await;
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+    let calls = calls.lock().unwrap();
+    assert_eq!(
+        calls.opens.len(),
+        1,
+        "generation detach replaced the PTY: {calls:?}"
+    );
+}
+
+#[tokio::test]
 async fn test_resize() {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
@@ -5120,6 +5493,59 @@ async fn a_persistent_closed_surface_releases_its_unanswered_transfer_image_when
     check_unanswered_transfer(true, LettingGo::Close, Release::ConnectionEnd).await;
 }
 
+#[tokio::test]
+async fn a_detached_surface_keeps_its_unanswered_transfer_until_the_exact_frame_answer() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new(
+        "detach-transfer".into(),
+        calls.clone(),
+    ));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+    let mark = std::ffi::CString::new(format!("{} detached transfer", std::process::id())).unwrap();
+
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let frame = next_image(&mut lines).await;
+    let id = u32::try_from(
+        frame["token"]["id"]
+            .as_u64()
+            .expect("frame has a transfer token"),
+    )
+    .expect("transfer token fits the native identifier");
+    mark_transfer_image(id, &mark);
+
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"detach":{"request":"detach-transfer","name":"view","generation":1}}}}
+"#).await.unwrap();
+    let ack = next_image_detach_reply(&mut lines, "detach-transfer").await;
+    assert_eq!(ack["body"]["image"]["detached"]["ok"], true, "{ack}");
+    assert_eq!(
+        transfer_image(id, &mark),
+        TransferImage::Marked,
+        "detach released transfer {id} before the host answered the frame"
+    );
+
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
+{"surface":"s1","body":{"operation":"close"}}
+"#).await.unwrap();
+    wait_for_reply(&mut lines, LettingGo::Close).await;
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+    assert_ne!(
+        transfer_image(id, &mark),
+        TransferImage::Marked,
+        "the exact frame answer did not release transfer {id}"
+    );
+    let calls = calls.lock().unwrap();
+    assert_eq!((calls.opens.len(), calls.closes.len()), (1, 1), "{calls:?}");
+}
+
 /// 다음 표시 요청을 기다려 그 image 를 돌려준다.
 async fn next_image<R: tokio::io::AsyncBufRead + Unpin>(
     lines: &mut tokio::io::Lines<R>,
@@ -5130,6 +5556,19 @@ async fn next_image<R: tokio::io::AsyncBufRead + Unpin>(
         assert!(message["body"].get("error").is_none(), "{line}");
         if let Some(image) = message["body"].get("image") {
             return image.clone();
+        }
+    }
+}
+
+async fn next_image_detach_reply<R: tokio::io::AsyncBufRead + Unpin>(
+    lines: &mut tokio::io::Lines<R>,
+    request: &str,
+) -> serde_json::Value {
+    loop {
+        let line = next_line_except_screen(lines).await;
+        let message: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if message["body"]["image"]["detached"]["request"] == request {
+            return message;
         }
     }
 }

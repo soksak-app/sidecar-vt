@@ -84,6 +84,49 @@ struct Dispatch {
     request: Option<Arc<Request>>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ImageDetach {
+    request: String,
+    name: String,
+    generation: u64,
+}
+
+struct ImageDetachReplay {
+    surface: String,
+    detach: ImageDetach,
+    response: Value,
+    owner_revision: u64,
+}
+
+#[derive(Default)]
+struct ImageDetachRequestLedger {
+    latest: tokio::sync::Mutex<Option<(String, ImageDetach)>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ImageDetachRequestCheck {
+    New,
+    Replay,
+    Mismatch,
+}
+
+impl ImageDetachRequestLedger {
+    async fn check(&self, surface: &str, detach: &ImageDetach) -> ImageDetachRequestCheck {
+        let mut latest = self.latest.lock().await;
+        if let Some((latest_surface, latest_detach)) = latest.as_ref()
+            && latest_detach.request == detach.request
+        {
+            return if latest_surface == surface && latest_detach == detach {
+                ImageDetachRequestCheck::Replay
+            } else {
+                ImageDetachRequestCheck::Mismatch
+            };
+        }
+        *latest = Some((surface.to_string(), detach.clone()));
+        ImageDetachRequestCheck::New
+    }
+}
+
 impl Dispatch {
     fn internal(command: SurfaceCommand) -> Self {
         Self {
@@ -293,6 +336,7 @@ pub struct PersistentRegistry {
     entries: tokio::sync::Mutex<HashMap<String, PersistentEntry>>,
     next_epoch: std::sync::atomic::AtomicU64,
     shutdown: AtomicBool,
+    detach_requests: Arc<ImageDetachRequestLedger>,
 }
 
 const SURFACE_ACTOR_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -364,6 +408,7 @@ impl PersistentRegistry {
             entries: tokio::sync::Mutex::new(HashMap::new()),
             next_epoch: std::sync::atomic::AtomicU64::new(1),
             shutdown: AtomicBool::new(false),
+            detach_requests: Arc::new(ImageDetachRequestLedger::default()),
         })
     }
 
@@ -952,6 +997,10 @@ enum SurfaceCommand {
     },
     Reconnect,
     Configure(ImageConfiguration),
+    ImageDetach {
+        detach: ImageDetach,
+        request_check: ImageDetachRequestCheck,
+    },
     Input {
         bytes: Vec<u8>,
         cids: Vec<String>,
@@ -1669,6 +1718,68 @@ fn image_answer(image: &serde_json::Map<String, Value>) -> Option<ImageAnswer<'_
         raster: answer.get("raster")?.as_u64()?,
         sequence: answer.get("sequence")?.as_u64()?,
     })
+}
+
+const MAX_JAVASCRIPT_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+fn parse_image_detach(value: &Value) -> Result<ImageDetach, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "image.detach must be an object".to_string())?;
+    if object.len() != 3
+        || object
+            .keys()
+            .any(|key| !matches!(key.as_str(), "request" | "name" | "generation"))
+    {
+        return Err("image.detach requires only request, name, and generation".to_string());
+    }
+    let request = object
+        .get("request")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "image.detach request must be a non-empty string".to_string())?;
+    let name = object
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "image.detach name must be a non-empty string".to_string())?;
+    let generation = object
+        .get("generation")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0 && *value <= MAX_JAVASCRIPT_SAFE_INTEGER)
+        .ok_or_else(|| {
+            "image.detach generation must be a positive JavaScript-safe integer".to_string()
+        })?;
+    Ok(ImageDetach {
+        request: request.to_string(),
+        name: name.to_string(),
+        generation,
+    })
+}
+
+fn image_detach_response(
+    surface: &str,
+    detach: &ImageDetach,
+    result: Option<&str>,
+    error: Option<&str>,
+    current_generation: Option<u64>,
+) -> Value {
+    let mut detached = json!({
+        "request": detach.request,
+        "name": detach.name,
+        "generation": detach.generation,
+        "ok": error.is_none(),
+    });
+    if let Some(result) = result {
+        detached["result"] = json!(result);
+    }
+    if let Some(error) = error {
+        detached["error"] = json!(error);
+    }
+    if let Some(generation) = current_generation {
+        detached["currentGeneration"] = json!(generation);
+    }
+    json!({"surface": surface, "body": {"image": {"detached": detached}}})
 }
 
 async fn send_state(
@@ -2492,6 +2603,9 @@ async fn surface_task(
     let mut requested_shell = ShellRequest::default();
     let mut headless = false;
     let mut pending_configuration: Option<ImageConfiguration> = None;
+    let mut latest_detached_image: Option<(String, u64)> = None;
+    let mut last_image_detach: Option<ImageDetachReplay> = None;
+    let mut image_owner_revision = 0_u64;
     let mut focused = false;
     // 마우스 보고로 시작한 누름. 뗄 때까지 선택 연산은 선택하지 않는다.
     let mut mouse_gesture = false;
@@ -2582,6 +2696,9 @@ async fn surface_task(
                             if output_tx.reply(response).await.is_err() { return; }
                             continue;
                         }
+                        if image.is_some() {
+                            image_owner_revision = image_owner_revision.saturating_add(1);
+                        }
                         open_requested = true;
                         requested_image = image;
                         requested_shell = request;
@@ -2613,7 +2730,199 @@ async fn surface_task(
                             }
                             }
                     }
+                    SurfaceCommand::ImageDetach { detach, request_check } => {
+                        let current = [
+                            image_state
+                                .as_ref()
+                                .map(|state| (state.name.as_str(), state.generation)),
+                            pending_configuration
+                                .as_ref()
+                                .map(|configuration| {
+                                    (configuration.name.as_str(), configuration.generation)
+                                }),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .max_by_key(|(_, generation)| *generation);
+                        let current_generation = current.map(|(_, generation)| generation);
+                        let request_replay = (request_check == ImageDetachRequestCheck::Replay)
+                            .then(|| {
+                                last_image_detach
+                                    .as_ref()
+                                    .filter(|replay| replay.detach.request == detach.request)
+                            })
+                            .flatten();
+
+                        let request_mismatch = request_check == ImageDetachRequestCheck::Mismatch;
+                        let response = if request_mismatch {
+                            image_detach_response(
+                                &surface_id,
+                                &detach,
+                                None,
+                                Some("requestMismatch"),
+                                current_generation,
+                            )
+                        } else if let Some(replay) = request_replay {
+                            if replay.surface != surface_id
+                                || replay.detach.name != detach.name
+                                || replay.detach.generation != detach.generation
+                            {
+                                image_detach_response(
+                                    &surface_id,
+                                    &detach,
+                                    None,
+                                    Some("requestMismatch"),
+                                    current_generation,
+                                )
+                            } else if replay.owner_revision != image_owner_revision
+                            {
+                                image_detach_response(
+                                    &surface_id,
+                                    &detach,
+                                    None,
+                                    Some(if current_generation
+                                        .is_some_and(|generation| generation > detach.generation)
+                                    {
+                                        "staleGeneration"
+                                    } else {
+                                        "requestMismatch"
+                                    }),
+                                    current_generation,
+                                )
+                            } else {
+                                replay.response.clone()
+                            }
+                        } else {
+                            let failure = if let Some((current_name, generation)) = current {
+                                if current_name != detach.name
+                                    || requested_image
+                                        .as_deref()
+                                        .is_some_and(|requested| requested != detach.name)
+                                {
+                                    Some("imageNameMismatch")
+                                } else if detach.generation < generation {
+                                    Some("staleGeneration")
+                                } else if detach.generation > generation {
+                                    Some("futureGeneration")
+                                } else {
+                                    None
+                                }
+                            } else if let Some(requested) = requested_image.as_deref() {
+                                if requested != detach.name {
+                                    Some("imageNameMismatch")
+                                } else if latest_detached_image.as_ref().is_some_and(
+                                    |(name, generation)| {
+                                        name == &detach.name && detach.generation <= *generation
+                                    },
+                                ) {
+                                    Some("staleGeneration")
+                                } else {
+                                    None
+                                }
+                            } else if latest_detached_image.as_ref().is_some_and(
+                                |(name, generation)| {
+                                    name == &detach.name && detach.generation < *generation
+                                },
+                            ) {
+                                Some("staleGeneration")
+                            } else {
+                                None
+                            };
+
+                            if let Some(error) = failure {
+                                image_detach_response(
+                                    &surface_id,
+                                    &detach,
+                                    None,
+                                    Some(error),
+                                    current_generation.or_else(|| {
+                                        latest_detached_image.as_ref().and_then(
+                                            |(name, generation)| {
+                                                (name == &detach.name).then_some(*generation)
+                                            },
+                                        )
+                                    }),
+                                )
+                            } else if current.is_none()
+                                && requested_image.is_none()
+                                && latest_detached_image.as_ref().is_some_and(
+                                    |(name, generation)| {
+                                        name == &detach.name && *generation == detach.generation
+                                    },
+                                )
+                            {
+                                image_detach_response(
+                                    &surface_id,
+                                    &detach,
+                                    Some("alreadyDetached"),
+                                    None,
+                                    current_generation,
+                                )
+                            } else if current.is_none() && requested_image.is_none() {
+                                image_detach_response(
+                                    &surface_id,
+                                    &detach,
+                                    Some("alreadyAbsent"),
+                                    None,
+                                    current_generation,
+                                )
+                            } else {
+                                if let Some(state) = image_state.take() {
+                                    preserved_inline_images
+                                        .extend(release_image_state(&surface_id, state));
+                                }
+                                if pending_configuration.as_ref().is_some_and(|configuration| {
+                                    configuration.name == detach.name
+                                        && configuration.generation == detach.generation
+                                }) {
+                                    pending_configuration = None;
+                                }
+                                if requested_image.as_deref() == Some(detach.name.as_str()) {
+                                    requested_image = None;
+                                }
+                                headless = true;
+                                latest_detached_image =
+                                    Some((detach.name.clone(), detach.generation));
+                                image_owner_revision = image_owner_revision.saturating_add(1);
+                                record_surface_mode(&log, &surface_id, true, "image.detach");
+                                image_detach_response(
+                                    &surface_id,
+                                    &detach,
+                                    Some("detached"),
+                                    None,
+                                    None,
+                                )
+                            }
+                        };
+                        if !request_mismatch {
+                            last_image_detach = Some(ImageDetachReplay {
+                                surface: surface_id.clone(),
+                                detach,
+                                response: response.clone(),
+                                owner_revision: image_owner_revision,
+                            });
+                        }
+                        if output_tx.reply(response).await.is_err() {
+                            return;
+                        }
+                    }
                     SurfaceCommand::Configure(configuration) => {
+                        if image_state.is_none()
+                            && pending_configuration.is_none()
+                            && latest_detached_image.as_ref().is_some_and(|(name, generation)| {
+                                name == &configuration.name && configuration.generation <= *generation
+                            })
+                        {
+                            let current_generation = latest_detached_image
+                                .as_ref()
+                                .map(|(_, generation)| *generation);
+                            let response = json!({"surface": surface_id,
+                                "body": {"error": "staleGeneration", "currentGeneration": current_generation}});
+                            if output_tx.reply(response).await.is_err() {
+                                return;
+                            }
+                            continue;
+                        }
                         if let Some(state) = image_state.as_ref() {
                             if !newer_configuration(&configuration, state) {
                                 continue;
@@ -2621,7 +2930,10 @@ async fn surface_task(
                             if state.pending_draw {
                                 let replace = pending_configuration.as_ref().is_none_or(|pending|
                                     (configuration.generation, configuration.raster) > (pending.generation, pending.raster));
-                                if replace { pending_configuration = Some(configuration); }
+                                if replace {
+                                    pending_configuration = Some(configuration);
+                                    image_owner_revision = image_owner_revision.saturating_add(1);
+                                }
                                 continue;
                             }
                         }
@@ -2665,6 +2977,7 @@ async fn surface_task(
                             continue;
                         }
                         image_state = Some(new_state);
+                        image_owner_revision = image_owner_revision.saturating_add(1);
                         record_surface_mode(&log, &surface_id, headless, "configure");
                         refresh_inline_image_positions(&mut engine, &mut image_state);
                         if let Some(sid) = session_id.as_ref() {
@@ -3356,22 +3669,17 @@ async fn surface_task(
                         let image_obj = body.get("image").and_then(|v| v.as_object());
                         let consumed = image_obj.and_then(|o| o.get("consumed")).and_then(|v| v.as_object());
                         let is_error = image_obj.is_some_and(|o| o.get("error").is_some());
-                        // consumed 는 안쪽 객체에, 오류는 바깥에 이름과 순번을 실어 보낸다.
-                        let name = image_obj
-                            .and_then(|o| o.get("name"))
-                            .and_then(|v| v.as_str())
-                            .or_else(|| consumed.and_then(|r| r.get("name")).and_then(|v| v.as_str()));
-                        // image 전송은 직렬화된다. pending_draw는 정확히 하나의
-                        // envelope가 host response를 기다린다는 뜻이다. layout 교체 중에는
-                        // 그 envelope의 generation/raster가 이미 바뀐 뒤에 host가 envelope를
-                        // 거부할 수 있으므로, metadata를 정확히 일치시키면
-                        // sidecar가 pending_draw=true로 영구히 막힌다. 현재 image 이름에 대한
-                        // response는 진행 중인 그 전송 하나를 해제한다. response error는
-                        // host log로 계속 관찰할 수 있고, 대기 중인 configuration 또는 dirty frame은
-                        // 아래에서 render된다.
+                        let answer = image_obj.and_then(image_answer);
+                        // Only the complete identity of the frame in flight may release this draw. A late answer for a
+                        // detached image must not unblock a newer generation with the same name.
                         let releases_pending = image_state.as_ref().is_some_and(|state|
                             state.pending_draw
-                                && Some(state.name.as_str()) == name
+                                && answer.as_ref().is_some_and(|answer| {
+                                    answer.name == state.name
+                                        && answer.generation == state.generation
+                                        && answer.raster == state.raster
+                                        && answer.sequence == u64::from(state.sequence)
+                                })
                                 && (consumed.is_some() || is_error));
                         if releases_pending {
                             // 전송 완료 대기의 계기(V5-104): 보낸 순간부터 consumed/오류 응답까지.
@@ -3533,6 +3841,7 @@ where
             registry: None,
             owner: String::new(),
             log,
+            detach_requests: Arc::new(ImageDetachRequestLedger::default()),
         },
     )
     .await
@@ -3565,6 +3874,7 @@ where
             engine_factory,
             session_port_factory,
             owner_close: Some(owner.close),
+            detach_requests: Arc::clone(&owner.registry.detach_requests),
             registry: Some(owner.registry),
             owner: owner.owner,
             log: owner.log,
@@ -3581,6 +3891,7 @@ struct ServeOptions {
     registry: Option<Arc<PersistentRegistry>>,
     owner: String,
     log: Events,
+    detach_requests: Arc<ImageDetachRequestLedger>,
 }
 
 async fn serve_with_options<R, W>(
@@ -3630,6 +3941,7 @@ where
         registry,
         owner,
         log,
+        detach_requests,
     } = options;
     // 연결 순번. 같은 소유자의 연결을 trace 에서 구별한다.
     static CONNECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -4621,7 +4933,40 @@ where
                             }
                         }
                     } else if let Some(image) = body.get("image").and_then(|v| v.as_object()) {
-                        if let Some(configure) = image.get("configure").and_then(|v| v.as_object())
+                        if image.contains_key("detach") {
+                            let parsed = (image.len() == 1)
+                                .then(|| image.get("detach"))
+                                .flatten()
+                                .ok_or_else(|| {
+                                    "image.detach cannot share an image envelope with another action"
+                                        .to_string()
+                                })
+                                .and_then(parse_image_detach);
+                            match parsed {
+                                Ok(detach) => {
+                                    let request_check =
+                                        detach_requests.check(&surface_id, &detach).await;
+                                    if tx
+                                        .send(SurfaceCommand::ImageDetach {
+                                            detach,
+                                            request_check,
+                                        })
+                                        .await
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                                Err(reason) => {
+                                    let response = json!({"surface": surface_id,
+                                        "body": {"error": "invalidParams", "reason": reason}});
+                                    if reply_tx.reply(response).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                        } else if let Some(configure) =
+                            image.get("configure").and_then(|v| v.as_object())
                         {
                             let parsed = (|| {
                                 let name = configure.get("name")?.as_str()?.to_string();
