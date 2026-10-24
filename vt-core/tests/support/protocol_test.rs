@@ -1,5 +1,14 @@
 use super::*;
 
+#[test]
+fn render_metadata_requires_the_diagnostic_feature_and_startup_trace_directory() {
+    assert!(!collect_render_metadata(None));
+    assert_eq!(
+        collect_render_metadata(Some(std::path::Path::new("/tmp/vt-trace"))),
+        cfg!(feature = "diagnostics")
+    );
+}
+
 pub struct FakeEngine {
     cols: u16,
     rows: u16,

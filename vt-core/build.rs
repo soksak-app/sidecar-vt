@@ -7,7 +7,11 @@ fn main() {
     if os == "macos" {
         println!("cargo:rerun-if-changed=src/platform/darwin/frame.m");
         println!("cargo:rerun-if-changed=src/platform/darwin/frame.h");
-        cc::Build::new()
+        let mut build = cc::Build::new();
+        if env::var_os("CARGO_FEATURE_DIAGNOSTICS").is_some() {
+            build.define("SOKSAK_DIAGNOSTICS", "1");
+        }
+        build
             .file("src/platform/darwin/frame.m")
             .flag("-fobjc-arc")
             .flag("-Wall")

@@ -63,6 +63,17 @@ static CGGlyph single_glyph(CTFontRef font, const uint8_t *bytes, uint32_t lengt
     return glyphs[0];
 }
 
+#ifdef SOKSAK_DIAGNOSTICS
+static void store_cell_bounds(RenderCell *cell, CGRect bounds) {
+    if (!cell || CGRectIsNull(bounds) || CGRectIsEmpty(bounds)) return;
+    cell->has_ink = 1;
+    cell->ink_x = CGRectGetMinX(bounds);
+    cell->ink_y = CGRectGetMinY(bounds);
+    cell->ink_width = CGRectGetWidth(bounds);
+    cell->ink_height = CGRectGetHeight(bounds);
+}
+#endif
+
 // 주어진 pixel 크기로 frame 을 만든다
 Frame* frame_new(uint32_t width_px, uint32_t height_px) {
     Frame *frame = malloc(sizeof(Frame));
@@ -126,12 +137,18 @@ void frame_nonce(Frame *frame, uint8_t *buf) {
 }
 
 int frame_draw(Frame *frame, Screen *screen, Metrics *metrics) {
-    return frame_draw_with_inline_images(frame, screen, metrics, NULL, 0);
+    return frame_draw_with_inline_images(frame, screen, metrics, NULL, 0, NULL);
 }
 
 int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics,
-                                  InlineImageRaster *images, uint32_t image_count) {
+                                  InlineImageRaster *images, uint32_t image_count,
+                                  RenderOutput *render_output) {
     if (!frame || !screen || !metrics) return -1;
+#ifdef SOKSAK_DIAGNOSTICS
+    if (render_output && (!render_output->cells || render_output->cell_capacity < screen->cell_count)) return -1;
+#else
+    (void)render_output;
+#endif
 
     // surface 를 잠근다
     IOSurfaceLock(frame->surface, 0, NULL);
@@ -144,6 +161,12 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
     }
 
     size_t bytes_per_row = IOSurfaceGetBytesPerRow(frame->surface);
+#ifdef SOKSAK_DIAGNOSTICS
+    if (render_output) {
+        render_output->cell_count = screen->cell_count;
+        render_output->bytes_per_row = bytes_per_row;
+    }
+#endif
 
     // sRGB 색 공간을 만든다
     CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
@@ -197,9 +220,28 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
     ColorCache fg_cache = {0};
     ColorCache bg_cache = {0};
     CGFloat descent = CTFontGetDescent(font);
+#ifdef SOKSAK_DIAGNOSTICS
+    if (render_output) {
+        render_output->ascent = CTFontGetAscent(font);
+        render_output->descent = descent;
+        render_output->leading = CTFontGetLeading(font);
+        render_output->underline_position = CTFontGetUnderlinePosition(font);
+        render_output->underline_thickness = CTFontGetUnderlineThickness(font);
+    }
+#endif
     // 셀을 그린다
     for (uint32_t i = 0; i < screen->cell_count; i++) {
         Cell *cell = &screen->cells[i];
+#ifdef SOKSAK_DIAGNOSTICS
+        RenderCell *render_cell = NULL;
+        if (render_output) {
+            render_cell = &render_output->cells[i];
+            memset(render_cell, 0, sizeof(*render_cell));
+            render_cell->row = cell->row;
+            render_cell->col = cell->col;
+            render_cell->width = cell->width;
+        }
+#endif
 
         // Core Graphics의 하단 원점을 터미널 행 좌표로 변환한다.
         CGFloat x = cell->col * metrics->cell_width;
@@ -238,6 +280,16 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
             CGContextSetFillColorWithColor(ctx, fg_color);
             // 글리프 위치는 텍스트 행렬을 거친다. 대체 경로의 CGContextSetTextPosition 이 옮긴 행렬을 되돌린다.
             CGContextSetTextMatrix(ctx, CGAffineTransformIdentity);
+#ifdef SOKSAK_DIAGNOSTICS
+            CGPathRef glyph_path = render_cell ? CTFontCreatePathForGlyph(font, glyph, NULL) : NULL;
+            if (render_cell && glyph_path) {
+                CGRect glyph_bounds = CGPathGetPathBoundingBox(glyph_path);
+                glyph_bounds.origin.x += position.x;
+                glyph_bounds.origin.y += position.y;
+                store_cell_bounds(render_cell, glyph_bounds);
+                CGPathRelease(glyph_path);
+            }
+#endif
             CTFontDrawGlyphs(font, &glyph, &position, 1, ctx);
         } else if (cell->ch_len > 0 && cell->width > 0) {
             if (!cell->ch) {
@@ -284,6 +336,12 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
                             if (advance < span) offset = (span - advance) / 2;
                         }
                         CGContextSetTextPosition(ctx, x + offset, y + descent);
+#ifdef SOKSAK_DIAGNOSTICS
+                        if (render_cell) {
+                            CGRect line_bounds = CTLineGetImageBounds(line, ctx);
+                            store_cell_bounds(render_cell, line_bounds);
+                        }
+#endif
                         CTLineDraw(line, ctx);
                         CFRelease(line);
                     }
@@ -297,8 +355,18 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
             CGFloat thickness = MAX(CTFontGetUnderlineThickness(font), 1.0);
             CGFloat baseline = y + CTFontGetDescent(font);
             CGFloat top = baseline + CTFontGetUnderlinePosition(font) - thickness / 2;
+            CGRect underline_rect = CGRectMake(x, MAX(top, y), metrics->cell_width * cell->width, thickness);
+#ifdef SOKSAK_DIAGNOSTICS
+            if (render_cell) {
+                render_cell->has_underline = 1;
+                render_cell->underline_x = CGRectGetMinX(underline_rect);
+                render_cell->underline_y = CGRectGetMinY(underline_rect);
+                render_cell->underline_width = CGRectGetWidth(underline_rect);
+                render_cell->underline_height = CGRectGetHeight(underline_rect);
+            }
+#endif
             CGContextSetFillColorWithColor(ctx, fg_color);
-            CGContextFillRect(ctx, CGRectMake(x, MAX(top, y), metrics->cell_width * cell->width, thickness));
+            CGContextFillRect(ctx, underline_rect);
         }
 
     }
@@ -362,6 +430,25 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
         CGFloat cursor_y = (CGFloat)frame->height - ((CGFloat)screen->cursor_row + 1.0) * metrics->cell_height;
         CGFloat cursor_width = metrics->cell_width * screen->cursor_width;
         CGFloat cursor_height = metrics->cell_height;
+#ifdef SOKSAK_DIAGNOSTICS
+        if (render_output) {
+            render_output->cursor_visible = 1;
+            render_output->cursor_x = cursor_x;
+            render_output->cursor_y = cursor_y;
+            render_output->cursor_width = cursor_width;
+            render_output->cursor_height = cursor_height;
+            render_output->cursor_border = 0;
+            render_output->cursor_blend_difference = screen->cursor_shape == 0;
+            if (screen->cursor_shape == 1) {
+                render_output->cursor_y = cursor_y;
+                render_output->cursor_height = 2.0;
+            } else if (screen->cursor_shape == 2) {
+                render_output->cursor_width = 2.0;
+            } else if (screen->cursor_shape == 3) {
+                render_output->cursor_border = 2.0;
+            }
+        }
+#endif
         CGColorRef cursor_color = CGColorCreateSRGB(
             screen->default_cursor[0] / 255.0,
             screen->default_cursor[1] / 255.0,
@@ -393,6 +480,15 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
         }
         CGColorRelease(cursor_color);
     }
+#ifdef SOKSAK_DIAGNOSTICS
+    else if (render_output) {
+        render_output->cursor_visible = 0;
+        render_output->cursor_blend_difference = 0;
+        render_output->cursor_x = render_output->cursor_y = 0;
+        render_output->cursor_width = render_output->cursor_height = 0;
+        render_output->cursor_border = 0;
+    }
+#endif
 
     CFRelease(font);
     CGContextRelease(ctx);
@@ -491,6 +587,9 @@ Metrics frame_metrics(const FrameFont *frame_font, double font_size, double scal
     CGFloat ascent = CTFontGetAscent(font);
     CGFloat descent = CTFontGetDescent(font);
     CGFloat leading = CTFontGetLeading(font);
+    metrics.ascent = ascent;
+    metrics.descent = descent;
+    metrics.leading = leading;
     metrics.cell_height = (uint32_t)ceil(ascent + descent + leading);
 
     // frame_draw 에서 사용할 scale 적용 글꼴 크기를 저장한다
@@ -501,6 +600,7 @@ Metrics frame_metrics(const FrameFont *frame_font, double font_size, double scal
 
     return metrics;
 }
+
 
 // IOSurface 에서 (x, y) 의 pixel 을 읽어 BGRA 값을 out 에 저장한다
 // out 은 최소 4바이트여야 한다

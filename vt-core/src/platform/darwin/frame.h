@@ -2,6 +2,7 @@
 #define SOKSAK_FRAME_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include <string.h>
 
 // 터미널 글꼴. 설치된 글꼴 이름이나 시스템 고정폭 글꼴로 만든다.
@@ -15,6 +16,9 @@ typedef struct {
     uint32_t cell_height;
     double font_size;
     const FrameFont *font; // 셀 메트릭을 계산하고 글자를 그리는 글꼴
+    double ascent;
+    double descent;
+    double leading;
 } Metrics;
 
 typedef struct {
@@ -48,6 +52,41 @@ typedef struct {
 } Screen;
 
 typedef struct {
+    uint32_t row;
+    uint32_t col;
+    uint32_t width;
+    uint8_t has_ink;
+    uint8_t has_underline;
+    double ink_x;
+    double ink_y;
+    double ink_width;
+    double ink_height;
+    double underline_x;
+    double underline_y;
+    double underline_width;
+    double underline_height;
+} RenderCell;
+
+typedef struct {
+    RenderCell *cells;
+    uint32_t cell_capacity;
+    uint32_t cell_count;
+    size_t bytes_per_row;
+    double ascent;
+    double descent;
+    double leading;
+    double underline_position;
+    double underline_thickness;
+    uint8_t cursor_visible;
+    uint8_t cursor_blend_difference;
+    double cursor_x;
+    double cursor_y;
+    double cursor_width;
+    double cursor_height;
+    double cursor_border;
+} RenderOutput;
+
+typedef struct {
     const uint8_t *data;
     uint32_t data_len;
     uint32_t x;
@@ -77,7 +116,8 @@ void frame_nonce(Frame *frame, uint8_t *buf);
 // Returns 0 on success, -1 on failure
 int frame_draw(Frame *frame, Screen *screen, Metrics *metrics);
 int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics,
-                                  InlineImageRaster *images, uint32_t image_count);
+                                  InlineImageRaster *images, uint32_t image_count,
+                                  RenderOutput *render_output);
 
 // frame 을 해제하고 IOSurface 를 release 한다
 void frame_drop(Frame *frame);

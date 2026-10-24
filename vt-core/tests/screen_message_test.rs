@@ -91,10 +91,18 @@ fn the_message_for_the_screen_of_each_vector_has_its_members_and_its_hash() {
             expected["segment"].as_str().unwrap(),
             expected["sequence"].as_u64().unwrap(),
             serde_json::Value::Null,
+            serde_json::Value::Null,
             &screen,
         )
         .unwrap_or_else(|error| panic!("{name}: {error}"));
         assert_eq!(message["event"], "screen", "{name}");
+        assert!(
+            message.get("render").is_some(),
+            "{name}: render member is required"
+        );
+        if message["frame"].is_null() {
+            assert!(message["render"].is_null(), "{name}: render without frame");
+        }
         for member in ["sequence", "segment", "rows", "cols"] {
             assert_eq!(message[member], expected[member], "{name}: {member}");
         }
@@ -133,6 +141,26 @@ fn the_message_for_the_screen_of_each_vector_has_its_members_and_its_hash() {
 fn a_screen_that_the_hash_refuses_gets_no_message() {
     let mut screen = screen_of(&golden("screen-message.json")["vectors"][1]["message"]).unwrap();
     screen.cursor.row = 5;
-    let error = screen_message("b1", 3, serde_json::Value::Null, &screen).unwrap_err();
+    let error = screen_message(
+        "b1",
+        3,
+        serde_json::Value::Null,
+        serde_json::Value::Null,
+        &screen,
+    )
+    .unwrap_err();
     assert!(error.contains("outside the screen"), "{error}");
+}
+
+#[test]
+fn a_render_record_for_another_frame_is_rejected() {
+    let screen = screen_of(&golden("screen-message.json")["vectors"][0]["message"]).unwrap();
+    let frame = json!({ "generation": 1, "raster": 2, "sequence": 3 });
+    let render = json!({
+        "frame": { "generation": 1, "raster": 2, "sequence": 2 },
+        "glyphs": []
+    });
+    let error = soksak_sidecar_vt_core::protocol::screen_message("boot", 1, frame, render, &screen)
+        .unwrap_err();
+    assert!(error.contains("render.frame must match frame"), "{error}");
 }

@@ -4,7 +4,9 @@
 
 ## 미배포
 
-- S77.3: 네 protocol test fixture에서 새 detach request ledger를 초기화해 VT core library test target 컴파일을 복구한다. Red: 변경 전 compile이 네 initializer에서 E0063으로 실패했다. Green: 같은 명령이 compile됐다(요청한 test 이름은 crate에 없어 선택된 test는 0개다). Protocol test 19개와 formatting checks가 통과한다.
+- S78: diagnostic screen 메시지에 frame과 연결된 renderer geometry를 추가한다. 명시적으로 trace를 켠 diagnostic service만 같은 draw에서 나온 raster 형식·stride, grid와 cell metrics, CoreText 및 underline geometry, cursor bounds, glyph ink bounds를 보고한다. 기본 경로는 `render: null`을 보내며 셀별 bounds를 계산하지 않는다. Red: 변경 전 screen 메시지에는 필수 `render`가 없었고 frame identity가 다른 render도 허용했으며 Makefile은 Cargo feature를 전달하지 않았다. Green: 기본 frame test 23/23, diagnostics frame test 24/24, screen-message test 3/3, service frame/queue 상관관계, 비대칭 transform unit, default/diagnostics collection gate, Makefile target test 3/3, `cargo fmt --all --check`, records 검사(104개 파일)가 통과한다. `make release FEATURES=diagnostics`로 local VT 0.0.13 diagnostic archive를 만들었다. SHA-256은 `541f8c2dc283088c6a8f858882c013c90aaaf9df7a8f8cbca35e345c99520264`다. Public release와 live capture를 실행하지 않았다.
+
+- S77.3: 새 detach request ledger를 네 protocol test fixture에서 초기화해 VT core library test target 컴파일을 복구한다. Red: 변경 전 compile이 네 initializer에서 E0063으로 실패했다. Green: protocol test 19개와 formatting checks가 통과한다.
 
 - S77: Terminal session과 PTY를 유지하면서 현재 render owner를 해제하는 상관관계 `image.detach` 요청과 `image.detached` 결과를 추가한다. Detach는 image name과 generation으로 범위를 제한한다. Request replay는 tuple에 결합되며 새 owner가 나타나기 전까지 reconnect 뒤에도 idempotent하다. 이미 전송된 transfer는 정확한 응답 또는 연결 종료까지 불변으로 유지하고, 늦은 응답은 전체 frame identity가 일치해야 한다. Red: 변경 전 server는 detach에 응답하지 않았고, 잘못된 frame 응답이 새 pending draw를 해제했으며, reconnect 뒤 replay는 `requestMismatch`를 반환했다. Green: targeted `serve_contract` test 7개가 통과한다. Local VT 0.0.13 macOS arm64 build와 공식 archive 명령이 통과한다. Candidate archive SHA-256은 `7fb7c038dad01828f06c185d82040c5c14d3a7ff761f2593eaf9ed5d764a8a27`다. Public release는 게시하지 않았다. Event census가 `vt-alacritty/build.rs`에서 reason annotation 누락 3개를 계속 찾으며 S77.1이 이를 추적한다.
 

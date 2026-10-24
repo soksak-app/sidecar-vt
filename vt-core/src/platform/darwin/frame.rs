@@ -6,11 +6,101 @@ pub struct CMetrics {
     pub cell_height: u32,
     pub font_size: f64,
     pub font: *const CFrameFont,
+    pub ascent: f64,
+    pub descent: f64,
+    pub leading: f64,
 }
 
 #[repr(C)]
 pub struct CFrameFont {
     _private: [u8; 0],
+}
+
+#[derive(Clone, Debug)]
+pub struct GlyphRenderBounds {
+    pub row: u32,
+    pub col: u32,
+    pub width: u32,
+    pub grapheme: String,
+    pub ink: Option<[f64; 4]>,
+    pub underline: Option<[f64; 4]>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FrameRenderMetadata {
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+    pub bytes_per_row: usize,
+    pub cell_width: u32,
+    pub cell_height: u32,
+    pub rows: u32,
+    pub cols: u32,
+    pub grid_origin_x: u32,
+    pub grid_origin_y: u32,
+    pub font_family: String,
+    pub font_size: f64,
+    pub ascent: f64,
+    pub descent: f64,
+    pub leading: f64,
+    pub baseline_from_cell_top: f64,
+    pub underline_position: f64,
+    pub underline_thickness: f64,
+    pub cursor: serde_json::Value,
+    pub glyphs: Vec<GlyphRenderBounds>,
+}
+
+impl FrameRenderMetadata {
+    pub fn value(&self, frame: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "frame": frame,
+            "pixel": {
+                "width": self.pixel_width,
+                "height": self.pixel_height,
+                "bytesPerRow": self.bytes_per_row,
+                "format": "bgra8",
+                "alpha": "premultiplied",
+                "colorSpace": "sRGB",
+                "origin": "top-left"
+            },
+            "grid": {
+                "rows": self.rows,
+                "cols": self.cols,
+                "origin": { "x": self.grid_origin_x, "y": self.grid_origin_y },
+                "cellWidth": self.cell_width,
+                "cellHeight": self.cell_height
+            },
+            "font": {
+                "family": self.font_family,
+                "size": self.font_size,
+                "ascent": self.ascent,
+                "descent": self.descent,
+                "leading": self.leading,
+                "baselineFromCellTop": self.baseline_from_cell_top
+            },
+            "underline": {
+                "positionFromBaseline": self.underline_position,
+                "positionCoordinate": "CoreText y-up",
+                "thickness": self.underline_thickness,
+                "minimumThickness": 1.0,
+                "colorSource": "cell.foregroundAfterInverse"
+            },
+            "cursor": self.cursor,
+            "glyphs": self.glyphs.iter().map(|glyph| {
+                serde_json::json!({
+                    "row": glyph.row,
+                    "col": glyph.col,
+                    "width": glyph.width,
+                    "grapheme": glyph.grapheme,
+                    "bounds": glyph.ink.map(|rect| serde_json::json!({
+                        "x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3]
+                    })),
+                    "underline": { "rect": glyph.underline.map(|rect| serde_json::json!({
+                        "x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3]
+                    })) }
+                })
+            }).collect::<Vec<_>>()
+        })
+    }
 }
 
 use unicode_segmentation::UnicodeSegmentation;
@@ -29,6 +119,44 @@ pub struct CCell {
     pub has_bg: u8,
     pub inverse: u8,
     pub underline: u8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct CRenderCell {
+    pub row: u32,
+    pub col: u32,
+    pub width: u32,
+    pub has_ink: u8,
+    pub has_underline: u8,
+    pub ink_x: f64,
+    pub ink_y: f64,
+    pub ink_width: f64,
+    pub ink_height: f64,
+    pub underline_x: f64,
+    pub underline_y: f64,
+    pub underline_width: f64,
+    pub underline_height: f64,
+}
+
+#[repr(C)]
+pub struct CRenderOutput {
+    pub cells: *mut CRenderCell,
+    pub cell_capacity: u32,
+    pub cell_count: u32,
+    pub bytes_per_row: usize,
+    pub ascent: f64,
+    pub descent: f64,
+    pub leading: f64,
+    pub underline_position: f64,
+    pub underline_thickness: f64,
+    pub cursor_visible: u8,
+    pub cursor_blend_difference: u8,
+    pub cursor_x: f64,
+    pub cursor_y: f64,
+    pub cursor_width: f64,
+    pub cursor_height: f64,
+    pub cursor_border: f64,
 }
 
 #[repr(C)]
@@ -80,6 +208,7 @@ unsafe extern "C" {
         metrics: *mut CMetrics,
         images: *mut CInlineImageRaster,
         image_count: u32,
+        render_output: *mut CRenderOutput,
     ) -> i32;
     fn frame_drop(frame: *mut CFrame);
     fn frame_metrics(font: *const CFrameFont, font_size: f64, scale: f64) -> CMetrics;
@@ -93,6 +222,30 @@ unsafe extern "C" {
 
 pub struct Frame {
     ptr: *mut CFrame,
+    width: u32,
+    height: u32,
+}
+
+fn core_graphics_rect_to_top_left(frame_height: f64, rect: [f64; 4]) -> [f64; 4] {
+    [
+        rect[0],
+        frame_height - (rect[1] + rect[3]),
+        rect[2],
+        rect[3],
+    ]
+}
+
+#[cfg(test)]
+mod render_coordinate_tests {
+    use super::core_graphics_rect_to_top_left;
+
+    #[test]
+    fn transforms_an_asymmetric_fractional_rectangle_to_top_left_pixels() {
+        assert_eq!(
+            core_graphics_rect_to_top_left(71.0, [5.25, 13.5, 7.75, 2.25]),
+            [5.25, 55.25, 7.75, 2.25]
+        );
+    }
 }
 
 pub use crate::protocol::{CursorBlinkPolicy, UnfocusedCursor};
@@ -186,7 +339,11 @@ impl Frame {
             if ptr.is_null() {
                 None
             } else {
-                Some(Frame { ptr })
+                Some(Frame {
+                    ptr,
+                    width: width_px,
+                    height: height_px,
+                })
             }
         }
     }
@@ -244,6 +401,19 @@ impl Frame {
         theme: &crate::palette::TerminalTheme,
         images: &[crate::protocol::InlineImagePlacement],
     ) -> Result<(), String> {
+        self.draw_with_render_metadata(screen, metrics, cursor, theme, images, false)
+            .map(|_| ())
+    }
+
+    pub fn draw_with_render_metadata(
+        &self,
+        screen: &crate::protocol::Screen,
+        metrics: &Metrics,
+        cursor: CursorRender,
+        theme: &crate::palette::TerminalTheme,
+        images: &[crate::protocol::InlineImagePlacement],
+        collect_metadata: bool,
+    ) -> Result<Option<FrameRenderMetadata>, String> {
         let mut render_screen = screen.clone();
         if let Some(preedit) = render_screen.cursor.preedit.clone() {
             apply_preedit(&mut render_screen, &preedit)?;
@@ -342,6 +512,9 @@ impl Frame {
             cell_height: metrics.cell_height as u32,
             font_size: metrics.font_size as f64,
             font: metrics.font.ptr,
+            ascent: metrics.ascent,
+            descent: metrics.descent,
+            leading: metrics.leading,
         };
 
         let mut c_images = images
@@ -357,6 +530,34 @@ impl Frame {
                 visible: image.visible as u8,
             })
             .collect::<Vec<_>>();
+        let mut render_cells = if collect_metadata {
+            vec![CRenderCell::default(); cells.len()]
+        } else {
+            Vec::new()
+        };
+        let mut render_output = CRenderOutput {
+            cells: render_cells.as_mut_ptr(),
+            cell_capacity: render_cells.len() as u32,
+            cell_count: 0,
+            bytes_per_row: 0,
+            ascent: 0.0,
+            descent: 0.0,
+            leading: 0.0,
+            underline_position: 0.0,
+            underline_thickness: 0.0,
+            cursor_visible: 0,
+            cursor_blend_difference: 0,
+            cursor_x: 0.0,
+            cursor_y: 0.0,
+            cursor_width: 0.0,
+            cursor_height: 0.0,
+            cursor_border: 0.0,
+        };
+        let render_output_ptr = if collect_metadata {
+            &mut render_output
+        } else {
+            std::ptr::null_mut()
+        };
         let result = unsafe {
             frame_draw_with_inline_images(
                 self.ptr,
@@ -364,14 +565,114 @@ impl Frame {
                 &mut c_metrics,
                 c_images.as_mut_ptr(),
                 c_images.len() as u32,
+                render_output_ptr,
             )
         };
 
-        if result == 0 {
-            Ok(())
-        } else {
-            Err("Frame draw failed".to_string())
+        if result != 0 {
+            return Err("Frame draw failed".to_string());
         }
+        if !collect_metadata {
+            return Ok(None);
+        }
+        if render_output.bytes_per_row == 0 || render_output.cell_count as usize != cells.len() {
+            return Err("Frame render metadata is incomplete after draw".to_string());
+        }
+        let mut glyphs = Vec::new();
+        let mut cell_index = 0;
+        for (row, cells_in_row) in render_screen.lines.iter().enumerate() {
+            for (col, cell) in cells_in_row.iter().enumerate() {
+                let rendered = render_cells
+                    .get(cell_index)
+                    .ok_or_else(|| format!("render metadata has no drawn cell at {row},{col}"))?;
+                cell_index += 1;
+                let Some(grapheme) = cell.ch.as_ref().filter(|text| !text.is_empty()) else {
+                    continue;
+                };
+                let cell_rect = |x: f64, y: f64, width: f64, height: f64| {
+                    let [frame_x, frame_y, width, height] = core_graphics_rect_to_top_left(
+                        f64::from(self.height),
+                        [x, y, width, height],
+                    );
+                    [
+                        frame_x - col as f64 * f64::from(metrics.cell_width as u32),
+                        frame_y - row as f64 * f64::from(metrics.cell_height as u32),
+                        width,
+                        height,
+                    ]
+                };
+                glyphs.push(GlyphRenderBounds {
+                    row: row as u32,
+                    col: col as u32,
+                    width: u32::from(cell.width),
+                    grapheme: grapheme.clone(),
+                    ink: (rendered.has_ink != 0).then(|| {
+                        cell_rect(
+                            rendered.ink_x,
+                            rendered.ink_y,
+                            rendered.ink_width,
+                            rendered.ink_height,
+                        )
+                    }),
+                    underline: (rendered.has_underline != 0).then(|| {
+                        cell_rect(
+                            rendered.underline_x,
+                            rendered.underline_y,
+                            rendered.underline_width,
+                            rendered.underline_height,
+                        )
+                    }),
+                });
+            }
+        }
+        let family = metrics.font.family()?;
+        let cursor_rect = (render_output.cursor_visible != 0).then(|| {
+            let [x, y, width, height] = core_graphics_rect_to_top_left(
+                f64::from(self.height),
+                [
+                    render_output.cursor_x,
+                    render_output.cursor_y,
+                    render_output.cursor_width,
+                    render_output.cursor_height,
+                ],
+            );
+            serde_json::json!({ "x": x, "y": y, "width": width, "height": height })
+        });
+        Ok(Some(FrameRenderMetadata {
+            pixel_width: self.width,
+            pixel_height: self.height,
+            bytes_per_row: render_output.bytes_per_row,
+            cell_width: metrics.cell_width as u32,
+            cell_height: metrics.cell_height as u32,
+            rows: u32::from(render_screen.rows),
+            cols: u32::from(render_screen.cols),
+            grid_origin_x: 0,
+            grid_origin_y: 0,
+            font_family: family,
+            font_size: f64::from(metrics.font_size),
+            ascent: render_output.ascent,
+            descent: render_output.descent,
+            leading: render_output.leading,
+            baseline_from_cell_top: f64::from(metrics.cell_height) - render_output.descent,
+            underline_position: render_output.underline_position,
+            underline_thickness: render_output.underline_thickness.max(1.0),
+            cursor: serde_json::json!({
+                "rect": cursor_rect,
+                "shape": match effective_shape {
+                    crate::protocol::CursorShape::Block => "block",
+                    crate::protocol::CursorShape::Underline => "underline",
+                    crate::protocol::CursorShape::Beam => "beam",
+                    crate::protocol::CursorShape::HollowBlock => "hollowBlock",
+                    crate::protocol::CursorShape::Hidden => "hidden",
+                },
+                "visible": cursor.visible,
+                "blinkVisible": cursor.blink_visible,
+                "focused": cursor.focused,
+                "blend": if render_output.cursor_blend_difference != 0 { "difference" } else { "normal" },
+                "border": render_output.cursor_border
+            }),
+            glyphs,
+        }))
     }
 
     pub fn read_pixel(&self, x: u32, y: u32) -> Option<[u8; 4]> {
@@ -630,6 +931,9 @@ pub struct Metrics {
     pub cell_width: f32,
     pub cell_height: f32,
     pub font_size: f32,
+    pub ascent: f64,
+    pub descent: f64,
+    pub leading: f64,
     pub font: std::sync::Arc<TerminalFont>,
 }
 
@@ -653,6 +957,9 @@ pub fn metrics_for(
         cell_width: c_metrics.cell_width as f32,
         cell_height: c_metrics.cell_height as f32,
         font_size: c_metrics.font_size as f32,
+        ascent: c_metrics.ascent,
+        descent: c_metrics.descent,
+        leading: c_metrics.leading,
         font: font.clone(),
     })
 }

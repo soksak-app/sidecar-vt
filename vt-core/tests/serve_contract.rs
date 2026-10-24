@@ -5657,6 +5657,100 @@ async fn next_screen_line<R: tokio::io::AsyncBufRead + Unpin>(
     }
 }
 
+#[cfg(feature = "diagnostics")]
+#[tokio::test]
+async fn a_screen_message_publishes_render_metadata_for_its_drawn_frame() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new(
+        "render-frame-session".into(),
+        calls.clone(),
+    ));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let trace_dir = tempfile::tempdir().expect("trace folder");
+    let events = events_test::TestEvents::with_trace_dir(trace_dir.path());
+    let task = tokio::spawn(serve_with_events(
+        engine_factory,
+        serve_in,
+        serve_out,
+        factory,
+        events.handle(),
+    ));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":3,"raster":7,"width":805,"height":391,"scale":1.0}}}}
+"#).await.unwrap();
+    let image_envelope = next_image_envelope(&mut lines).await;
+    let image = &image_envelope["body"]["image"];
+    let screen = next_screen_line(&mut lines).await;
+    let image_identity = serde_json::json!({
+        "generation": image["generation"],
+        "raster": image["raster"],
+        "sequence": image["sequence"]
+    });
+    assert_eq!(
+        image_identity,
+        serde_json::json!({ "generation": 3, "raster": 7, "sequence": 1 })
+    );
+    assert_eq!(screen["body"]["frame"], image_identity);
+    assert_eq!(screen["body"]["render"]["frame"], image_identity);
+    assert_eq!(screen["body"]["render"]["pixel"]["width"], 805);
+    assert_eq!(screen["body"]["render"]["pixel"]["height"], 391);
+
+    to_serve.write_all(br#"{"surface":"s1","body":{"operation":"font","family":"Menlo","size":14},"cids":["pending-render-input"]}
+"#).await.unwrap();
+    loop {
+        let line = next_line_except_screen(&mut lines).await;
+        let message: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if message["cids"] == serde_json::json!(["pending-render-input"]) {
+            break;
+        }
+    }
+    to_serve
+        .write_all(
+            br#"{"surface":"s1","body":{"operation":"screen.read"}}
+"#,
+        )
+        .await
+        .unwrap();
+    let waiting = next_screen_line(&mut lines).await;
+    assert_eq!(
+        waiting["body"]["frame"],
+        serde_json::json!({ "generation": 3, "raster": 7, "sequence": 2 })
+    );
+    assert!(
+        waiting["body"]["render"].is_null(),
+        "the pending screen was paired with metadata from the previous draw: {waiting}"
+    );
+
+    acknowledge_image(&mut to_serve, &image_envelope).await;
+    let second_envelope = next_image_envelope(&mut lines).await;
+    let second_screen = next_screen_line(&mut lines).await;
+    let second_image = &second_envelope["body"]["image"];
+    let second_identity = serde_json::json!({
+        "generation": second_image["generation"],
+        "raster": second_image["raster"],
+        "sequence": second_image["sequence"]
+    });
+    assert_eq!(second_screen["body"]["frame"], second_identity);
+    assert_eq!(second_screen["body"]["render"]["frame"], second_identity);
+    acknowledge_image(&mut to_serve, &second_envelope).await;
+    to_serve
+        .write_all(
+            br#"{"surface":"s1","body":{"operation":"close"}}
+"#,
+        )
+        .await
+        .unwrap();
+    wait_for_reply(&mut lines, LettingGo::Close).await;
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+}
+
 /// `screen.read` 의 응답은 그 화면을 보이는 표시된 frame 을 `frame` 으로 이름 짓는다. 답한 frame 뒤에는 그 frame 이다.
 #[tokio::test]
 async fn a_screen_read_names_the_answered_frame_that_shows_the_screen() {

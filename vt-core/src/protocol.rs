@@ -1368,10 +1368,14 @@ pub fn screen_message(
     segment: &str,
     sequence: u64,
     frame: Value,
+    render: Value,
     screen: &Screen,
 ) -> Result<Value, String> {
     if sequence == 0 {
         return Err("screen message: sequence must be an integer from 1".to_string());
+    }
+    if !render.is_null() && (frame.is_null() || render["frame"] != frame) {
+        return Err("screen message: render.frame must match frame".to_string());
     }
     let cells = crate::screen_hash::message_cells(screen)?;
     Ok(json!({
@@ -1379,6 +1383,7 @@ pub fn screen_message(
         "sequence": sequence,
         "segment": segment,
         "frame": frame,
+        "render": render,
         "rows": screen.rows,
         "cols": screen.cols,
         "cursor": screen.cursor,
@@ -1396,9 +1401,19 @@ fn screen_event(
     image: Option<&ImageState>,
     screen: &Screen,
 ) -> Result<Value, String> {
+    let frame = shown_frame(image);
+    let render = image
+        .and_then(|state| state.render.as_ref())
+        .filter(|metadata| metadata["frame"] == frame)
+        .cloned()
+        .unwrap_or(Value::Null);
     Ok(
-        json!({"surface": surface_id, "body": screen_message(log.boot(), sequence, shown_frame(image), screen)?}),
+        json!({"surface": surface_id, "body": screen_message(log.boot(), sequence, frame, render, screen)?}),
     )
+}
+
+fn collect_render_metadata(trace_dir: Option<&std::path::Path>) -> bool {
+    cfg!(feature = "diagnostics") && trace_dir.is_some()
 }
 
 /// The `frame` member of a `screen` message: the identity of the frame that shows the screen of the surface. A frame is
@@ -1558,31 +1573,36 @@ async fn present_screen(
         return true;
     }
     let draw_started = std::time::Instant::now();
-    if let Err(reason) = state.frame.draw_with_theme_and_inline_images(
+    let collect_render = collect_render_metadata(log.trace_dir());
+    let render = match state.frame.draw_with_render_metadata(
         screen,
         &state.metrics,
         crate::platform::darwin::frame::CursorRender::from_protocol(&screen.cursor),
         &state.theme,
         &state.inline_images,
+        collect_render,
     ) {
-        // The failed screen is in no frame. It stays dirty, so the `screen` event names the next frame, and the next
-        // change draws that frame. Clearing it would name the last sent frame, which shows an earlier screen.
-        state.dirty = true;
-        let response = json!({
-            "surface": surface_id,
-            "body": {"event": "error", "reason": reason}
-        });
-        if output_tx.send(response.to_string()).await.is_err() {
-            return false;
-        }
-        // 그리기가 실패해도 상태 이벤트는 버리지 않는다. 오류가 그 화면에 그림이 없음을 알린다.
-        for event in std::mem::take(&mut state.presentation_events) {
-            if output_tx.send(event).await.is_err() {
+        Ok(render) => render,
+        Err(reason) => {
+            // The failed screen is in no frame. It stays dirty, so the `screen` event names the next frame, and the next
+            // change draws that frame. Clearing it would name the last sent frame, which shows an earlier screen.
+            state.dirty = true;
+            let response = json!({
+                "surface": surface_id,
+                "body": {"event": "error", "reason": reason}
+            });
+            if output_tx.send(response.to_string()).await.is_err() {
                 return false;
             }
+            // 그리기가 실패해도 상태 이벤트는 버리지 않는다. 오류가 그 화면에 그림이 없음을 알린다.
+            for event in std::mem::take(&mut state.presentation_events) {
+                if output_tx.send(event).await.is_err() {
+                    return false;
+                }
+            }
+            return true;
         }
-        return true;
-    }
+    };
     // 프레임 한 장의 계기(V5-104): 무엇 때문에 그렸는지, 얼마나 걸렸는지, 어떤 래스터에. 프레임 기록(core
     // docs/spec/replay.md#records)은 화면이 포함하는 마지막 입력의 순번과 화면의 크기와 hash 를 담는다.
     record_frame(
@@ -1599,6 +1619,12 @@ async fn present_screen(
         )),
     );
     state.sequence += 1;
+    let frame = json!({
+        "generation": state.generation,
+        "raster": state.raster,
+        "sequence": state.sequence
+    });
+    state.render = render.map(|render| render.value(frame));
     state.pending_draw = true;
     state.sent_at = Some(std::time::Instant::now());
     state.dirty = false;

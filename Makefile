@@ -4,6 +4,8 @@
 MACOS_MINIMUM = 14.4
 PROFILE ?= debug
 CARGO_PROFILE = $(if $(filter release,$(PROFILE)),--release,)
+FEATURES ?=
+CARGO_FEATURE_ARGS = $(if $(strip $(FEATURES)),--features $(FEATURES))
 SOK ?= sok
 
 # soksak-events of the @soksak/plugin-api that package.json names applies the census of core to the sources
@@ -37,9 +39,10 @@ test: build node_modules
 	node --test tests/
 	pnpm exec soksak-records
 
+# `FEATURES=diagnostics` enables the diagnostic service build; the runtime trace remains opt-in.
 # sidecar.json 이 가리키는 vt-alacritty/build/soksak-vt-alacritty 를 쓴다.
 build:
-	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo build $(CARGO_PROFILE) -p soksak-sidecar-vt-alacritty
+	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo build $(CARGO_PROFILE) $(CARGO_FEATURE_ARGS) -p soksak-sidecar-vt-alacritty
 	mkdir -p vt-alacritty/build
 	cp target/$(PROFILE)/soksak-vt-alacritty vt-alacritty/build/soksak-vt-alacritty
 	cp target/$(PROFILE)/soksak-vt-replay vt-alacritty/build/soksak-vt-replay

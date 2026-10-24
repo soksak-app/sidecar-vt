@@ -105,6 +105,124 @@ fn pixels(frame: &Frame, width: u32, height: u32) -> Vec<[u8; 4]> {
         .collect()
 }
 
+#[test]
+fn unrequested_render_metadata_is_not_collected() {
+    let metrics = metrics(13.0, 1.0);
+    let frame = Frame::new(metrics.cell_width as u32, metrics.cell_height as u32).expect("frame");
+    let metadata = frame
+        .draw_with_render_metadata(
+            &screen(1, 1),
+            &metrics,
+            CursorRender {
+                visible: false,
+                ..CursorRender::default()
+            },
+            &TerminalTheme::dark(),
+            &[],
+            false,
+        )
+        .expect("draw without metadata");
+    assert!(
+        metadata.is_none(),
+        "default draw returned renderer metadata: {metadata:?}"
+    );
+}
+
+#[cfg(feature = "diagnostics")]
+#[test]
+fn opt_in_render_metadata_describes_the_drawn_glyph_underline_and_cursor() {
+    let metrics = metrics(13.0, 1.0);
+    let width = metrics.cell_width as u32 * 3 + 5;
+    let height = metrics.cell_height as u32 * 2 + 7;
+    let mut state = screen(3, 2);
+    state.lines[1][1].ch = Some("X".to_string());
+    state.lines[1][1].underline = true;
+    state.cursor.col = 2;
+    state.cursor.row = 0;
+    state.cursor.focused = true;
+    let frame = Frame::new(width, height).expect("frame");
+    let metadata = frame
+        .draw_with_render_metadata(
+            &state,
+            &metrics,
+            CursorRender {
+                visible: true,
+                focused: true,
+                blink_visible: true,
+                shape: CursorShape::Block,
+                unfocused: UnfocusedCursor::Unchanged,
+            },
+            &TerminalTheme::dark(),
+            &[],
+            true,
+        )
+        .expect("draw with metadata")
+        .expect("opt-in metadata");
+    let value = metadata.value(serde_json::json!({ "generation": 3, "raster": 7, "sequence": 12 }));
+    assert_eq!(value["pixel"]["width"], width);
+    assert_eq!(value["pixel"]["height"], height);
+    assert!(value["pixel"]["bytesPerRow"].as_u64().unwrap() >= u64::from(width * 4));
+    assert_eq!(value["pixel"]["origin"], "top-left");
+    assert_eq!(
+        value["grid"]["origin"],
+        serde_json::json!({ "x": 0, "y": 0 })
+    );
+    assert_eq!(value["grid"]["rows"], 2);
+    assert_eq!(value["grid"]["cols"], 3);
+    let glyph = value["glyphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|glyph| glyph["row"] == 1 && glyph["col"] == 1)
+        .expect("drawn glyph bounds");
+    let bounds = &glyph["bounds"];
+    assert!(
+        bounds.is_object(),
+        "drawn grapheme has no ink bounds: {glyph}"
+    );
+    assert!(bounds["x"].as_f64().unwrap() >= 0.0, "{bounds}");
+    assert!(bounds["y"].as_f64().unwrap() >= 0.0, "{bounds}");
+    assert!(
+        bounds["x"].as_f64().unwrap() + bounds["width"].as_f64().unwrap()
+            <= metrics.cell_width as f64,
+        "cell-local ink bounds exceed cell width: {bounds}"
+    );
+    assert!(
+        bounds["y"].as_f64().unwrap() + bounds["height"].as_f64().unwrap()
+            <= metrics.cell_height as f64,
+        "cell-local ink bounds exceed cell height: {bounds}"
+    );
+    assert!(bounds["width"].as_f64().unwrap() > 0.0, "{bounds}");
+    assert!(bounds["height"].as_f64().unwrap() > 0.0, "{bounds}");
+    assert!(glyph["underline"]["rect"]["height"].as_f64().unwrap() >= 1.0);
+    let cursor = &value["cursor"];
+    assert_eq!(cursor["shape"], "block");
+    assert_eq!(cursor["blend"], "difference");
+    assert_eq!(
+        cursor["rect"]["x"].as_f64(),
+        Some(f64::from(metrics.cell_width as u32) * 2.0)
+    );
+    assert_eq!(cursor["rect"]["y"].as_f64(), Some(0.0));
+    assert_eq!(
+        cursor["rect"]["height"].as_f64(),
+        Some(metrics.cell_height as f64)
+    );
+
+    let x0 = metrics.cell_width as u32 + bounds["x"].as_f64().unwrap().floor() as u32;
+    let y0 = metrics.cell_height as u32 + bounds["y"].as_f64().unwrap().floor() as u32;
+    let x1 = metrics.cell_width as u32
+        + (bounds["x"].as_f64().unwrap() + bounds["width"].as_f64().unwrap()).ceil() as u32;
+    let y1 = metrics.cell_height as u32
+        + (bounds["y"].as_f64().unwrap() + bounds["height"].as_f64().unwrap()).ceil() as u32;
+    let bg = frame.read_pixel(0, 0).expect("background pixel");
+    let contains_ink =
+        (x0..x1).any(|x| (y0..y1).any(|y| frame.read_pixel(x, y).is_some_and(|pixel| pixel != bg)));
+    assert!(
+        contains_ink,
+        "the reported ink bounds contain no drawn pixel: {bounds}"
+    );
+}
+
 fn differing_pixels(left: &Frame, right: &Frame, x0: u32, x1: u32, height: u32) -> usize {
     (x0..x1)
         .flat_map(|x| (0..height).map(move |y| (x, y)))
