@@ -1056,24 +1056,13 @@ enum SurfaceCommand {
         detach: ImageDetach,
         request_check: ImageDetachRequestCheck,
     },
-    Input {
-        bytes: Vec<u8>,
-        cids: Vec<String>,
-        compose: Option<Option<Preedit>>,
-    },
-    InputKeys {
-        keys: Vec<InputKey>,
+    InputTransaction {
+        actions: Vec<InputAction>,
+        preedit: Preedit,
         cids: Vec<String>,
     },
     Paste {
         text: String,
-        cids: Vec<String>,
-    },
-    Compose {
-        preedit: Option<Preedit>,
-    },
-    Focus {
-        focused: bool,
         cids: Vec<String>,
     },
     Theme {
@@ -1154,14 +1143,225 @@ use crate::platform::ImageConfiguration;
 #[derive(Debug, Clone, Deserialize)]
 struct InputKey {
     key: String,
-    #[serde(default)]
     text: String,
-    #[serde(default)]
     shift: bool,
-    #[serde(default)]
     alt: bool,
-    #[serde(default)]
     ctrl: bool,
+}
+
+#[derive(Debug)]
+enum InputAction {
+    Insert {
+        text: String,
+        replacement_range: Option<JsonRange>,
+        attributed: bool,
+    },
+    Key(InputKey),
+    Command(InputKey),
+    Focus(bool),
+}
+
+fn require_exact_fields(value: &Value, fields: &[&str], description: &str) -> Result<(), String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("{description} must be an object"))?;
+    if object.len() != fields.len() || object.keys().any(|key| !fields.contains(&key.as_str())) {
+        return Err(format!(
+            "{description} must contain exactly {}",
+            fields.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+fn parse_required_nullable_range(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    description: &str,
+) -> Result<Option<JsonRange>, String> {
+    let value = object
+        .get(field)
+        .ok_or_else(|| format!("{description}.{field} is required"))?;
+    match value {
+        Value::Null => Ok(None),
+        Value::Object(_) => {
+            require_exact_fields(
+                value,
+                &["location", "length"],
+                &format!("{description}.{field}"),
+            )?;
+            serde_json::from_value(value.clone())
+                .map(Some)
+                .map_err(|error| format!("{description}.{field}: {error}"))
+        }
+        _ => Err(format!(
+            "{description}.{field} must be null or a range object"
+        )),
+    }
+}
+
+fn parse_input_preedit(value: &Value) -> Result<Preedit, String> {
+    require_exact_fields(
+        value,
+        &[
+            "text",
+            "markedRange",
+            "selectedRange",
+            "replacementRange",
+            "attributed",
+        ],
+        "preedit",
+    )?;
+    let object = value.as_object().expect("exact object validation");
+    parse_required_nullable_range(object, "markedRange", "preedit")?;
+    parse_required_nullable_range(object, "selectedRange", "preedit")?;
+    parse_required_nullable_range(object, "replacementRange", "preedit")?;
+    if !object.get("attributed").is_some_and(Value::is_boolean) {
+        return Err("preedit.attributed must be boolean".into());
+    }
+    let preedit: Preedit =
+        serde_json::from_value(value.clone()).map_err(|error| format!("preedit: {error}"))?;
+    preedit.validate_marked_range()?;
+    Ok(preedit)
+}
+
+fn parse_input_key(value: &Value, description: &str) -> Result<InputKey, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("{description} must be an object"))?;
+    let key = object
+        .get("key")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{description}.key must be a string"))?;
+    let fields = if key == "Char" {
+        &["key", "text", "shift", "alt", "ctrl"][..]
+    } else {
+        &["key", "shift", "alt", "ctrl"][..]
+    };
+    require_exact_fields(value, fields, description)?;
+    let text = if key == "Char" {
+        object
+            .get("text")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{description}.text must be a string for Char"))?
+            .to_string()
+    } else {
+        String::new()
+    };
+    let shift = object
+        .get("shift")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| format!("{description}.shift must be boolean"))?;
+    let alt = object
+        .get("alt")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| format!("{description}.alt must be boolean"))?;
+    let ctrl = object
+        .get("ctrl")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| format!("{description}.ctrl must be boolean"))?;
+    Ok(InputKey {
+        key: key.to_string(),
+        text,
+        shift,
+        alt,
+        ctrl,
+    })
+}
+
+fn parse_input_action(value: &Value, index: usize) -> Result<InputAction, String> {
+    let description = format!("actions[{index}]");
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{description}.type must be a string"))?;
+    match kind {
+        "insert" => {
+            require_exact_fields(
+                value,
+                &["type", "text", "replacementRange", "attributed"],
+                &description,
+            )?;
+            let object = value.as_object().expect("exact object validation");
+            let text = object["text"]
+                .as_str()
+                .ok_or_else(|| format!("{description}.text must be a string"))?
+                .to_string();
+            let replacement_range =
+                parse_required_nullable_range(object, "replacementRange", &description)?;
+            let attributed = object["attributed"]
+                .as_bool()
+                .ok_or_else(|| format!("{description}.attributed must be boolean"))?;
+            Ok(InputAction::Insert {
+                text,
+                replacement_range,
+                attributed,
+            })
+        }
+        "key" => {
+            let object = value
+                .as_object()
+                .ok_or_else(|| format!("{description} must be an object"))?;
+            let key = object
+                .get("key")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("{description}.key must be a string"))?;
+            let allowed_fields = if key == "Char" {
+                &["type", "key", "text", "shift", "alt", "ctrl"][..]
+            } else {
+                &["type", "key", "shift", "alt", "ctrl"][..]
+            };
+            require_exact_fields(value, allowed_fields, &description)?;
+            let mut fields = object.clone();
+            fields.remove("type");
+            Ok(InputAction::Key(parse_input_key(
+                &Value::Object(fields),
+                &description,
+            )?))
+        }
+        "command" => {
+            require_exact_fields(value, &["type", "selector"], &description)?;
+            let selector = value["selector"]
+                .as_str()
+                .ok_or_else(|| format!("{description}.selector must be a string"))?;
+            key_for_native_command(selector)
+                .map(InputAction::Command)
+                .map_err(|error| format!("{description}: {error}"))
+        }
+        "focus" => {
+            require_exact_fields(value, &["type", "focused"], &description)?;
+            value["focused"]
+                .as_bool()
+                .map(InputAction::Focus)
+                .ok_or_else(|| format!("{description}.focused must be boolean"))
+        }
+        _ => Err(format!("{description}.type is unsupported: {kind}")),
+    }
+}
+
+fn parse_input_transaction(body: &Value) -> Result<(Vec<InputAction>, Preedit), String> {
+    require_exact_fields(body, &["operation", "actions", "preedit"], "input")?;
+    if body["operation"] != "input" {
+        return Err("input.operation must be input".into());
+    }
+    let actions = body["actions"]
+        .as_array()
+        .ok_or_else(|| "input.actions must be an array".to_string())?
+        .iter()
+        .enumerate()
+        .map(|(index, action)| parse_input_action(action, index))
+        .collect::<Result<Vec<_>, _>>()?;
+    let preedit = parse_input_preedit(&body["preedit"])?;
+    Ok((actions, preedit))
+}
+
+fn preedit_changes_render(current: &Option<Preedit>, next: &Preedit) -> bool {
+    if next.text.is_empty() {
+        return current
+            .as_ref()
+            .is_some_and(|preedit| !preedit.text.is_empty());
+    }
+    current.as_ref() != Some(next)
 }
 
 fn key_for_native_command(selector: &str) -> Result<InputKey, String> {
@@ -3136,59 +3336,111 @@ async fn surface_task(
                             return;
                         }
                     }
-                    SurfaceCommand::Input { bytes, cids, compose } => {
-                        let has_compose = compose.is_some();
-                        if let Some(next) = compose {
-                            preedit = next;
+                    SurfaceCommand::InputTransaction { actions, preedit: next_preedit, cids } => {
+                        let modes = engine.modes();
+                        let mut next_focused = focused;
+                        let mut bytes = Vec::new();
+                        let encoding = (|| -> Result<(), String> {
+                            for action in &actions {
+                                match action {
+                                    InputAction::Insert { text, replacement_range, attributed } => {
+                                        let _ = (replacement_range, attributed);
+                                        bytes.extend_from_slice(text.as_bytes());
+                                    }
+                                    InputAction::Key(key) | InputAction::Command(key) => {
+                                        bytes.extend_from_slice(&encode_keys(std::slice::from_ref(key), &modes)?);
+                                    }
+                                    InputAction::Focus(next) => {
+                                        if *next != next_focused && modes.focus_in_out {
+                                            bytes.extend_from_slice(if *next { b"\x1b[I" } else { b"\x1b[O" });
+                                        }
+                                        next_focused = *next;
+                                    }
+                                }
+                            }
+                            Ok(())
+                        })();
+                        if let Err(error) = encoding {
+                            let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": error}});
+                            if output_tx.reply(response).await.is_err() { return; }
+                            continue;
                         }
+                        if !bytes.is_empty() && session_id.is_none() {
+                            let response = json!({"surface": surface_id, "body": {"error": "Session not open"}});
+                            if output_tx.reply(response).await.is_err() { return; }
+                            continue;
+                        }
+
                         cursor_activity = Instant::now();
                         last_cursor_frame = None;
-                        // 입력은 뷰포트를 가장 새 출력으로 되돌린 뒤 쓴다.
-                        let scrolled = inputs.scroll_to_newest(engine.as_mut(), session_id.as_deref());
-                        if scrolled {
+                        let viewport_changed =
+                            inputs.scroll_to_newest(engine.as_mut(), session_id.as_deref());
+                        if viewport_changed {
                             refresh_inline_image_positions(&mut engine, &mut image_state);
-                            if !has_compose && !hold_while_presenting(&mut image_state) {
-                                let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                                if let Some(state) = image_state.as_mut() {
-                                    if !present_screen(&surface_id, &screen, state, &output_tx, "input", &log, inputs.sequence).await { return; }
-                                } else if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, inputs.sequence, image_state.as_ref()).await { return; }
+                        }
+                        let presentation_changed = viewport_changed
+                            || next_focused != focused
+                            || preedit_changes_render(&preedit, &next_preedit);
+                        let write_result = match (session_id.as_deref(), bytes.is_empty()) {
+                            (Some(session), false) => inputs.write(&session_port, session, &bytes, &cids).await,
+                            _ => Ok(()),
+                        };
+                        focused = next_focused;
+                        preedit = Some(next_preedit);
+
+                        let mut queued_output = false;
+                        let mut exited = false;
+                        while let Ok(event) = daemon_events_rx.try_recv() {
+                            match event {
+                                DaemonEvent::Output { session_id: ref received, data, truncated, .. }
+                                    if session_id.as_deref() == Some(received) => {
+                                        queued_output = true;
+                                        cursor_activity = Instant::now();
+                                        last_cursor_frame = None;
+                                        if truncated {
+                                            crate::engine_trace::record(&log, &surface_id, || "reset".to_string());
+                                            engine.reset();
+                                        }
+                                        crate::engine_trace::record(&log, &surface_id, || format!("feed {}", base64_encode(&data)));
+                                        inputs.output(received, &data);
+                                        engine.feed(&data);
+                                        if !send_engine_events(
+                                            SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs },
+                                            session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart,
+                                        ).await { return; }
+                                    }
+                                DaemonEvent::Exit { session_id: ref received }
+                                    if session_id.as_deref() == Some(received) => exited = true,
+                                DaemonEvent::Error { session_id: ref received, error }
+                                    if session_id.as_deref() == Some(received) => {
+                                        if output_tx.send(json!({"surface": surface_id, "body": {"event": "error", "reason": error}}).to_string()).await.is_err() { return; }
+                                    }
+                                _ => {}
                             }
                         }
-                        if let Some(ref sid) = session_id {
-                            match inputs.write(&session_port, sid, &bytes, &cids).await {
-                                Ok(()) => {
-                                    let response = json!({
-                                        "surface": surface_id,
-                                        "body": {"ack": true}
-                                    });
-                                    if output_tx.reply(response).await.is_err() {
-                                        return;
-                                    }
-                                }
-                                Err(e) => {
-                                    let response = json!({
-                                        "surface": surface_id,
-                                        "body": {"error": format!("Write failed: {}", e)}
-                                    });
-                                    if output_tx.reply(response).await.is_err() {
-                                        return;
-                                    }
-                                }
-                            }
-                        } else {
-                            let response = json!({
-                                "surface": surface_id,
-                                "body": {"error": "Session not open"}
-                            });
-                            if output_tx.reply(response).await.is_err() {
-                                return;
-                            }
-                        }
-                        if has_compose && !hold_while_presenting(&mut image_state) {
-                            let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
+
+                        if presentation_changed || (queued_output && !headless) {
                             if let Some(state) = image_state.as_mut() {
-                                if !present_screen(&surface_id, &screen, state, &output_tx, "input", &log, inputs.sequence).await { return; }
-                            } else if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, inputs.sequence, image_state.as_ref()).await { return; }
+                                if state.pending_draw {
+                                    state.dirty = true;
+                                } else {
+                                    let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
+                                    if !present_screen(&surface_id, &screen, state, &output_tx, "input", &log, inputs.sequence).await { return; }
+                                }
+                            } else {
+                                let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
+                                if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, inputs.sequence, image_state.as_ref()).await { return; }
+                            }
+                        }
+
+                        let body = match write_result {
+                            Ok(()) => json!({"ack": true}),
+                            Err(error) => json!({"error": format!("Write failed for submitted action batch; PTY write progress is unknown: {error}")}),
+                        };
+                        if output_tx.reply(json!({"surface": surface_id, "body": body})).await.is_err() { return; }
+                        if exited {
+                            if output_tx.send(json!({"surface": surface_id, "body": {"event": "exit"}}).to_string()).await.is_err() { return; }
+                            return;
                         }
                     }
                     SurfaceCommand::Paste { text, cids } => {
@@ -3488,116 +3740,6 @@ async fn surface_task(
                         };
                         let response = json!({"surface": surface_id, "body": body});
                         if output_tx.send(response.to_string()).await.is_err() { return; }
-                    }
-                    SurfaceCommand::InputKeys { keys, cids } => {
-                        cursor_activity = Instant::now();
-                        last_cursor_frame = None;
-                        // 입력은 뷰포트를 가장 새 출력으로 되돌린 뒤 쓴다.
-                        if inputs.scroll_to_newest(engine.as_mut(), session_id.as_deref()) {
-                            refresh_inline_image_positions(&mut engine, &mut image_state);
-                            if !hold_while_presenting(&mut image_state) {
-                                let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                                if let Some(state) = image_state.as_mut() {
-                                    if !present_screen(&surface_id, &screen, state, &output_tx, "input", &log, inputs.sequence).await { return; }
-                                } else if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, inputs.sequence, image_state.as_ref()).await { return; }
-                            }
-                        }
-                        if let Some(ref sid) = session_id {
-                            let modes = engine.modes();
-                            match encode_keys(&keys, &modes) {
-                                Ok(bytes) => {
-                                    if !bytes.is_empty() {
-                                        match inputs.write(&session_port, sid, &bytes, &cids).await {
-                                            Ok(()) => {
-                                                let response = json!({
-                                                    "surface": surface_id,
-                                                    "body": {"ack": true}
-                                                });
-                                                if output_tx.reply(response).await.is_err() {
-                                                    return;
-                                                }
-                                            }
-                                            Err(e) => {
-                                                let response = json!({
-                                                    "surface": surface_id,
-                                                    "body": {"error": format!("Write failed: {}", e)}
-                                                });
-                                                if output_tx.reply(response).await.is_err() {
-                                                    return;
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        let response = json!({
-                                            "surface": surface_id,
-                                            "body": {"ack": true}
-                                        });
-                                        if output_tx.reply(response).await.is_err() {
-                                            return;
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    let response = json!({
-                                        "surface": surface_id,
-                                        "body": {"error": e}
-                                    });
-                                    if output_tx.reply(response).await.is_err() {
-                                        return;
-                                    }
-                                }
-                            }
-                        } else {
-                            let response = json!({
-                                "surface": surface_id,
-                                "body": {"error": "Session not open"}
-                            });
-                            if output_tx.reply(response).await.is_err() {
-                                return;
-                            }
-                        }
-                    }
-                    SurfaceCommand::Compose { preedit: next } => {
-                        preedit = next;
-                        cursor_activity = Instant::now();
-                        last_cursor_frame = None;
-                        if let Some(state) = image_state.as_mut() {
-                            if state.pending_draw {
-                                state.dirty = true;
-                            } else {
-                                let screen = decorate_screen(
-                                    engine.screen(),
-                                    focused,
-                                    &preedit,
-                                    &cursor_policy,
-                                    0,
-                                );
-                                if !present_screen(&surface_id, &screen, state, &output_tx, "input", &log, inputs.sequence).await {
-                                    return;
-                                }
-                            }
-                        }
-                        let response = json!({"surface": surface_id, "body": {"ack": true}});
-                        if output_tx.reply(response).await.is_err() { return; }
-                    }
-                    SurfaceCommand::Focus { focused: next, cids } => {
-                        cursor_activity = Instant::now();
-                        last_cursor_frame = None;
-                        // ?1004 를 켠 프로그램에는 초점이 바뀔 때마다 알린다.
-                        if next != focused && engine.modes().focus_in_out
-                            && let Some(ref sid) = session_id {
-                                let report: &[u8] = if next { b"\x1b[I" } else { b"\x1b[O" };
-                                if let Err(error) = inputs.write(&session_port, sid, report, &cids).await {
-                                    let response = json!({"surface": surface_id, "body": {"error": "focus report write failed", "reason": error}});
-                                    if output_tx.reply(response).await.is_err() { return; }
-                                }
-                            }
-                        focused = next;
-                        let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-                        if let Some(ref mut state) = image_state
-                            && !present_screen(&surface_id, &screen, state, &output_tx, "focus", &log, inputs.sequence).await { return; }
-                        let response = json!({"surface": surface_id, "body": {"ack": true}});
-                        if output_tx.reply(response).await.is_err() { return; }
                     }
                     SurfaceCommand::Theme { theme } => {
                         let theme = *theme;
@@ -4544,174 +4686,24 @@ where
                                 }
                             }
                             "input" => {
-                                let compose = match body.get("compose") {
-                                    None => None,
-                                    Some(Value::Null) => Some(None),
-                                    Some(value) => {
-                                        match serde_json::from_value::<Preedit>(value.clone())
-                                            .map_err(|error| error.to_string())
-                                            .and_then(|preedit| {
-                                                preedit.validate_marked_range().map(|()| preedit)
-                                            }) {
-                                            Ok(preedit) => Some(Some(preedit)),
-                                            Err(error) => {
-                                                let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": format!("compose: {error}")}});
-                                                if reply_tx.reply(response).await.is_err() {
-                                                    break;
-                                                }
-                                                continue;
-                                            }
-                                        }
-                                    }
-                                };
-                                let focus = match body.get("focus") {
-                                    None => None,
-                                    Some(value) => {
-                                        match value.get("focused").and_then(Value::as_bool) {
-                                            Some(focused) => Some(focused),
-                                            None => {
-                                                let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "focus.focused must be boolean"}});
-                                                if reply_tx.reply(response).await.is_err() {
-                                                    break;
-                                                }
-                                                continue;
-                                            }
-                                        }
-                                    }
-                                };
-                                let command = match body.get("command") {
-                                    None => None,
-                                    Some(value) => match value
-                                        .get("selector")
-                                        .and_then(Value::as_str)
-                                    {
-                                        Some(selector) => match key_for_native_command(selector) {
-                                            Ok(key) => Some(key),
-                                            Err(reason) => {
-                                                let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": reason}});
-                                                if reply_tx.reply(response).await.is_err() {
-                                                    break;
-                                                }
-                                                continue;
-                                            }
-                                        },
-                                        None => {
-                                            let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "command.selector must be string"}});
-                                            if reply_tx.reply(response).await.is_err() {
-                                                break;
-                                            }
-                                            continue;
-                                        }
-                                    },
-                                };
-                                let bytes = match body.get("bytes") {
-                                    None => None,
-                                    Some(Value::String(encoded)) => match base64_decode(encoded) {
-                                        Ok(bytes) => Some(bytes),
-                                        Err(error) => {
-                                            let response = json!({"surface": surface_id, "body": {"error": format!("Base64 error: {error}")}});
-                                            if reply_tx.reply(response).await.is_err() {
-                                                break;
-                                            }
-                                            continue;
-                                        }
-                                    },
-                                    Some(_) => {
-                                        let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "bytes must be a string"}});
+                                let (actions, preedit) = match parse_input_transaction(&body) {
+                                    Ok(transaction) => transaction,
+                                    Err(reason) => {
+                                        let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": reason}});
                                         if reply_tx.reply(response).await.is_err() {
                                             break;
                                         }
                                         continue;
                                     }
                                 };
-                                let keys = match body.get("keys") {
-                                    None => None,
-                                    Some(Value::Array(keys)) => {
-                                        match serde_json::from_value::<Vec<InputKey>>(Value::Array(
-                                            keys.clone(),
-                                        )) {
-                                            Ok(keys) => Some(keys),
-                                            Err(error) => {
-                                                let response = json!({"surface": surface_id, "body": {"error": format!("Keys parse error: {error}")}});
-                                                if reply_tx.reply(response).await.is_err() {
-                                                    break;
-                                                }
-                                                continue;
-                                            }
-                                        }
-                                    }
-                                    Some(_) => {
-                                        let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "keys must be an array"}});
-                                        if reply_tx.reply(response).await.is_err() {
-                                            break;
-                                        }
-                                        continue;
-                                    }
-                                };
-                                if bytes.is_none()
-                                    && keys.is_none()
-                                    && compose.is_none()
-                                    && focus.is_none()
-                                    && command.is_none()
-                                {
-                                    let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "input requires bytes or keys field"}});
-                                    if reply_tx.reply(response).await.is_err() {
-                                        break;
-                                    }
-                                    continue;
-                                }
-
-                                if let Some(compose) = compose.clone()
-                                    && bytes.is_none()
-                                    && tx
-                                        .send(SurfaceCommand::Compose { preedit: compose })
-                                        .await
-                                        .is_err()
-                                {
-                                    break;
-                                }
-                                if let Some(focused) = focus
-                                    && tx
-                                        .send(SurfaceCommand::Focus {
-                                            focused,
-                                            cids: cids.clone(),
-                                        })
-                                        .await
-                                        .is_err()
-                                {
-                                    break;
-                                }
-                                if let Some(command) = command
-                                    && tx
-                                        .send(SurfaceCommand::InputKeys {
-                                            keys: vec![command],
-                                            cids: cids.clone(),
-                                        })
-                                        .await
-                                        .is_err()
-                                {
-                                    break;
-                                }
-                                if let Some(bytes) = bytes
-                                    && tx
-                                        .send(SurfaceCommand::Input {
-                                            bytes,
-                                            cids: cids.clone(),
-                                            compose,
-                                        })
-                                        .await
-                                        .is_err()
-                                {
-                                    break;
-                                }
-                                if let Some(keys) = keys
-                                    && tx
-                                        .send(SurfaceCommand::InputKeys {
-                                            keys,
-                                            cids: cids.clone(),
-                                        })
-                                        .await
-                                        .is_err()
+                                if tx
+                                    .send(SurfaceCommand::InputTransaction {
+                                        actions,
+                                        preedit,
+                                        cids: cids.clone(),
+                                    })
+                                    .await
+                                    .is_err()
                                 {
                                     break;
                                 }

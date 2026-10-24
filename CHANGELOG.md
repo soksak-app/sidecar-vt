@@ -4,6 +4,26 @@
 
 ## Unreleased
 
+- S84: Apply native input reports as one ordered VT transaction containing
+  actions and a required final preedit snapshot. The service validates all
+  fields before side effects, writes ordered action bytes once, applies the
+  final preedit once, and includes already-ready PTY output before the final
+  frame without waiting for future echo. Red: unchanged input handling rejected
+  `one_ordered_input_transaction_writes_actions_once_and_applies_final_preedit`
+  because it required the legacy `bytes` or `keys` fields. The unchanged write
+  failure response also omitted whether the submitted batch had partially
+  reached the PTY. The unchanged key parser also rejected native non-character
+  key actions that omit `text`. Green: non-character keys omit `text`, `Char`
+  requires string `text`, and null `Char` text or text on another key is
+  rejected before side effects. The new
+  ordered-action and invalid-late-action cases pass; the ready-echo cursor case
+  verifies one frame at column 16 without an intermediate column-12 frame; and
+  the existing immediate-echo case preserves its six-glyph baseline and
+  split/combined criteria. A controlled write failure also verifies that the
+  reply preserves its reason, states that submitted PTY progress is unknown,
+  and does not retry. The six focused cases pass. No application runtime,
+  activation, package build, or release was performed.
+
 - S83: Prepare a local VT 0.0.16 diagnostics candidate. Ordinary `make release`
   remains non-diagnostic; `make candidate-release` forces
   `FEATURES=diagnostics` and runs the packaged-binary smoke check. Red: the

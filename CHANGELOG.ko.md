@@ -4,6 +4,24 @@
 
 ## 미배포
 
+- S84: Native input report를 action과 필수 최종 preedit snapshot을 가진 하나의
+  순서 있는 VT transaction으로 적용한다. 서비스는 부작용 전에 field 전체를
+  검증하고, 순서 있는 action byte를 한 번 쓰고, 최종 preedit을 한 번 적용하며,
+  앞으로 도착할 echo를 기다리지 않고 이미 준비된 PTY output을 최종 frame 전에
+  반영한다. Red: 변경 전 input 처리는 legacy `bytes` 또는 `keys` field가 없다는
+  이유로 `one_ordered_input_transaction_writes_actions_once_and_applies_final_preedit`
+  을 거부했다. 변경 전 write failure 응답은 제출한 batch가 PTY에 일부
+  전달됐는지 알 수 없다는 사실도 빠뜨렸다. 변경 전 key parser는 `text`가 없는
+  native non-character key action도 거부했다. Green: non-Char key는 `text` 없이
+  허용하고, `Char`에는 string `text`를 요구하며, null `Char` text나 다른 key의
+  text는 부작용 전에 거부한다. 순서 있는 action과 늦은 invalid action 검사도
+  통과한다.
+  Ready echo cursor 검사는 중간 column 12 frame 없이 column 16의 frame 하나를
+  확인하고, 기존 immediate echo 검사는 여섯 glyph baseline 및 split/combined
+  기준을 유지한다. 제어된 write 실패도 원래 reason 보존, 제출한 PTY write의
+  진행 상태 불명 명시, 재시도 없음으로 확인한다. 여섯 focused case가 통과한다.
+  Application runtime, activation, package build, release는 실행하지 않았다.
+
 - S83: diagnostics가 포함된 VT 0.0.16 local candidate를 준비한다. 일반
   `make release`는 non-diagnostic 상태를 유지하고, `make candidate-release`는
   `FEATURES=diagnostics`를 강제해 packaged binary smoke check를 실행한다.

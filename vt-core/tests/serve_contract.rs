@@ -71,6 +71,7 @@ struct MockEngine {
     selected_cells: Arc<Mutex<Vec<(u16, u16)>>>,
     viewport: Arc<Mutex<Vec<String>>>,
     cursor_at_end: bool,
+    join_feed_chunks: bool,
 }
 
 impl MockEngine {
@@ -86,6 +87,7 @@ impl MockEngine {
             selected_cells: Arc::new(Mutex::new(Vec::new())),
             viewport: Arc::new(Mutex::new(Vec::new())),
             cursor_at_end: false,
+            join_feed_chunks: false,
         }
     }
 
@@ -101,11 +103,17 @@ impl MockEngine {
             selected_cells: Arc::new(Mutex::new(Vec::new())),
             viewport: Arc::new(Mutex::new(Vec::new())),
             cursor_at_end: false,
+            join_feed_chunks: false,
         }
     }
 
     fn with_cursor_at_end(mut self) -> Self {
         self.cursor_at_end = true;
+        self
+    }
+
+    fn with_contiguous_feed(mut self) -> Self {
+        self.join_feed_chunks = true;
         self
     }
 }
@@ -223,7 +231,12 @@ impl Engine for MockEngine {
 
     fn screen(&mut self) -> Screen {
         let mut lines = Vec::new();
-        for history_bytes in &self.feed_history {
+        let contiguous_history = self.join_feed_chunks.then(|| self.feed_history.concat());
+        let history = contiguous_history
+            .as_ref()
+            .map(|bytes| std::slice::from_ref(bytes))
+            .unwrap_or(&self.feed_history);
+        for history_bytes in history {
             if let Ok(s) = std::str::from_utf8(history_bytes) {
                 let mut row = Vec::new();
                 for ch in s.chars() {
@@ -298,7 +311,7 @@ async fn vendor_event_is_emitted_only_with_the_owning_surface_id() {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let input = br#"{"surface":"owned-surface","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"owned-surface","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"owned-surface","body":{"operation":"input","bytes":"G103O2ZpbGU6Ly8vdG1wL3Byb2plY3QH"}}
+{"surface":"owned-surface","body":{"operation":"input","actions":[{"type":"insert","text":"\u001b]7;file:///tmp/project\u0007","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#;
     let (mut to_serve, serve_in) = tokio::io::duplex(16 * 1024);
     let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
@@ -370,6 +383,9 @@ struct FakeSessionPort {
     calls: Arc<Mutex<Calls>>,
     event_tx: mpsc::UnboundedSender<DaemonEvent>,
     event_rx: Arc<tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<DaemonEvent>>>>,
+    ready_events: Arc<Mutex<Option<mpsc::Sender<DaemonEvent>>>>,
+    deliver_echo_before_write_completes: bool,
+    write_error: Option<String>,
     echo_input: std::sync::atomic::AtomicBool,
 }
 
@@ -381,8 +397,21 @@ impl FakeSessionPort {
             calls,
             event_tx,
             event_rx: Arc::new(tokio::sync::Mutex::new(Some(event_rx))),
+            ready_events: Arc::new(Mutex::new(None)),
+            deliver_echo_before_write_completes: false,
+            write_error: None,
             echo_input: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    fn with_ready_echo(mut self) -> Self {
+        self.deliver_echo_before_write_completes = true;
+        self
+    }
+
+    fn with_write_error(mut self, reason: impl Into<String>) -> Self {
+        self.write_error = Some(reason.into());
+        self
     }
 
     pub fn push_event(&self, event: DaemonEvent) {
@@ -435,14 +464,29 @@ impl SessionPort for FakeSessionPort {
             });
         }
         if self.echo_input.load(std::sync::atomic::Ordering::SeqCst) {
-            self.event_tx
-                .send(DaemonEvent::Output {
-                    session_id: self.session_id.clone(),
-                    data: data.to_vec(),
-                    sequence,
-                    truncated: false,
-                })
-                .expect("immediate fake PTY echo is observed");
+            let event = DaemonEvent::Output {
+                session_id: self.session_id.clone(),
+                data: data.to_vec(),
+                sequence,
+                truncated: false,
+            };
+            if self.deliver_echo_before_write_completes {
+                let ready_events = self.ready_events.lock().unwrap().clone();
+                if let Some(ready_events) = ready_events {
+                    ready_events
+                        .send(event)
+                        .await
+                        .expect("ready fake PTY echo is observed");
+                } else {
+                    self.event_tx
+                        .send(event)
+                        .expect("fake PTY echo is observed");
+                }
+            } else {
+                self.event_tx
+                    .send(event)
+                    .expect("fake PTY echo is observed");
+            }
             let mut calls = self.calls.lock().unwrap();
             calls.echoes_enqueued += 1;
             let writes_started = calls.writes.len();
@@ -472,7 +516,7 @@ impl SessionPort for FakeSessionPort {
             writes_completed,
             echoes_enqueued,
         });
-        Ok(())
+        self.write_error.clone().map_or(Ok(()), Err)
     }
 
     async fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -516,6 +560,7 @@ impl SessionPort for FakeSessionPort {
 
     async fn get_events(&self) -> mpsc::Receiver<DaemonEvent> {
         let (tx, rx) = mpsc::channel(10);
+        *self.ready_events.lock().unwrap() = Some(tx.clone());
         let mut rx_guard = self.event_rx.lock().await;
         if let Some(mut unbounded_rx) = rx_guard.take() {
             tokio::spawn(async move {
@@ -535,7 +580,7 @@ async fn test_a3_input_calls_write() {
 
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","body":{"operation":"input","bytes":"aGk="}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"hi","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
     let mut writer = Vec::new();
@@ -569,11 +614,11 @@ async fn the_cids_of_a_request_reach_the_write_it_causes() {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","cids":["b1.1"],"body":{"operation":"input","bytes":"aGk="}}
-{"surface":"s1","cids":["b1.2","b1.3"],"body":{"operation":"input","keys":[{"key":"Up"}]}}
+{"surface":"s1","cids":["b1.1"],"body":{"operation":"input","actions":[{"type":"insert","text":"hi","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+{"surface":"s1","cids":["b1.2","b1.3"],"body":{"operation":"input","actions":[{"type":"key","key":"Up","shift":false,"alt":false,"ctrl":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 {"surface":"s1","cids":["b1.4"],"body":{"operation":"paste","text":"one"}}
 {"surface":"s1","cids":["b1.5"],"body":{"operation":"scroll","lines":1,"col":0,"row":0}}
-{"surface":"s1","body":{"operation":"input","bytes":"aGk="}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"hi","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
     let mut writer = Vec::new();
@@ -758,8 +803,8 @@ async fn native_input_ack_is_not_reported_as_an_unsolicited_event() {
     });
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","body":{"operation":"input","focus":{"focused":true}}}
-{"surface":"s1","body":{"operation":"input","compose":{"text":"한","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"focus","focused":true}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+{"surface":"s1","body":{"operation":"input","actions":[],"preedit":{"text":"한","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
     let mut writer = Vec::new();
@@ -801,13 +846,13 @@ async fn each_native_preedit_update_presents_a_fresh_terminal_frame() {
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 {"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
-{"surface":"s1","body":{"operation":"input","focus":{"focused":true}}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"focus","focused":true}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 {"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":2}}}}
-{"surface":"s1","body":{"operation":"input","compose":{"text":"ㅎ","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
+{"surface":"s1","body":{"operation":"input","actions":[],"preedit":{"text":"ㅎ","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
 {"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":3}}}}
-{"surface":"s1","body":{"operation":"input","compose":{"text":"하","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
+{"surface":"s1","body":{"operation":"input","actions":[],"preedit":{"text":"하","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
 {"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":4}}}}
-{"surface":"s1","body":{"operation":"input","compose":{"text":"한","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
+{"surface":"s1","body":{"operation":"input","actions":[],"preedit":{"text":"한","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
 {"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":5}}}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
@@ -854,7 +899,7 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
     port.echo_input();
     to_serve
         .write_all(
-            br#"{"surface":"s1","body":{"operation":"input","bytes":"44WP44WP44WP44WP44WP44WP"}}
+            br#"{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"\u314f\u314f\u314f\u314f\u314f\u314f","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#,
         )
         .await
@@ -867,12 +912,24 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
         &calls,
     )
     .await;
+    {
+        let calls = calls.lock().unwrap();
+        assert_eq!(
+            calls.writes.len(),
+            1,
+            "the input transaction writes once: {calls:?}"
+        );
+        assert_eq!(
+            calls.echoes_enqueued, 1,
+            "the fake echo was queued during the write: {calls:?}"
+        );
+    }
     assert_eq!(
         glyphs, 6,
         "the six-character input document is the controlled baseline"
     );
     sequence = next;
-    to_serve.write_all("{\"surface\":\"s1\",\"body\":{\"operation\":\"input\",\"compose\":{\"text\":\"ㅏㅏ\",\"markedRange\":{\"location\":0,\"length\":2},\"selectedRange\":{\"location\":2,\"length\":0},\"replacementRange\":null,\"attributed\":false}}}\n".as_bytes()).await.unwrap();
+    to_serve.write_all(format!("{}\n", r#"{"surface":"s1","body":{"operation":"input","actions":[],"preedit":{"text":"ㅏㅏ","markedRange":{"location":0,"length":2},"selectedRange":{"location":2,"length":0},"replacementRange":null,"attributed":false}}}"#).as_bytes()).await.unwrap();
     let (next, glyphs, _, _, _, _, _) = next_measured_frame_after(
         &mut lines,
         &mut to_serve,
@@ -888,12 +945,12 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
     sequence = next;
     to_serve
         .write_all(
-            br#"{"surface":"s1","body":{"operation":"input","bytes":"44WP44WP"}}
+            br#"{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"\u314f\u314f","replacementRange":null,"attributed":false}],"preedit":{"text":"\u314f\u314f","markedRange":{"location":0,"length":2},"selectedRange":{"location":2,"length":0},"replacementRange":null,"attributed":false}}}
 "#,
         )
         .await
         .unwrap();
-    let (_, split_echo_glyphs, _, _, _, _, screen) = next_measured_frame_after(
+    let (split_sequence, split_echo_glyphs, _, _, _, _, screen) = next_measured_frame_after(
         &mut lines,
         &mut to_serve,
         sequence,
@@ -904,6 +961,19 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
     assert_eq!(
         split_echo_glyphs, 10,
         "separate byte delivery and immediate echo retain old preedit glyphs: {screen}"
+    );
+    to_serve.write_all(format!("{}\n", r#"{"surface":"s1","body":{"operation":"input","actions":[],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}"#).as_bytes()).await.unwrap();
+    let (_, cleared_glyphs, _, _, _, _, _) = next_measured_frame_after(
+        &mut lines,
+        &mut to_serve,
+        split_sequence,
+        &mut acknowledgements,
+        &calls,
+    )
+    .await;
+    assert_eq!(
+        cleared_glyphs, 8,
+        "clearing the split request removes only the old marked suffix"
     );
     drop(to_serve);
     task.await.unwrap().unwrap();
@@ -977,7 +1047,7 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
     port.echo_input();
     to_serve
         .write_all(
-            br#"{"surface":"s2","body":{"operation":"input","bytes":"44WP44WP44WP44WP44WP44WP"}}
+            br#"{"surface":"s2","body":{"operation":"input","actions":[{"type":"insert","text":"\u314f\u314f\u314f\u314f\u314f\u314f","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#,
         )
         .await
@@ -995,7 +1065,7 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
         "the combined case begins from the same six committed glyphs"
     );
     sequence = next;
-    to_serve.write_all("{\"surface\":\"s2\",\"body\":{\"operation\":\"input\",\"compose\":{\"text\":\"ㅏㅏ\",\"markedRange\":{\"location\":0,\"length\":2},\"selectedRange\":{\"location\":2,\"length\":0},\"replacementRange\":null,\"attributed\":false}}}\n".as_bytes()).await.unwrap();
+    to_serve.write_all(format!("{}\n", r#"{"surface":"s2","body":{"operation":"input","actions":[],"preedit":{"text":"ㅏㅏ","markedRange":{"location":0,"length":2},"selectedRange":{"location":2,"length":0},"replacementRange":null,"attributed":false}}}"#).as_bytes()).await.unwrap();
     let (next, glyphs, _, _, _, _, _) = next_measured_frame_after(
         &mut lines,
         &mut to_serve,
@@ -1012,7 +1082,7 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
 
     let sequence_before_combined = sequence;
     let timeline_start_before_combined = calls.lock().unwrap().timeline.len();
-    to_serve.write_all(br#"{"surface":"s2","body":{"operation":"input","bytes":"44WP44WP","compose":{"text":"","markedRange":null,"selectedRange":{"location":0,"length":0},"replacementRange":null,"attributed":false}}}
+    to_serve.write_all(br#"{"surface":"s2","body":{"operation":"input","actions":[{"type":"insert","text":"\u314f\u314f","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":{"location":0,"length":0},"replacementRange":null,"attributed":false}}}
 "#).await.unwrap();
     let mut frames = Vec::new();
     loop {
@@ -1129,6 +1199,439 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
 }
 
 #[tokio::test]
+async fn one_ordered_input_transaction_writes_actions_once_and_applies_final_preedit() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port_calls = calls.clone();
+    let session_port_factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "atomic-input".to_string(),
+            port_calls.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+    let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
+{"surface":"s1","cids":["native-transaction"],"body":{"operation":"input","actions":[{"type":"insert","text":"x","replacementRange":null,"attributed":true},{"type":"key","key":"Up","shift":false,"alt":false,"ctrl":false},{"type":"command","selector":"deleteBackward:"},{"type":"focus","focused":true}],"preedit":{"text":"ㅏㅏㅏ","markedRange":{"location":0,"length":3},"selectedRange":{"location":3,"length":0},"replacementRange":null,"attributed":true}}}
+"#;
+    let mut writer = Vec::new();
+    let engine_factory = Arc::new(|| {
+        Box::new(MockEngine::with_modes(Modes {
+            focus_in_out: true,
+            ..Modes::default()
+        })) as Box<dyn Engine>
+    });
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        serve(
+            engine_factory,
+            std::io::Cursor::new(input.as_bytes()),
+            &mut writer,
+            session_port_factory,
+        ),
+    )
+    .await
+    .expect("the ordered transaction is handled within 2 s")
+    .unwrap();
+
+    let messages = String::from_utf8(writer)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let transaction_replies = messages
+        .iter()
+        .filter(|message| message["cids"] == serde_json::json!(["native-transaction"]))
+        .collect::<Vec<_>>();
+    let summary = transaction_replies
+        .iter()
+        .map(|message| {
+            serde_json::json!({
+                "ack": message["body"]["ack"],
+                "error": message["body"]["error"],
+                "reason": message["body"]["reason"]
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        transaction_replies.len(),
+        1,
+        "one transaction gets one reply: {summary:?}"
+    );
+    assert_eq!(
+        transaction_replies[0]["body"]["ack"], true,
+        "the transaction must be accepted: {summary:?}"
+    );
+    assert_eq!(
+        calls.lock().unwrap().writes,
+        [("atomic-input".to_string(), b"x\x1b[A\x7f\x1b[I".to_vec())],
+        "ordered write-producing actions are encoded into one PTY write"
+    );
+    let screens = messages
+        .iter()
+        .filter(|message| message["body"]["event"] == "screen")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        screens.len(),
+        1,
+        "one actor transaction submits one final screen: {screens:?}"
+    );
+    assert!(
+        screens
+            .iter()
+            .all(|message| message["body"]["cursor"]["preedit"]["text"] == "ㅏㅏㅏ"),
+        "no frame may expose an intermediate preedit: {screens:?}"
+    );
+    assert!(
+        screens[0]["body"]["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|cell| cell["grapheme"] != "x"),
+        "without PTY echo, the inserted text remains preedit rather than fabricated committed output"
+    );
+}
+
+#[tokio::test]
+async fn ready_pty_echo_is_presented_with_the_transaction_preedit() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port =
+        Arc::new(FakeSessionPort::new("ready-echo".to_string(), calls.clone()).with_ready_echo());
+    port.echo_input();
+    let session_port = port.clone();
+    let session_port_factory = Arc::new(move || session_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| {
+        Box::new(
+            MockEngine::new()
+                .with_cursor_at_end()
+                .with_contiguous_feed(),
+        ) as Box<dyn Engine>
+    });
+    let frame_records = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+    let observer_frames = frame_records.clone();
+    let observer: OutputSubmissionObserver = Arc::new(move |stage, line| {
+        if stage == OutputSubmissionStage::Queued
+            && let Ok(message) = serde_json::from_str::<serde_json::Value>(line)
+            && message["body"]["event"] == "screen"
+        {
+            observer_frames.lock().unwrap().push(message);
+        }
+    });
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve_with_submission_observer(
+        engine_factory,
+        serve_in,
+        serve_out,
+        session_port_factory,
+        events_test::TestEvents::new().handle(),
+        observer,
+    ));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+    let open = serde_json::json!({"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}});
+    let configure = serde_json::json!({"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}});
+    to_serve
+        .write_all(format!("{}\n{}\n", open, configure).as_bytes())
+        .await
+        .unwrap();
+    let initial = next_image_envelope(&mut lines).await;
+    let mut sequence = initial["body"]["image"]["sequence"].as_u64().unwrap();
+    acknowledge_image(&mut to_serve, &initial).await;
+    let mut acknowledgements = 0;
+
+    port.push_event(DaemonEvent::Output {
+        session_id: "ready-echo".to_string(),
+        data: "가가가가".as_bytes().to_vec(),
+        sequence: 1,
+        truncated: false,
+    });
+    let (next, _, _, _, _, _, baseline) = next_measured_frame_after(
+        &mut lines,
+        &mut to_serve,
+        sequence,
+        &mut acknowledgements,
+        &calls,
+    )
+    .await;
+    assert_eq!(
+        baseline["body"]["cursor"]["caret"],
+        serde_json::json!({"col":8,"row":0})
+    );
+    sequence = next;
+
+    let preedit = serde_json::json!({"text":"ㅏㅏㅏ","markedRange":{"location":0,"length":3},"selectedRange":{"location":3,"length":0},"replacementRange":null,"attributed":true});
+    let marked = serde_json::json!({"surface":"s1","body":{"operation":"input","actions":[],"preedit":preedit}});
+    to_serve
+        .write_all(format!("{marked}\n").as_bytes())
+        .await
+        .unwrap();
+    let (next, _, _, _, _, _, marked_screen) = next_measured_frame_after(
+        &mut lines,
+        &mut to_serve,
+        sequence,
+        &mut acknowledgements,
+        &calls,
+    )
+    .await;
+    assert_eq!(
+        marked_screen["body"]["cursor"]["caret"],
+        serde_json::json!({"col":14,"row":0})
+    );
+    sequence = next;
+
+    let frames_before_transaction = frame_records.lock().unwrap().len();
+    let transaction = serde_json::json!({
+        "surface":"s1",
+        "body":{"operation":"input","actions":[{"type":"insert","text":"ㅏ","replacementRange":null,"attributed":true}],"preedit":preedit}
+    });
+    to_serve
+        .write_all(format!("{transaction}\n").as_bytes())
+        .await
+        .unwrap();
+    let (_next, _, _, _, _, _, committed) = next_measured_frame_after(
+        &mut lines,
+        &mut to_serve,
+        sequence,
+        &mut acknowledgements,
+        &calls,
+    )
+    .await;
+    assert_eq!(
+        committed["body"]["cursor"]["caret"],
+        serde_json::json!({"col":16,"row":0})
+    );
+    assert_eq!(committed["body"]["cursor"]["preedit"]["text"], "ㅏㅏㅏ");
+    let reply: serde_json::Value =
+        serde_json::from_str(&next_line_except_screen(&mut lines).await).unwrap();
+    assert_eq!(reply["body"]["ack"], true);
+    let transaction_frames = frame_records.lock().unwrap()[frames_before_transaction..].to_vec();
+    assert_eq!(
+        transaction_frames.len(),
+        1,
+        "no intermediate caret frame is published: {transaction_frames:?}"
+    );
+    assert_eq!(
+        transaction_frames[0]["body"]["cursor"]["caret"],
+        serde_json::json!({"col":16,"row":0})
+    );
+
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn native_non_character_keys_omit_text_and_char_requires_it() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port_calls = calls.clone();
+    let session_port_factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "native-key-shapes".to_string(),
+            port_calls.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+    let preedit = serde_json::json!({
+        "text":"ㅎ",
+        "markedRange":{"location":0,"length":1},
+        "selectedRange":{"location":1,"length":0},
+        "replacementRange":null,
+        "attributed":true
+    });
+    let requests = [
+        serde_json::json!({"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}),
+        serde_json::json!({"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}),
+        serde_json::json!({
+            "surface":"s1","cids":["valid-omitted-text"],
+            "body":{"operation":"input","actions":[
+                {"type":"key","key":"Enter","shift":false,"alt":false,"ctrl":false},
+                {"type":"key","key":"Up","shift":false,"alt":false,"ctrl":false},
+                {"type":"key","key":"Backspace","shift":false,"alt":false,"ctrl":false},
+                {"type":"key","key":"Char","text":"x","shift":false,"alt":false,"ctrl":false}
+            ],"preedit":preedit}
+        }),
+        serde_json::json!({
+            "surface":"s1","cids":["char-missing-text"],
+            "body":{"operation":"input","actions":[{"type":"key","key":"Char","shift":false,"alt":false,"ctrl":false}],"preedit":preedit}
+        }),
+        serde_json::json!({
+            "surface":"s1","cids":["char-null-text"],
+            "body":{"operation":"input","actions":[{"type":"key","key":"Char","text":null,"shift":false,"alt":false,"ctrl":false}],"preedit":preedit}
+        }),
+        serde_json::json!({
+            "surface":"s1","cids":["nonchar-has-text"],
+            "body":{"operation":"input","actions":[{"type":"key","key":"Up","text":"","shift":false,"alt":false,"ctrl":false}],"preedit":preedit}
+        }),
+        serde_json::json!({"surface":"s1","body":{"operation":"screen.read"}}),
+    ];
+    let input = requests
+        .iter()
+        .map(|request| format!("{request}\n"))
+        .collect::<String>();
+    let mut writer = Vec::new();
+    serve(
+        Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>),
+        std::io::Cursor::new(input.into_bytes()),
+        &mut writer,
+        session_port_factory,
+    )
+    .await
+    .unwrap();
+
+    let messages = String::from_utf8(writer)
+        .unwrap()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .collect::<Vec<_>>();
+    let reply_for = |cid: &str| {
+        messages
+            .iter()
+            .find(|message| message["cids"] == serde_json::json!([cid]))
+            .unwrap_or_else(|| panic!("missing correlated reply for {cid}: {messages:?}"))
+    };
+    assert_eq!(reply_for("valid-omitted-text")["body"]["ack"], true);
+    for cid in ["char-missing-text", "char-null-text", "nonchar-has-text"] {
+        assert_eq!(reply_for(cid)["body"]["error"], "invalidParams", "{cid}");
+    }
+    assert_eq!(
+        calls.lock().unwrap().writes,
+        [("native-key-shapes".to_string(), b"\r\x1b[A\x7fx".to_vec())]
+    );
+    let screen = messages
+        .iter()
+        .rev()
+        .find(|message| message["body"]["event"] == "screen")
+        .unwrap();
+    assert_eq!(screen["body"]["cursor"]["preedit"]["text"], "ㅎ");
+}
+
+#[tokio::test]
+async fn input_write_failure_reports_submitted_batch_and_unknown_progress() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(
+        FakeSessionPort::new("failed-write".to_string(), calls.clone())
+            .with_write_error("controlled PTY failure"),
+    );
+    let session_port = port.clone();
+    let session_port_factory = Arc::new(move || session_port.clone() as Arc<dyn SessionPort>);
+    let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
+{"surface":"s1","cids":["write-failure"],"body":{"operation":"input","actions":[{"type":"insert","text":"x","replacementRange":null,"attributed":true}],"preedit":{"text":"ㅎ","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
+"#;
+    let mut writer = Vec::new();
+    serve(
+        Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>),
+        std::io::Cursor::new(input.as_bytes()),
+        &mut writer,
+        session_port_factory,
+    )
+    .await
+    .unwrap();
+
+    let replies = String::from_utf8(writer)
+        .unwrap()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|message| message["cids"] == serde_json::json!(["write-failure"]))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        replies.len(),
+        1,
+        "the failed transaction receives one reply: {replies:?}"
+    );
+    let error = replies[0]["body"]["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("submitted action batch"),
+        "the attempted write is explicit: {error}"
+    );
+    assert!(
+        error.contains("progress is unknown"),
+        "partial write progress is not guessed: {error}"
+    );
+    assert!(
+        error.contains("controlled PTY failure"),
+        "the underlying failure reason is preserved: {error}"
+    );
+    assert_eq!(
+        calls.lock().unwrap().writes.len(),
+        1,
+        "the failed batch is not retried"
+    );
+}
+
+#[tokio::test]
+async fn an_invalid_late_input_action_rejects_the_transaction_before_any_side_effect() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port_calls = calls.clone();
+    let session_port_factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "invalid-atomic-input".to_string(),
+            port_calls.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+    let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
+{"surface":"s1","cids":["compose-only"],"body":{"operation":"input","actions":[],"preedit":{"text":"ㅎ","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
+{"surface":"s1","cids":["invalid-late"],"body":{"operation":"input","actions":[{"type":"insert","text":"x","replacementRange":null,"attributed":true},{"type":"key","key":"Unsupported","shift":false,"alt":false,"ctrl":false}],"preedit":{"text":"changed","markedRange":{"location":0,"length":7},"selectedRange":{"location":7,"length":0},"replacementRange":null,"attributed":true}}}
+{"surface":"s1","body":{"operation":"screen.read"}}
+"#;
+    let mut writer = Vec::new();
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        serve(
+            engine_factory,
+            std::io::Cursor::new(input.as_bytes()),
+            &mut writer,
+            session_port_factory,
+        ),
+    )
+    .await
+    .expect("valid and invalid transactions complete within 2 s")
+    .unwrap();
+
+    let messages = String::from_utf8(writer)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let valid_reply = messages
+        .iter()
+        .find(|message| message["cids"] == serde_json::json!(["compose-only"]));
+    assert_eq!(
+        valid_reply.unwrap()["body"]["ack"],
+        true,
+        "empty action list is a valid compose report"
+    );
+    let invalid_reply = messages
+        .iter()
+        .filter(|message| message["cids"] == serde_json::json!(["invalid-late"]))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        invalid_reply.len(),
+        1,
+        "the invalid transaction has one reply: {invalid_reply:?}"
+    );
+    assert_eq!(
+        invalid_reply[0]["body"]["error"], "invalidParams",
+        "the late unsupported key is rejected: {invalid_reply:?}"
+    );
+    assert!(
+        calls.lock().unwrap().writes.is_empty(),
+        "the earlier valid insert action was not written"
+    );
+    let screens = messages
+        .iter()
+        .filter(|message| message["body"]["event"] == "screen")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        screens.len(),
+        2,
+        "the invalid transaction submits no frame: {screens:?}"
+    );
+    assert!(
+        screens
+            .iter()
+            .all(|message| message["body"]["cursor"]["preedit"]["text"] == "ㅎ"),
+        "the invalid transaction leaves the previous preedit unchanged: {screens:?}"
+    );
+}
+
+#[tokio::test]
 async fn an_invalid_marked_range_is_rejected_before_preedit_changes_surface_state() {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let factory_calls = calls.clone();
@@ -1141,8 +1644,8 @@ async fn an_invalid_marked_range_is_rejected_before_preedit_changes_surface_stat
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 {"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
-{"surface":"s1","body":{"operation":"input","compose":{"text":"한","markedRange":{"location":1,"length":1},"selectedRange":null,"replacementRange":null,"attributed":false}}}
-{"surface":"s1","body":{"operation":"input","focus":{"focused":true}}}
+{"surface":"s1","body":{"operation":"input","actions":[],"preedit":{"text":"한","markedRange":{"location":1,"length":1},"selectedRange":null,"replacementRange":null,"attributed":false}}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"focus","focused":true}],"preedit":{"text":"한","markedRange":{"location":1,"length":1},"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
     let mut writer = Vec::new();
@@ -1204,10 +1707,10 @@ async fn malformed_compose_with_bytes_rejects_without_writing_or_replying_twice(
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 {"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
-{"surface":"s1","body":{"operation":"input","compose":{"text":"ㅏ","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":false}}}
+{"surface":"s1","body":{"operation":"input","actions":[],"preedit":{"text":"ㅏ","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":false}}}
 {"surface":"s1","body":{"operation":"screen.read"}}
 {"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":2}}}}
-{"surface":"s1","cids":["malformed-compose-bytes"],"body":{"operation":"input","bytes":"eA==","compose":{"text":"","markedRange":{"location":0,"length":1},"selectedRange":null,"replacementRange":null,"attributed":false}}}
+{"surface":"s1","cids":["malformed-compose-bytes"],"body":{"operation":"input","actions":[{"type":"insert","text":"x","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":{"location":0,"length":1},"selectedRange":null,"replacementRange":null,"attributed":false}}}
 {"surface":"s1","body":{"operation":"screen.read"}}
 "#;
     let mut writer = Vec::new();
@@ -1282,7 +1785,7 @@ async fn malformed_bytes_with_compose_do_not_change_preedit_or_reply_twice() {
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 {"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
-{"surface":"s1","cids":["malformed-bytes-compose"],"body":{"operation":"input","bytes":"not-base64!","compose":{"text":"ㅏ","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":false}}}
+{"surface":"s1","cids":["malformed-bytes-compose"],"body":{"operation":"input","actions":[{"type":"insert","text":7,"replacementRange":null,"attributed":false}],"preedit":{"text":"ㅏ","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":false}}}
 {"surface":"s1","body":{"operation":"screen.read"}}
 "#;
     let mut writer = Vec::new();
@@ -1327,7 +1830,7 @@ async fn malformed_bytes_with_compose_do_not_change_preedit_or_reply_twice() {
     if errors.len() != 1
         || !errors[0]["body"]["error"]
             .as_str()
-            .is_some_and(|error| error.starts_with("Base64 error:"))
+            .is_some_and(|error| error == "invalidParams")
         || errors[0]["cids"] != serde_json::json!(["malformed-bytes-compose"])
     {
         violations.push(format!("errors={errors:?}"));
@@ -1345,7 +1848,7 @@ async fn malformed_bytes_with_compose_do_not_change_preedit_or_reply_twice() {
     }
     assert!(
         violations.is_empty(),
-        "malformed bytes must reject the whole input without compose mutation: {violations:?}; output={messages:?}"
+        "malformed insert text must reject the whole input without compose mutation: {violations:?}; output={messages:?}"
     );
 }
 
@@ -1537,7 +2040,7 @@ async fn a_scroll_moves_the_primary_viewport_and_input_returns_it_to_the_newest_
         None,
         r#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
 {"surface":"s1","body":{"operation":"scroll","lines":3,"col":2,"row":1}}
-{"surface":"s1","body":{"operation":"input","bytes":"aGk="}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"hi","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#,
     )
     .await;
@@ -1958,7 +2461,7 @@ async fn test_input_not_fed_to_engine() {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","body":{"operation":"input","bytes":"aGVsbG8="}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"hello","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
     let mut writer = Vec::new();
@@ -2040,7 +2543,7 @@ async fn test_repeated_image_open_resets_native_frame_without_closing_session() 
 {"surface":"s1","body":{"operation":"reconnect"}}
 {"surface":"s1","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":2,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","body":{"operation":"input","bytes":"Yg=="}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"b","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
     let mut writer = Vec::new();
@@ -2124,7 +2627,7 @@ async fn detaching_an_image_keeps_the_session_for_headless_open_and_later_image_
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
 {"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":2,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","body":{"operation":"input","bytes":"YQ=="}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"a","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 {"surface":"s1","body":{"operation":"close"}}
 "#).await.unwrap();
     let second = next_image(&mut lines).await;
@@ -2187,7 +2690,7 @@ async fn an_image_response_with_wrong_frame_identity_does_not_release_a_newer_pe
 
     to_serve.write_all(br#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":2,"raster":2,"width":1600,"height":768,"scale":1.0}}}}
 {"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":2,"sequence":1}}}}
-{"surface":"s1","body":{"operation":"input","bytes":"YQ=="},"cids":["stale-response-barrier"]}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"a","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}},"cids":["stale-response-barrier"]}
 "#).await.unwrap();
     let mut stale_frames = Vec::new();
     loop {
@@ -2258,7 +2761,7 @@ async fn detaching_a_requested_image_before_configure_allows_headless_open_and_r
     to_serve
         .write_all(
             br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
-{"surface":"s1","body":{"operation":"input","bytes":"YQ=="},"cids":["headless-input"]}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"a","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}},"cids":["headless-input"]}
 {"surface":"s1","body":{"operation":"close"}}
 "#,
         )
@@ -2482,7 +2985,7 @@ async fn test_close_session() {
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 {"surface":"s1","closed":true}
-{"surface":"s1","body":{"operation":"input","bytes":"aGk="}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"hi","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
     let mut writer = Vec::new();
@@ -2533,7 +3036,7 @@ async fn test_a2_pushed_output_reaches_screen() {
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
 
-    // open command를 보낸다
+    // open command\ub97c \ubcf4\ub0b8\ub2e4
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 "#).await.unwrap();
@@ -2548,7 +3051,7 @@ async fn test_a2_pushed_output_reaches_screen() {
     let state_json: serde_json::Value =
         serde_json::from_str(&state_line).expect("failed to parse state JSON");
     assert_eq!(state_json["body"]["event"], "state", "expected state event");
-    // 호스트처럼 첫 표시에 답한다. 답하기 전의 출력은 답을 받은 뒤의 화면으로 보인다.
+    // \ud638\uc2a4\ud2b8\ucc98\ub7fc \uccab \ud45c\uc2dc\uc5d0 \ub2f5\ud55c\ub2e4. \ub2f5\ud558\uae30 \uc804\uc758 \ucd9c\ub825\uc740 \ub2f5\uc744 \ubc1b\uc740 \ub4a4\uc758 \ud654\uba74\uc73c\ub85c \ubcf4\uc778\ub2e4.
     to_serve.write_all(br#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
 "#).await.unwrap();
 
@@ -2734,7 +3237,7 @@ async fn test_a5_screen_read_returns_current_screen() {
     let input = r#"
 {"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","body":{"operation":"input","bytes":"aGk="}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"hi","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 {"surface":"s1","body":{"operation":"screen.read"}}
 "#;
 
@@ -2894,7 +3397,7 @@ async fn test_k1_keys_up_without_app_cursor() {
 
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","body":{"operation":"input","keys":[{"key":"Up"}]}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"key","key":"Up","shift":false,"alt":false,"ctrl":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
     let mut writer = Vec::new();
@@ -2927,7 +3430,7 @@ async fn test_k2_keys_up_with_app_cursor() {
 
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","body":{"operation":"input","keys":[{"key":"Up"}]}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"key","key":"Up","shift":false,"alt":false,"ctrl":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
     let mut writer = Vec::new();
@@ -2966,8 +3469,8 @@ async fn test_k3_char_key_encoding() {
     // native 물리 키 매핑 뒤 Ctrl+C는 0x03, Ctrl+U는 0x15를 기록한다.
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","body":{"operation":"input","keys":[{"key":"Char","text":"c","ctrl":true}]}}
-{"surface":"s1","body":{"operation":"input","keys":[{"key":"Char","text":"u","ctrl":true}]}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"key","key":"Char","text":"c","shift":false,"alt":false,"ctrl":true}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"key","key":"Char","text":"u","shift":false,"alt":false,"ctrl":true}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
     let mut writer = Vec::new();
@@ -2998,7 +3501,7 @@ async fn test_k3_char_key_encoding() {
 
     let input2 = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","body":{"operation":"input","keys":[{"key":"Char","text":"한"}]}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"key","key":"Char","text":"한","shift":false,"alt":false,"ctrl":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#;
     let reader2 = std::io::Cursor::new(input2.as_bytes());
     let mut writer2 = Vec::new();
@@ -3038,7 +3541,7 @@ async fn test_k4_unknown_key_returns_error() {
 
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","body":{"operation":"input","keys":[{"key":"Nope"}]}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"key","key":"Nope","shift":false,"alt":false,"ctrl":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
     let mut writer = Vec::new();
@@ -3231,7 +3734,7 @@ async fn test_i1_image_envelope_on_output() {
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
 
-    // image field를 포함하여 open한다
+    // image field\ub97c \ud3ec\ud568\ud558\uc5ec open\ud55c\ub2e4
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 "#).await.unwrap();
@@ -3321,7 +3824,7 @@ async fn test_i2_no_image_envelope_until_consumed() {
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
 
-    // image field를 포함하여 open한다
+    // image field\ub97c \ud3ec\ud568\ud558\uc5ec open\ud55c\ub2e4
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 "#).await.unwrap();
@@ -3364,15 +3867,15 @@ async fn test_i2_no_image_envelope_until_consumed() {
     // image envelope가 아니라 timeout 또는 screen event가 와야 한다
     if let Ok(Ok(Some(line))) = result {
         let json: serde_json::Value = serde_json::from_str(&line).expect("failed to parse JSON");
-        // image envelope를 받았다면 잘못된 것이다
+        // image envelope\ub97c \ubc1b\uc558\ub2e4\uba74 \uc798\ubabb\ub41c \uac83\uc774\ub2e4
         assert!(
             json.get("body").and_then(|b| b.get("image")).is_none(),
             "should NOT have image envelope before release"
         );
     }
 
-    // layout 교체는 sidecar가 보기 전에 진행 중인 response를 stale로 만들 수 있다.
-    // 그래도 그 response는 직렬화된 전송을 해제하여 dirty screen을 보낼 수 있게 해야 한다.
+    // layout \uad50\uccb4\ub294 sidecar\uac00 \ubcf4\uae30 \uc804\uc5d0 \uc9c4\ud589 \uc911\uc778 response\ub97c stale\ub85c \ub9cc\ub4e4 \uc218 \uc788\ub2e4.
+    // \uadf8\ub798\ub3c4 \uadf8 response\ub294 \uc9c1\ub82c\ud654\ub41c \uc804\uc1a1\uc744 \ud574\uc81c\ud558\uc5ec dirty screen\uc744 \ubcf4\ub0bc \uc218 \uc788\uac8c \ud574\uc57c \ud55c\ub2e4.
     to_serve.write_all(br#"{"surface":"s1","body":{"image":{"error":"stale","name":"view","generation":2,"raster":9,"sequence":7}}}
 "#).await.unwrap();
 
@@ -3422,7 +3925,7 @@ async fn test_i3_image_response_no_error() {
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
 
-    // image field를 포함하여 open한다
+    // image field\ub97c \ud3ec\ud568\ud558\uc5ec open\ud55c\ub2e4
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 "#).await.unwrap();
@@ -3434,7 +3937,7 @@ async fn test_i3_image_response_no_error() {
             .unwrap()
             .unwrap();
 
-    // output을 push한다
+    // output\uc744 push\ud55c\ub2e4
     port.push_event(DaemonEvent::Output {
         session_id: fake_session_id.clone(),
         data: b"test\r\n".to_vec(),
@@ -3442,7 +3945,7 @@ async fn test_i3_image_response_no_error() {
         truncated: false,
     });
 
-    // image envelope를 기다린다
+    // image envelope\ub97c \uae30\ub2e4\ub9b0\ub2e4
     let _image_line =
         tokio::time::timeout(std::time::Duration::from_millis(500), lines.next_line())
             .await
@@ -3450,7 +3953,7 @@ async fn test_i3_image_response_no_error() {
             .unwrap()
             .unwrap();
 
-    // Test 1: consumed response를 보낸다("error" 없음)
+    // Test 1: consumed response\ub97c \ubcf4\ub0b8\ub2e4("error" \uc5c6\uc74c)
     to_serve.write_all(br#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
 "#).await.unwrap();
 
@@ -3475,7 +3978,7 @@ async fn test_i3_image_response_no_error() {
         "should NOT return 'unknown operation' error for consumed response"
     );
 
-    // Test 2: error response를 보낸다
+    // Test 2: error response\ub97c \ubcf4\ub0b8\ub2e4
     to_serve.write_all(br#"{"surface":"s1","body":{"image":{"error":"forbidden","name":"view","generation":1,"raster":1,"sequence":1}}}
 "#).await.unwrap();
 
@@ -3632,7 +4135,7 @@ async fn test_input_without_bytes_or_keys_rejected() {
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
 
-    // 먼저 open한다
+    // \uba3c\uc800 open\ud55c\ub2e4
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 "#).await.unwrap();
@@ -3663,8 +4166,10 @@ async fn test_input_without_bytes_or_keys_rejected() {
     let reason = error_json["body"]["reason"].as_str().unwrap_or("");
     let error_code = error_json["body"]["error"].as_str().unwrap_or("");
     assert!(
-        error_code.contains("invalidParams") && reason.contains("bytes or keys"),
-        "should report that bytes or keys is required, got error={} reason={}",
+        error_code.contains("invalidParams")
+            && reason.contains("actions")
+            && reason.contains("preedit"),
+        "should report that actions and preedit are required, got error={} reason={}",
         error_code,
         reason
     );
@@ -3675,7 +4180,7 @@ async fn test_input_without_bytes_or_keys_rejected() {
 
 /// Test: string이 아닌 bytes를 가진 input은 거부된다
 #[tokio::test]
-async fn test_input_with_non_string_bytes_rejected() {
+async fn test_legacy_input_bytes_field_is_rejected() {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let fake_session_id = "test-session-bytes-type".to_string();
 
@@ -3696,7 +4201,7 @@ async fn test_input_with_non_string_bytes_rejected() {
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
 
-    // 먼저 open한다
+    // \uba3c\uc800 open\ud55c\ub2e4
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 "#).await.unwrap();
@@ -3709,7 +4214,7 @@ async fn test_input_with_non_string_bytes_rejected() {
             .unwrap();
     let _initial_image = next_image_envelope(&mut lines).await;
 
-    // bytes를 string 대신 number로 하여 input을 보낸다
+    // The removed bytes field is rejected instead of being accepted as another wire form.
     to_serve
         .write_all(
             br#"{"surface":"s1","body":{"operation":"input","bytes":123}}
@@ -3723,12 +4228,14 @@ async fn test_input_with_non_string_bytes_rejected() {
     let error_json: serde_json::Value =
         serde_json::from_str(&error_line).expect("failed to parse error JSON");
 
-    // bytes type에 대한 error를 받아야 한다
+    // The current transaction fields are required.
     let reason = error_json["body"]["reason"].as_str().unwrap_or("");
     let error_code = error_json["body"]["error"].as_str().unwrap_or("");
     assert!(
-        error_code.contains("invalidParams") && reason.contains("bytes must be a string"),
-        "should report that bytes must be a string, got error={} reason={}",
+        error_code.contains("invalidParams")
+            && reason.contains("actions")
+            && reason.contains("preedit"),
+        "should reject the legacy bytes field, got error={} reason={}",
         error_code,
         reason
     );
@@ -3739,7 +4246,7 @@ async fn test_input_with_non_string_bytes_rejected() {
 
 /// Test: array가 아닌 keys를 가진 input은 거부된다
 #[tokio::test]
-async fn test_input_with_non_array_keys_rejected() {
+async fn test_legacy_input_keys_field_is_rejected() {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let fake_session_id = "test-session-keys-type".to_string();
 
@@ -3760,7 +4267,7 @@ async fn test_input_with_non_array_keys_rejected() {
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
 
-    // 먼저 open한다
+    // \uba3c\uc800 open\ud55c\ub2e4
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 "#).await.unwrap();
@@ -3773,7 +4280,7 @@ async fn test_input_with_non_array_keys_rejected() {
             .unwrap();
     let _initial_image = next_image_envelope(&mut lines).await;
 
-    // keys를 array 대신 object로 하여 input을 보낸다
+    // The removed keys field is rejected instead of being accepted as another wire form.
     to_serve
         .write_all(
             br#"{"surface":"s1","body":{"operation":"input","keys":{"key":"Up"}}}
@@ -3787,12 +4294,14 @@ async fn test_input_with_non_array_keys_rejected() {
     let error_json: serde_json::Value =
         serde_json::from_str(&error_line).expect("failed to parse error JSON");
 
-    // keys type에 대한 error를 받아야 한다
+    // The current transaction fields are required.
     let reason = error_json["body"]["reason"].as_str().unwrap_or("");
     let error_code = error_json["body"]["error"].as_str().unwrap_or("");
     assert!(
-        error_code.contains("invalidParams") && reason.contains("keys must be an array"),
-        "should report that keys must be an array, got error={} reason={}",
+        error_code.contains("invalidParams")
+            && reason.contains("actions")
+            && reason.contains("preedit"),
+        "should reject the legacy keys field, got error={} reason={}",
         error_code,
         reason
     );
@@ -3824,7 +4333,7 @@ async fn test_replacement_raster_with_missing_height_is_rejected() {
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
 
-    // 먼저 open한다
+    // \uba3c\uc800 open\ud55c\ub2e4
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 "#).await.unwrap();
@@ -4129,7 +4638,7 @@ async fn test_replacement_raster_with_zero_size_is_rejected() {
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
 
-    // 보통 크기로 open을 보낸다
+    // \ubcf4\ud1b5 \ud06c\uae30\ub85c open\uc744 \ubcf4\ub0b8\ub2e4
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 "#).await.unwrap();
@@ -4220,7 +4729,7 @@ async fn test_too_small_raster_holds_the_open() {
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
 
-    // 이 raster는 양수 크기이지만 terminal cell 하나를 담기에는 너무 작다.
+    // \uc774 raster\ub294 \uc591\uc218 \ud06c\uae30\uc774\uc9c0\ub9cc terminal cell \ud558\ub098\ub97c \ub2f4\uae30\uc5d0\ub294 \ub108\ubb34 \uc791\ub2e4.
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":3,"height":3,"scale":1.0}}}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":2,"width":800,"height":384,"scale":1.0}}}}
@@ -4256,7 +4765,7 @@ async fn test_too_small_raster_holds_the_open() {
 
 /// Test: sub-cell 교체 raster는 현재 grid를 유지하면서도
 /// frame을 present하므로 host presentation barrier가 완료된다. PTY는
-/// 변하지 않은 grid로 resize되므로 SIGWINCH를 보내지 않는다.
+/// 변하지 않은 grid로 resize되\ubbc0\ub85c SIGWINCH\ub97c \ubcf4\ub0b4\uc9c0 \uc54a\ub294\ub2e4.
 #[tokio::test]
 async fn test_sub_cell_replacement_holds_the_grid() {
     let calls = Arc::new(Mutex::new(Calls::default()));
@@ -4526,10 +5035,10 @@ async fn test_panicking_surface_reports_error() {
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
 
-    // engine에서 panic을 활성화한다
+    // engine\uc5d0\uc11c panic\uc744 \ud65c\uc131\ud654\ud55c\ub2e4
     panic_engine_flag.store(true, std::sync::atomic::Ordering::Relaxed);
 
-    // open을 보낸다 - resize에서 panic을 일으켜야 한다
+    // open\uc744 \ubcf4\ub0b8\ub2e4 - resize\uc5d0\uc11c panic\uc744 \uc77c\uc73c\ucf1c\uc57c \ud55c\ub2e4
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 "#).await.unwrap();
@@ -4618,7 +5127,7 @@ async fn next_image_of_raster(
     panic!("no image envelope for raster {raster} arrived");
 }
 
-/// 교체 raster는 이전 전송이 acknowledge될 때까지 사용되지 않는다.
+/// \uad50\uccb4 raster\ub294 \uc774\uc804 \uc804\uc1a1\uc774 acknowledge\ub420 \ub54c\uae4c\uc9c0 \uc0ac\uc6a9\ub418\uc9c0 \uc54a\ub294\ub2e4.
 #[tokio::test]
 async fn test_replacement_raster_waits_for_prior_transfer() {
     let calls = Arc::new(Mutex::new(Calls::default()));
@@ -4641,7 +5150,7 @@ async fn test_replacement_raster_waits_for_prior_transfer() {
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
 
-    // 800x384 image로 open한다
+    // 800x384 image\ub85c open\ud55c\ub2e4
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 "#).await.unwrap();
@@ -4700,7 +5209,7 @@ async fn test_replacement_raster_waits_for_prior_transfer() {
     task.await.unwrap().unwrap();
 }
 
-/// Test: release cycle 뒤, image가 미해결인 동안의 output은 다시 present하지 않는다
+/// Test: release cycle \ub4a4, image\uac00 \ubbf8\ud574\uacb0\uc778 \ub3d9\uc548\uc758 output\uc740 \ub2e4\uc2dc present\ud558\uc9c0 \uc54a\ub294\ub2e4
 #[tokio::test]
 async fn test_no_image_envelope_while_outstanding_after_release() {
     let calls = Arc::new(Mutex::new(Calls::default()));
@@ -4747,7 +5256,7 @@ async fn test_no_image_envelope_while_outstanding_after_release() {
         "first image envelope sequence"
     );
 
-    // sequence 1을 release한다
+    // sequence 1을 release\ud55c\ub2e4
     to_serve.write_all(br#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
 "#).await.unwrap();
 
@@ -4808,7 +5317,7 @@ async fn test_no_image_envelope_while_outstanding_after_release() {
     task.await.unwrap().unwrap();
 }
 
-/// Test: error response는 다음 output에서 그리기를 다시 활성화한다
+/// Test: error response\ub294 \ub2e4\uc74c output\uc5d0\uc11c \uadf8\ub9ac\uae30\ub97c \ub2e4\uc2dc \ud65c\uc131\ud654\ud55c\ub2e4
 #[tokio::test]
 async fn test_image_error_response_reenables_drawing() {
     let calls = Arc::new(Mutex::new(Calls::default()));
@@ -4886,7 +5395,7 @@ async fn test_image_error_response_reenables_drawing() {
     task.await.unwrap().unwrap();
 }
 
-/// 교체 raster 뒤의 state event는 전체 session field를 담는다.
+/// \uad50\uccb4 raster \ub4a4\uc758 state event\ub294 \uc804\uccb4 session field\ub97c \ub2f4\ub294\ub2e4.
 #[tokio::test]
 async fn test_replacement_raster_state_has_cell_dimensions() {
     let calls = Arc::new(Mutex::new(Calls::default()));
@@ -5039,7 +5548,7 @@ async fn test_font_applies_the_first_installed_family_of_a_list() {
     );
 }
 
-/// state 이벤트나 오류 응답이 올 때까지 줄을 읽는다.
+/// state \uc774\ubca4\ud2b8\ub098 \uc624\ub958 \uc751\ub2f5\uc774 \uc62c \ub54c\uae4c\uc9c0 \uc904\uc744 \uc77d\ub294\ub2e4.
 async fn next_state(
     lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
     expect: &str,
@@ -5057,7 +5566,7 @@ async fn next_state(
     }
 }
 
-/// 글꼴 크기는 칸 크기를 정한다(docs/spec/text-size.md). 크기가 두 배면 칸 높이도 두 배이고, 잘못된 크기는 오류다.
+/// \uae00\uaf34 \ud06c\uae30\ub294 \uce78 \ud06c\uae30\ub97c \uc815\ud55c\ub2e4(docs/spec/text-size.md). \ud06c\uae30\uac00 \ub450 \ubc30\uba74 \uce78 \ub192\uc774\ub3c4 \ub450 \ubc30\uc774\uace0, \uc798\ubabb\ub41c \ud06c\uae30\ub294 \uc624\ub958\ub2e4.
 #[tokio::test]
 async fn test_font_size_sets_the_cell_size() {
     let calls = Arc::new(Mutex::new(Calls::default()));
@@ -5118,7 +5627,7 @@ async fn test_font_size_sets_the_cell_size() {
     let _ = task.await;
 }
 
-/// 화면 이벤트 한 줄의 셀 글자를 이어 붙인다. JSON 에서는 글자마다 셀 객체이므로 문자열 검색으로 찾을 수 없다.
+/// \ud654\uba74 \uc774\ubca4\ud2b8 \ud55c \uc904\uc758 \uc140 \uae00\uc790\ub97c \uc774\uc5b4 \ubd99\uc778\ub2e4. JSON \uc5d0\uc11c\ub294 \uae00\uc790\ub9c8\ub2e4 \uc140 \uac1d\uccb4\uc774\ubbc0\ub85c \ubb38\uc790\uc5f4 \uac80\uc0c9\uc73c\ub85c \ucc3e\uc744 \uc218 \uc5c6\ub2e4.
 fn screen_text(line: &str) -> String {
     let value: serde_json::Value = serde_json::from_str(line).expect("screen event JSON");
     value["body"]["cells"]
@@ -5131,8 +5640,8 @@ fn screen_text(line: &str) -> String {
 
 #[tokio::test]
 async fn output_while_the_host_holds_a_raster_sends_one_screen_with_the_next_presentation() {
-    // 호스트가 앞 래스터를 복사하는 동안 온 출력은 화면 JSON 을 보내지 않는다. 보내면 출력이 몰릴 때 페이지가
-    // 지난 화면을 뒤늦게 처리하느라 입력과 스크롤이 밀린다. 답을 받은 뒤 한 번 그리고 그 화면 하나를 보낸다.
+    // \ud638\uc2a4\ud2b8\uac00 \uc55e \ub798\uc2a4\ud130\ub97c \ubcf5\uc0ac\ud558\ub294 \ub3d9\uc548 \uc628 \ucd9c\ub825\uc740 \ud654\uba74 JSON \uc744 \ubcf4\ub0b4\uc9c0 \uc54a\ub294\ub2e4. \ubcf4\ub0b4\uba74 \ucd9c\ub825\uc774 \ubab0\ub9b4 \ub54c \ud398\uc774\uc9c0\uac00
+    // \uc9c0\ub09c \ud654\uba74\uc744 \ub4a4\ub2a6\uac8c \ucc98\ub9ac\ud558\ub290\ub77c \uc785\ub825\uacfc \uc2a4\ud06c\ub864\uc774 \ubc00\ub9b0\ub2e4. \ub2f5\uc744 \ubc1b\uc740 \ub4a4 \ud55c \ubc88 \uadf8\ub9ac\uace0 \uadf8 \ud654\uba74 \ud558\ub098\ub97c \ubcf4\ub0b8\ub2e4.
     let calls = Arc::new(Mutex::new(Calls::default()));
     let session_id = "held-raster".to_string();
     let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
@@ -5146,7 +5655,7 @@ async fn output_while_the_host_holds_a_raster_sends_one_screen_with_the_next_pre
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 "#).await.unwrap();
-    // 열기의 첫 표시까지 읽는다. 그 래스터는 아직 호스트에 있다.
+    // 열기의 첫 표시\uae4c\uc9c0 \uc77d\ub294\ub2e4. \uadf8 \ub798\uc2a4\ud130\ub294 \uc544\uc9c1 \ud638\uc2a4\ud2b8\uc5d0 \uc788\ub2e4.
     loop {
         let line = tokio::time::timeout(std::time::Duration::from_secs(2), lines.next_line())
             .await
@@ -5380,7 +5889,7 @@ async fn a_focus_change_sends_the_screen_with_the_presentation_that_draws_it() {
             break;
         }
     }
-    to_serve.write_all(b"{\"surface\":\"s1\",\"body\":{\"operation\":\"input\",\"focus\":{\"focused\":true}}}\n").await.unwrap();
+    to_serve.write_all(b"{\"surface\":\"s1\",\"body\":{\"operation\":\"input\",\"actions\":[{\"type\":\"focus\",\"focused\":true}],\"preedit\":{\"text\":\"\",\"markedRange\":null,\"selectedRange\":null,\"replacementRange\":null,\"attributed\":false}}}\n").await.unwrap();
     let mut seen = Vec::new();
     let mut presented = false;
     loop {
@@ -5551,7 +6060,7 @@ async fn an_invalid_mouse_operation_is_rejected() {
 async fn focus_changes_are_reported_to_a_program_that_enables_focus_reports() {
     let focus = |focused: bool| {
         format!(
-            "{{\"surface\":\"s1\",\"body\":{{\"operation\":\"input\",\"focus\":{{\"focused\":{focused}}}}}}}\n"
+            "{{\"surface\":\"s1\",\"body\":{{\"operation\":\"input\",\"actions\":[{{\"type\":\"focus\",\"focused\":{focused}}}],\"preedit\":{{\"text\":\"\",\"markedRange\":null,\"selectedRange\":null,\"replacementRange\":null,\"attributed\":false}}}}}}\n"
         )
     };
     let requests = [focus(true), focus(true), focus(false)].concat();
@@ -5575,7 +6084,7 @@ async fn focus_changes_are_reported_to_a_program_that_enables_focus_reports() {
 
 #[tokio::test]
 async fn keypad_keys_follow_the_application_keypad_mode() {
-    let keys = "{\"surface\":\"s1\",\"body\":{\"operation\":\"input\",\"keys\":[{\"key\":\"Keypad5\",\"text\":\"\",\"shift\":false,\"alt\":false,\"ctrl\":false},{\"key\":\"KeypadEnter\",\"text\":\"\",\"shift\":false,\"alt\":false,\"ctrl\":false}]}}\n";
+    let keys = "{\"surface\":\"s1\",\"body\":{\"operation\":\"input\",\"actions\":[{\"type\":\"key\",\"key\":\"Keypad5\",\"text\":\"\",\"shift\":false,\"alt\":false,\"ctrl\":false},{\"type\":\"key\",\"key\":\"KeypadEnter\",\"text\":\"\",\"shift\":false,\"alt\":false,\"ctrl\":false}],\"preedit\":{\"text\":\"\",\"markedRange\":null,\"selectedRange\":null,\"replacementRange\":null,\"attributed\":false}}}\n";
     let (_, _, writes) = serve_scroll(
         Some(Modes {
             app_keypad: true,
@@ -5591,7 +6100,7 @@ async fn keypad_keys_follow_the_application_keypad_mode() {
 
 #[tokio::test]
 async fn an_inline_image_event_follows_the_presentation_that_draws_the_image() {
-    // 페이지의 그림 상태는 그 그림을 그린 래스터와 함께 바뀐다. 먼저 오면 페이지가 그림 없는 화면을 그림으로 여긴다.
+    // \ud398\uc774\uc9c0\uc758 \uadf8\ub9bc \uc0c1\ud0dc\ub294 \uadf8 \uadf8\ub9bc\uc744 \uadf8\ub9b0 \ub798\uc2a4\ud130\uc640 \ud568\uaed8 \ubc14\ub010\ub2e4. \uba3c\uc800 \uc624\uba74 \ud398\uc774\uc9c0\uac00 \uadf8\ub9bc \uc5c6\ub294 \ud654\uba74\uc744 \uadf8\ub9bc\uc73c\ub85c \uc5ec\uae34\ub2e4.
     let calls = Arc::new(Mutex::new(Calls::default()));
     let session = "inline-order".to_string();
     let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
@@ -5896,21 +6405,21 @@ fn transfer_image(id: u32, mark: &std::ffi::CStr) -> TransferImage {
     }
 }
 
-/// 전송 이미지의 답 전에 표면이 이미지 상태를 놓게 하는 요청.
+/// \uc804\uc1a1 \uc774\ubbf8\uc9c0\uc758 \ub2f5 \uc804\uc5d0 \ud45c\uba74\uc774 \uc774\ubbf8\uc9c0 \uc0c1\ud0dc\ub97c \ub193\uac8c \ud558\ub294 \uc694\uccad.
 #[derive(Clone, Copy, Debug)]
 enum LettingGo {
     Close,
     Reconnect,
 }
 
-/// 남은 전송 이미지를 놓게 하는 일.
+/// \ub0a8\uc740 \uc804\uc1a1 \uc774\ubbf8\uc9c0\ub97c \ub193\uac8c \ud558\ub294 \uc77c.
 #[derive(Clone, Copy, Debug)]
 enum Release {
     Answer,
     ConnectionEnd,
 }
 
-/// 그 표면의 다음 답을 기다린다. close 의 답은 빈 본문이고 reconnect 의 답은 session 이벤트이다.
+/// \uadf8 \ud45c\uba74\uc758 \ub2e4\uc74c \ub2f5\uc744 \uae30\ub2e4\ub9b0\ub2e4. close \uc758 \ub2f5\uc740 \ube48 \ubcf8\ubb38\uc774\uace0 reconnect \uc758 \ub2f5\uc740 session \uc774\ubca4\ud2b8\uc774\ub2e4.
 async fn wait_for_reply<R: tokio::io::AsyncBufRead + Unpin>(
     lines: &mut tokio::io::Lines<R>,
     letting_go: LettingGo,
@@ -5929,8 +6438,8 @@ async fn wait_for_reply<R: tokio::io::AsyncBufRead + Unpin>(
     }
 }
 
-/// 표면을 열고 첫 표시 요청을 받은 뒤 답하지 않고 표면이 이미지 상태를 놓게 한다. 그 전송 이미지는 호스트가 답하거나
-/// 그것을 나른 연결이 끝날 때까지 남아야 한다. 답 뒤의 close 답은 입력 루프가 그 답을 처리했음을 알린다.
+/// \ud45c\uba74\uc744 \uc5f4\uace0 \uccab \ud45c\uc2dc \uc694\uccad\uc744 \ubc1b\uc740 \ub4a4 \ub2f5\ud558\uc9c0 \uc54a\uace0 \ud45c\uba74\uc774 \uc774\ubbf8\uc9c0 \uc0c1\ud0dc\ub97c \ub193\uac8c \ud55c\ub2e4. \uadf8 \uc804\uc1a1 \uc774\ubbf8\uc9c0\ub294 \ud638\uc2a4\ud2b8\uac00 \ub2f5\ud558\uac70\ub098
+/// \uadf8\uac83\uc744 \ub098\ub978 \uc5f0\uacb0\uc774 \ub05d\ub0a0 \ub54c\uae4c\uc9c0 \ub0a8\uc544\uc57c \ud55c\ub2e4. \ub2f5 \ub4a4\uc758 close \ub2f5\uc740 \uc785\ub825 \ub8e8\ud504\uac00 \uadf8 \ub2f5\uc744 \ucc98\ub9ac\ud588\uc74c\uc744 \uc54c\ub9b0\ub2e4.
 async fn check_unanswered_transfer(persistent: bool, letting_go: LettingGo, release: Release) {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let port = Arc::new(FakeSessionPort::new("transfer".into(), calls.clone()));
@@ -6019,19 +6528,19 @@ async fn check_unanswered_transfer(persistent: bool, letting_go: LettingGo, rele
     }
 }
 
-/// 닫힌 표면의 전송 이미지도 호스트가 그 표시에 답할 때까지 남는다. 답이 오면 놓고, 그 답은 표면을 다시 만들지 않는다.
+/// \ub2eb\ud78c \ud45c\uba74\uc758 \uc804\uc1a1 \uc774\ubbf8\uc9c0\ub3c4 \ud638\uc2a4\ud2b8\uac00 \uadf8 \ud45c\uc2dc\uc5d0 \ub2f5\ud560 \ub54c\uae4c\uc9c0 \ub0a8\ub294\ub2e4. \ub2f5\uc774 \uc624\uba74 \ub193\uace0, \uadf8 \ub2f5\uc740 \ud45c\uba74\uc744 \ub2e4\uc2dc \ub9cc\ub4e4\uc9c0 \uc54a\ub294\ub2e4.
 #[tokio::test]
 async fn a_closed_surface_keeps_its_unanswered_transfer_image_until_the_host_answers() {
     check_unanswered_transfer(false, LettingGo::Close, Release::Answer).await;
 }
 
-/// 답이 오지 않은 채 연결이 끝나면 더 올 답이 없으므로 닫힌 표면의 전송 이미지를 놓는다.
+/// \ub2f5\uc774 \uc624\uc9c0 \uc54a\uc740 \ucc44 \uc5f0\uacb0\uc774 \ub05d\ub098\uba74 \ub354 \uc62c \ub2f5\uc774 \uc5c6\uc73c\ubbc0\ub85c \ub2eb\ud78c \ud45c\uba74\uc758 \uc804\uc1a1 \uc774\ubbf8\uc9c0\ub97c \ub193\ub294\ub2e4.
 #[tokio::test]
 async fn a_closed_surface_releases_its_unanswered_transfer_image_when_the_connection_ends() {
     check_unanswered_transfer(false, LettingGo::Close, Release::ConnectionEnd).await;
 }
 
-/// reconnect 는 native 이미지 상태를 버리지만 답을 기다리는 전송 이미지는 답이 올 때까지 남는다.
+/// reconnect \ub294 native \uc774\ubbf8\uc9c0 \uc0c1\ud0dc\ub97c \ubc84\ub9ac\uc9c0\ub9cc \ub2f5\uc744 \uae30\ub2e4\ub9ac\ub294 \uc804\uc1a1 \uc774\ubbf8\uc9c0\ub294 \ub2f5\uc774 \uc62c \ub54c\uae4c\uc9c0 \ub0a8\ub294\ub2e4.
 #[tokio::test]
 async fn a_reconnected_surface_keeps_its_unanswered_transfer_image_until_the_host_answers() {
     check_unanswered_transfer(false, LettingGo::Reconnect, Release::Answer).await;
@@ -6042,7 +6551,7 @@ async fn a_reconnected_surface_releases_its_unanswered_transfer_image_when_the_c
     check_unanswered_transfer(false, LettingGo::Reconnect, Release::ConnectionEnd).await;
 }
 
-/// 영속 연결의 close 는 등록부를 거쳐 표면을 닫는다. 그 전송 이미지도 같은 규칙을 따른다.
+/// \uc601\uc18d \uc5f0\uacb0\uc758 close \ub294 \ub4f1\ub85d\ubd80\ub97c \uac70\uccd0 \ud45c\uba74\uc744 \ub2eb\ub294\ub2e4. \uadf8 \uc804\uc1a1 \uc774\ubbf8\uc9c0\ub3c4 \uac19\uc740 \uaddc\uce59\uc744 \ub530\ub978\ub2e4.
 #[tokio::test]
 async fn a_persistent_closed_surface_keeps_its_unanswered_transfer_image_until_the_host_answers() {
     check_unanswered_transfer(true, LettingGo::Close, Release::Answer).await;
@@ -6107,7 +6616,7 @@ async fn a_detached_surface_keeps_its_unanswered_transfer_until_the_exact_frame_
     assert_eq!((calls.opens.len(), calls.closes.len()), (1, 1), "{calls:?}");
 }
 
-/// 다음 표시 요청을 기다려 그 image 를 돌려준다.
+/// \ub2e4\uc74c \ud45c\uc2dc \uc694\uccad\uc744 \uae30\ub2e4\ub824 \uadf8 image \ub97c \ub3cc\ub824\uc900\ub2e4.
 async fn next_image<R: tokio::io::AsyncBufRead + Unpin>(
     lines: &mut tokio::io::Lines<R>,
 ) -> serde_json::Value {
@@ -6134,9 +6643,9 @@ async fn next_image_detach_reply<R: tokio::io::AsyncBufRead + Unpin>(
     }
 }
 
-/// reconnect 가 남긴 전송 이미지와 새 래스터의 표시 요청은 이름과 순번이 같을 수 있다. 호스트의 답은 generation 과
-/// raster 를 싣는다. 새 래스터의 답은 그 표면의 그리기 대기를 풀고 남은 전송 이미지를 놓지 않는다. 남은 이미지는
-/// 그 래스터의 답이 놓는다.
+/// reconnect \uac00 \ub0a8\uae34 \uc804\uc1a1 \uc774\ubbf8\uc9c0\uc640 \uc0c8 \ub798\uc2a4\ud130\uc758 \ud45c\uc2dc \uc694\uccad\uc740 \uc774\ub984\uacfc \uc21c\ubc88\uc774 \uac19\uc744 \uc218 \uc788\ub2e4. \ud638\uc2a4\ud2b8\uc758 \ub2f5\uc740 generation \uacfc
+/// raster \ub97c \uc2e3\ub294\ub2e4. \uc0c8 \ub798\uc2a4\ud130\uc758 \ub2f5\uc740 \uadf8 \ud45c\uba74\uc758 \uadf8\ub9ac\uae30 \ub300\uae30\ub97c \ud480\uace0 \ub0a8\uc740 \uc804\uc1a1 \uc774\ubbf8\uc9c0\ub97c \ub193\uc9c0 \uc54a\ub294\ub2e4. \ub0a8\uc740 \uc774\ubbf8\uc9c0\ub294
+/// \uadf8 \ub798\uc2a4\ud130\uc758 \ub2f5\uc774 \ub193\ub294\ub2e4.
 #[tokio::test]
 async fn the_answer_of_a_new_raster_is_not_taken_for_a_retained_transfer_of_the_same_sequence() {
     let calls = Arc::new(Mutex::new(Calls::default()));
@@ -6227,13 +6736,24 @@ async fn next_measured_frame_after(
 ) -> (u64, usize, usize, usize, usize, usize, serde_json::Value) {
     let mut screens = std::collections::HashMap::new();
     let mut images = std::collections::HashMap::new();
+    let mut recent_messages = Vec::new();
     loop {
         let line = tokio::time::timeout(std::time::Duration::from_secs(2), lines.next_line())
             .await
-            .expect("measured frame arrives within 2 s")
+            .unwrap_or_else(|_| {
+                panic!(
+                    "measured frame arrives within 2 s; pending calls: {:?}; recent output: {:?}",
+                    calls.lock().unwrap(),
+                    recent_messages
+                )
+            })
             .expect("output read succeeds")
             .expect("sidecar output remains open");
         let message: serde_json::Value = serde_json::from_str(&line).unwrap();
+        recent_messages.push(message.clone());
+        if recent_messages.len() > 8 {
+            recent_messages.remove(0);
+        }
         if message["body"]["ack"] == true {
             *acknowledgements += 1;
         }
@@ -6627,7 +7147,7 @@ async fn a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it() {
 #[tokio::test]
 async fn an_envelope_with_invalid_cids_is_answered_on_its_surface() {
     let calls = Arc::new(Mutex::new(Calls::default()));
-    let input = r#"{"surface":"s1","cids":[1],"body":{"operation":"input","bytes":"aGk="}}
+    let input = r#"{"surface":"s1","cids":[1],"body":{"operation":"input","actions":[{"type":"insert","text":"hi","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
     let mut writer = Vec::new();

@@ -245,7 +245,7 @@ async fn a_served_request_records_its_whole_body_and_an_unparsed_line_as_it_arri
     serve_lines(
         &events,
         br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
-{"surface":"s1","body":{"operation":"input","compose":{"text":"\ud55c","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":false}}}
+{"surface":"s1","body":{"operation":"input","actions":[],"preedit":{"text":"\ud55c","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":false}}}
 not json at all
 "#,
     )
@@ -594,7 +594,7 @@ async fn the_inputs_and_the_frames_of_a_session_are_replay_records() {
         factory,
         br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/cat","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","cids":["b1.42"],"body":{"operation":"input","bytes":"7ZWcYQo="}}
+{"surface":"s1","cids":["b1.42"],"body":{"operation":"input","actions":[{"type":"insert","text":"\ud55ca\n","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#,
         "sidecar.vt.pty_read",
     )
@@ -699,7 +699,7 @@ async fn the_bytes_of_the_program_are_not_stored_when_the_policy_turns_the_class
         factory,
         br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/cat","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","body":{"operation":"input","bytes":"7ZWcYQo="}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"\ud55ca\n","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#,
     )
     .await;
@@ -857,10 +857,10 @@ async fn the_replies_of_the_surface_task_carry_the_cids_of_their_requests() {
     let events = TestEvents::new();
     let replies = serve_lines(
         &events,
-        br#"{"surface":"s0","root":"/tmp","cids":["b1.10"],"body":{"operation":"input","bytes":"AA=="}}
+        br#"{"surface":"s0","root":"/tmp","cids":["b1.10"],"body":{"operation":"input","actions":[{"type":"insert","text":"\u0000","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 {"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","cids":["b1.11"],"body":{"operation":"input","bytes":"AA=="}}
+{"surface":"s1","cids":["b1.11"],"body":{"operation":"input","actions":[{"type":"insert","text":"\u0000","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#,
     )
     .await;
@@ -1021,7 +1021,7 @@ async fn the_cids_of_an_input_request_reach_the_pty_write_event() {
         factory,
         br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/cat","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","cids":["b1.42"],"body":{"operation":"input","bytes":"7ZWcYQo="}}
+{"surface":"s1","cids":["b1.42"],"body":{"operation":"input","actions":[{"type":"insert","text":"\ud55ca\n","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#,
     )
     .await;
@@ -1080,7 +1080,7 @@ async fn the_events_of_a_session_satisfy_the_catalog() {
         factory,
         br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/cat","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","cids":["b1.1"],"body":{"operation":"input","bytes":"7ZWcYQo="}}
+{"surface":"s1","cids":["b1.1"],"body":{"operation":"input","actions":[{"type":"insert","text":"\ud55ca\n","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 {"surface":"s1","body":{"operation":"font","family":"No Such Terminal Font Family","size":13}}
 not json at all
 "#,
@@ -1201,7 +1201,7 @@ async fn an_open_without_image_for_a_surface_with_an_image_is_refused_and_its_ou
     });
     // An empty input is answered by the surface task after it handled every earlier request of the surface, so its reply marks
     // the end of the step before it.
-    let empty_input = b"{\"surface\":\"s1\",\"body\":{\"operation\":\"input\",\"bytes\":\"\"}}\n";
+    let empty_input = b"{\"surface\":\"s1\",\"body\":{\"operation\":\"input\",\"actions\":[],\"preedit\":{\"text\":\"\",\"markedRange\":null,\"selectedRange\":null,\"replacementRange\":null,\"attributed\":false}}}\n";
     let input_replies = |events: &serde_json::Value| events["fields"]["operation"] == "input";
     // The open with the image, the configure that opens the session and draws its first frame, and the answer to that frame.
     to_serve
