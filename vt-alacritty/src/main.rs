@@ -40,10 +40,9 @@ async fn main() -> std::io::Result<()> {
     // error and not to the event file, because the file of the contract starts with log.open and the writer that writes it
     // exists only after the setup reads the arguments and the platform.
     eprintln!("{} info sidecar vt: started", text_record_time());
-    let display_name = std::env::var("SOKSAK_SIDECAR_DISPLAY_NAME")
-        .map_err(|error| invalid_input(format!("SOKSAK_SIDECAR_DISPLAY_NAME: {error}")))?;
     #[cfg(target_os = "macos")]
-    process_identity::set_process_display_name(&display_name).map_err(invalid_input)?;
+    process_identity::set_process_display_name(env!("SOKSAK_SIDECAR_DISPLAY_NAME"))
+        .map_err(invalid_input)?;
     let engine_factory = Arc::new(|| Box::new(AlacrittyEngine::new()) as Box<dyn Engine>);
     let arguments = arguments::parse(std::env::args().skip(1)).map_err(invalid_input)?;
     let config_dir = canonical_config_dir(&arguments.service_dir).map_err(invalid_input)?;

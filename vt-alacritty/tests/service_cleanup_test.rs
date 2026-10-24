@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 /// The limit of a wait for a service to end. A success is judged by the process status and the folders, not by this time.
 const STALL: Duration = Duration::from_secs(60);
 const DISPLAY_NAME_TIMEOUT: Duration = Duration::from_secs(5);
-const DISPLAY_NAME: &str = "soksak://sidecar/vt";
+const DISPLAY_NAME: &str = env!("SOKSAK_SIDECAR_DISPLAY_NAME");
 
 /// A service that a check started. Its drop ends the process with SIGTERM, and with SIGKILL when the process does not end
 /// within `STALL`. It removes the socket folder that the service named by its endpoint, and reports each failure as `error:`.
@@ -115,8 +115,21 @@ fn start(service_dir: &Path) -> (Service, PathBuf) {
 
 /// Starts a service in `service_dir` that writes its event files to `logs`.
 fn start_with_logs(service_dir: &Path, logs: &Path) -> (Service, PathBuf) {
-    let child = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"))
-        .env("SOKSAK_SIDECAR_DISPLAY_NAME", DISPLAY_NAME)
+    start_with_logs_and_display_name(service_dir, logs, None)
+}
+
+/// Starts a service with an optional parent environment value for the display identity.
+fn start_with_logs_and_display_name(
+    service_dir: &Path,
+    logs: &Path,
+    display_name: Option<&str>,
+) -> (Service, PathBuf) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"));
+    command.env_remove("SOKSAK_SIDECAR_DISPLAY_NAME");
+    if let Some(display_name) = display_name {
+        command.env("SOKSAK_SIDECAR_DISPLAY_NAME", display_name);
+    }
+    let child = command
         .arg("--service-dir")
         .arg(service_dir)
         .arg("--log-dir")
@@ -227,14 +240,38 @@ fn persistent_service_uses_its_declared_launch_services_display_name() {
 }
 
 #[test]
-fn missing_process_display_name_is_reported_after_the_start_record() {
+fn persistent_service_ignores_host_display_name_environment() {
+    let root = service_dir();
+    let mut service = start_with_logs_and_display_name(
+        &root.0,
+        &root.0.join("logs"),
+        Some("soksak://sidecar/incorrect"),
+    )
+    .0;
+    let name = wait_for_display_name(&mut service, DISPLAY_NAME)
+        .unwrap_or_else(|error| panic!("service process identity: {error}"));
+    assert_eq!(name, DISPLAY_NAME);
+}
+
+#[test]
+fn embedded_process_identity_matches_its_sidecar_manifest() {
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../sidecar.json")).expect("sidecar.json is valid JSON");
+    let display_name = manifest["displayName"]
+        .as_str()
+        .expect("sidecar.json declares a displayName");
+    assert_eq!(DISPLAY_NAME, display_name);
+}
+
+#[test]
+fn startup_uses_embedded_identity_before_argument_validation() {
     let output = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"))
         .env_remove("SOKSAK_SIDECAR_DISPLAY_NAME")
         .output()
-        .expect("start the service without its required display name");
+        .expect("start the service without a host display name");
     assert!(
         !output.status.success(),
-        "service accepted a missing display name"
+        "service accepted missing required arguments"
     );
     let stderr = String::from_utf8(output.stderr).expect("service standard error is UTF-8");
     assert!(
@@ -242,8 +279,12 @@ fn missing_process_display_name_is_reported_after_the_start_record() {
         "start record is missing: {stderr:?}"
     );
     assert!(
-        stderr.contains("SOKSAK_SIDECAR_DISPLAY_NAME"),
-        "startup error does not name the missing environment value: {stderr:?}"
+        !stderr.contains("SOKSAK_SIDECAR_DISPLAY_NAME"),
+        "startup still depends on a host environment value: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("--service-dir is required"),
+        "startup did not reach argument validation after registering its identity: {stderr:?}"
     );
 }
 

@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S74: VT sidecar는 build 시 `sidecar.json.displayName`을 embed하고 host 환경 변수를 읽지 않고 등록한다. Red: 변경 전 service가 필수 환경 값을 보고하고 ready endpoint를 게시하지 못했다. Green: 변수 부재 또는 충돌 값에서 live LaunchServices identity가 embedded manifest와 일치하며, service-cleanup 10개와 log-dir 6개, format 검사, macOS arm64 build가 통과한다. Release는 게시하지 않았다.
 - S73: VT service는 선언된 process display identity를 필수로 받아 runtime 초기화 전에 LaunchServices에 등록하며 executable 이름과 첫 시작 기록을 유지한다. Red: 변경 전 service에는 LaunchServices 항목이 없었고 identity 누락도 보고하지 않았다. Green: service cleanup test 8개, scoped event/records 검사, format 검사와 macOS arm64 local version 0.0.12 build가 통과한다.
 
 - S72: pre-push 훅이 `make push-check`를 실행한다. 이것은 ci workflow와 같이 (`make build` 다음의) `make test`와 push 범위의 commit message 검사를 실행한다. Red: `tests/make-targets.test.mjs`가 없는 recipe와 없는 훅에서 실패했다. Green: 시험 2개 중 2개가 통과하고, `make push-check`가 통과한다.
