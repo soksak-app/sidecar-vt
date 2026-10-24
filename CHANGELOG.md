@@ -4,6 +4,19 @@
 
 ## Unreleased
 
+- S85: Prepare the local VT 0.0.17 diagnostics candidate for S84's current
+  ordered input transaction. The archive smoke sends a strict insert action and
+  required final preedit, checks the correlated acknowledgement and matching
+  `render.frame`, then verifies controlled PTY output and exact command bytes
+  from ordered engine-trace `feed` chunks. Red: VT 0.0.16 replied
+  `invalidParams: input requires bytes or keys field`. The first candidate smoke
+  attempt exposed that PTY trace input can be split across read records; the
+  check now concatenates decoded chunks in order and compares the exact input.
+  The final `make candidate-release` exits 0 and both version/package checks pass
+  (2/2). The local darwin-arm64 archive SHA-256 is 6f3b7247bd1e14cc3ce4f25717abd0f5c7ad0e69ca79b6867cf90b5e0bfa7f9c. The
+  diagnostics feature is forced and macOS minimum is 14.4. No application
+  launch, native input, tag, public release, or registry update was performed.
+
 - S84: Apply native input reports as one ordered VT transaction containing
   actions and a required final preedit snapshot. The service validates all
   fields before side effects, writes ordered action bytes once, applies the

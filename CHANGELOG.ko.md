@@ -4,6 +4,20 @@
 
 ## 미배포
 
+- S85: S84의 current ordered input transaction을 검증하는 VT 0.0.17
+  local diagnostics candidate를 준비한다. Archive smoke는 strict insert action과
+  필수 최종 preedit을 보내고 correlated acknowledgement 및 일치하는
+  `render.frame`을 확인한 뒤 제어된 PTY output과 순서 있는 engine-trace `feed`
+  chunk에서 복원한 정확한 command bytes를 검증한다. Red: VT 0.0.16은
+  `invalidParams: input requires bytes or keys field`로 응답했다. 첫 candidate
+  smoke에서 PTY trace 입력이 여러 read record로 나뉠 수 있음을 확인해, 검사는
+  decoded chunk를 순서대로 결합한 뒤 정확한 input을 비교한다. 최종
+  `make candidate-release`는 exit 0이고 version/package 검사 2/2가 통과한다.
+  Local darwin-arm64 archive SHA-256은
+  `6f3b7247bd1e14cc3ce4f25717abd0f5c7ad0e69ca79b6867cf90b5e0bfa7f9c`다.
+  Diagnostics feature를 강제했고 macOS 최소 버전은 14.4다. Application
+  launch, native input, tag, public release, registry 변경은 실행하지 않았다.
+
 - S84: Native input report를 action과 필수 최종 preedit snapshot을 가진 하나의
   순서 있는 VT transaction으로 적용한다. 서비스는 부작용 전에 field 전체를
   검증하고, 순서 있는 action byte를 한 번 쓰고, 최종 preedit을 한 번 적용하며,

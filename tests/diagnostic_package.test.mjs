@@ -45,8 +45,8 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
   assert.equal(packageInfo.name, "@soksak/sidecar-vt-alacritty", "release package identity differs");
   assert.match(packageInfo.version, /^0\.0\.\d+$/, "release package version is invalid");
   const binary = join(extracted, "build", "soksak-vt-alacritty");
-  const surface = "s83-diagnostic-surface";
-  const project = "/s83-diagnostic-project";
+  const surface = "s85-diagnostic-surface";
+  const project = "/s85-diagnostic-project";
   let service;
   let socket;
   let exited;
@@ -127,7 +127,7 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
         deliver(JSON.parse(line));
       }
     });
-    socket.write(`${JSON.stringify({ operation: "hello", protocol: 1, token: endpoint.token, client: "s83-diagnostic-smoke" })}\n`);
+    socket.write(`${JSON.stringify({ operation: "hello", protocol: 1, token: endpoint.token, client: "s85-diagnostic-smoke" })}\n`);
     const hello = await readMessage((message) => message.operation === "hello", "hello reply");
     assert.equal(hello.ok, true, "service refused the protocol handshake");
     socket.write(`${JSON.stringify({ surface, root: project, body: { operation: "open", image: "view", shell: "/bin/sh" } })}\n`);
@@ -146,14 +146,29 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
     assert.ok(initialScreen.body.render && typeof initialScreen.body.render === "object",
       `diagnostics build omitted matching render metadata (frame ${JSON.stringify(frame)}, version ${packageInfo.version})`);
     assert.deepEqual(initialScreen.body.render.frame, frame, "render metadata names a different frame");
-    assert.equal(packageInfo.version, "0.0.16", "candidate release package version differs");
+    assert.equal(packageInfo.version, "0.0.17", "candidate release package version differs");
     t.diagnostic(`PASS rendered_frame=${JSON.stringify(frame)}`);
 
-    const payload = "printf 'S83_TRACE\\n'";
-    const bytes = Buffer.from(`${payload}\n`, "utf8");
-    socket.write(`${JSON.stringify({ surface, root: project, body: { operation: "input", bytes: bytes.toString("base64") } })}\n`);
+    const payload = "printf 'S85_TRACE\\n'";
+    socket.write(`${JSON.stringify({
+      surface,
+      root: project,
+      cids: ["s85-ordered-input"],
+      body: {
+        operation: "input",
+        actions: [{ type: "insert", text: `${payload}\n`, replacementRange: null, attributed: false }],
+        preedit: {
+          text: "", markedRange: null, selectedRange: null,
+          replacementRange: null, attributed: false,
+        },
+      },
+    })}\n`);
+    const inputReply = await readMessage((message) => message.cids?.includes("s85-ordered-input"),
+      "ordered input transaction reply");
+    assert.equal(inputReply.body?.ack, true,
+      `packaged binary rejected the current input transaction: ${JSON.stringify(inputReply)}`);
     const outputScreen = await readMessage((message) => message.surface === surface && message.body?.event === "screen" &&
-      screenText(message.body).includes("S83_TRACE") && namesFrame(message.body.frame),
+      screenText(message.body).includes("S85_TRACE") && namesFrame(message.body.frame),
     "screen containing controlled PTY output");
     assert.deepEqual(outputScreen.body.render?.frame, outputScreen.body.frame,
       "controlled output screen has no render metadata for its frame");
@@ -168,8 +183,13 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
     await assert.rejects(access(socketDirectory), (error) => error.code === "ENOENT",
       `service left its socket directory ${socketDirectory}`);
     const trace = await readFile(join(traceDir, `${surface}.trace`), "utf8");
-    const expected = `feed ${Buffer.from("S83_TRACE\r\n", "utf8").toString("base64")}`;
-    assert.ok(trace.split(/\r?\n/).includes(expected), `engine trace lacks controlled PTY output ${expected}: ${trace}`);
+    const fedBytes = trace.split(/\r?\n/)
+      .filter((line) => line.startsWith("feed "))
+      .map((line) => Buffer.from(line.slice("feed ".length), "base64"))
+      .reduce((all, chunk) => Buffer.concat([all, chunk]), Buffer.alloc(0));
+    const expected = Buffer.from(`${payload}\r\n`, "utf8");
+    assert.ok(fedBytes.includes(expected),
+      `engine trace lacks controlled PTY input ${expected.toString("base64")}: ${trace}`);
     t.diagnostic("PASS engine trace includes controlled PTY input");
   } finally {
     socket?.destroy();
