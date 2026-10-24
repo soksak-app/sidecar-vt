@@ -4,6 +4,18 @@
 
 ## Unreleased
 
+- S82: Prepare the local VT 0.0.15 candidate containing S81. Package
+  metadata, both Rust crates, and Cargo.lock declare 0.0.15;
+  `tests/versions.test.mjs` passes 1/1 and locked Cargo metadata resolves.
+  The official debug `make release` target used the declared native
+  process-identity package 0.0.21 and the existing core native pkg-config
+  dependency. It created
+  `soksak-sidecar-vt-alacritty-0.0.15-darwin-arm64.tar.gz`, SHA-256
+  `c3532df4b23a92de04cbf9eabb72e782d743d85861901b0cfe99b7158fb735ef`.
+  The build uses the declared macOS minimum 14.4 and emitted no compiler
+  warnings. The deployment pin is unchanged; the artifact is local and no
+  public release or runtime verification is claimed.
+
 - S81: Wrap valid preedit graphemes across terminal rows on a render copy. A viewport keeps the selected caret visible without changing engine cursor or PTY cells; the screen message retains raw `cursor.row` and `cursor.col` for hashing and replay and adds required `cursor.caret` from the raster layout, null when no accepted frame exists. Existing wide-cell spans are cleared whole when overlaid, and one-column raster metadata reports only the visible in-grid span. Red: the unchanged renderer rejected a width-two preedit at the final column; before the wrap-pending correction, `a_full_single_row_preedit_keeps_its_glyphs_visible_at_the_end_boundary` and `a_clipped_wide_grapheme_keeps_its_glyph_visible_at_a_one_cell_end_boundary` left the end caret on a blank row and cropped every preedit glyph. The initial always-object caret failed the no-frame screen message test, and dirty future frames could not advertise a caret. Green: frame tests 31/31, screen-message tests 10/10, cropped render metadata 1/1, and S62 controlled draw-failure recovery 1/1; `cargo fmt --all --check` passes. The Wails error sample did not retain its triggering preedit, so its exact runtime trigger remains unknown. No application, activation, or package release was run.
 
 - S80: Prepare the local VT 0.0.14 archive containing S79. `vt-alacritty/package.json`, both Cargo crates, and `Cargo.lock` declare 0.0.14; `tests/versions.test.mjs` passes 1/1. The official debug `make release` command creates the darwin-arm64 archive with SHA-256 `c95054417477a6a80e111265b1e84d3f514b1e7128ae46a4499287b22a80feda`. The deployment pin is unchanged. The artifact is local and no public release was published.

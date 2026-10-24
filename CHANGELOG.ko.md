@@ -4,6 +4,17 @@
 
 ## 미배포
 
+- S82: S81을 담은 VT 0.0.15 local candidate를 준비한다. Package
+  metadata, 두 Rust crate, Cargo.lock이 0.0.15를 선언한다.
+  `tests/versions.test.mjs` 1/1과 locked Cargo metadata가 통과한다.
+  공식 debug `make release` target은 선언된 native process-identity
+  package 0.0.21과 기존 core native pkg-config dependency를 사용해
+  `soksak-sidecar-vt-alacritty-0.0.15-darwin-arm64.tar.gz`를 만들었다.
+  SHA-256은 `c3532df4b23a92de04cbf9eabb72e782d743d85861901b0cfe99b7158fb735ef`다.
+  Build는 선언된 macOS 최소 버전 14.4를 사용했고 compiler warning은
+  없었다. Deployment pin은 유지한다. Artifact는 local에 있으며 공개
+  release나 runtime 검증을 주장하지 않는다.
+
 - S81: 유효한 preedit grapheme을 renderer copy에서 terminal 행에 wrap하고 선택 caret을 보인다. 마지막 열의 width-2 grapheme은 분리하지 않고 다음 행으로 이동하며 한 열 raster에서는 pixel을 자른다. 기존 wide cell과 overlay가 겹치면 copy에서 기존 span 전체를 지운다. 행 끝의 전체 preedit end boundary는 UTF-16 위치를 유지하고 비어 있는 다음 행 대신 마지막 점유 cell을 frame-effective caret으로 사용한다. `screen.cursor.row/col`은 hash/replay용 raw engine 값을 유지하고, 필수 `screen.cursor.caret`은 accepted frame의 같은 layout에서 온 좌표이며 accepted frame이 없거나 dirty future frame이면 null이다. Red: 변경 전 renderer는 마지막 열의 width-2 preedit을 거부했다. 초기 wrap draft에서 두 rows=1 end-boundary test는 caret이 빈 행에 놓이고 viewport가 glyph를 자르는 것을 검출했다. `screen_message_with_layout`의 항상 object caret도 headless screen test에서 실패했다. Green: frame test 31/31, screen-message test 10/10, cropped metadata 1/1, S62 controlled draw-failure recovery와 dirty-future caret assertion 1/1, `cargo fmt --all --check`가 통과한다. Wails error sample에는 trigger preedit이 없어 runtime 원인은 모른다. Application, activation, package release는 실행하지 않았다.
 - S80: S79를 포함한 VT 0.0.14 local archive를 준비한다. `vt-alacritty/package.json`, 두 Cargo crate, `Cargo.lock`이 0.0.14를 선언하고 `tests/versions.test.mjs` 1/1이 통과한다. 공식 debug `make release`가 SHA-256 `c95054417477a6a80e111265b1e84d3f514b1e7128ae46a4499287b22a80feda`인 darwin-arm64 archive를 생성했다. Deployment pin은 유지한다. Artifact는 local에 있으며 공개 release하지 않았다.
 - S79.1: protocol test support module의 네 `ServeOptions` 초기화에 `submission_observer: None`을 추가한다. S79가 추가한 observer field 때문에 VT core library test target이 컴파일되지 않는다. 변경 전 컴파일 회귀 transcript SHA-256은 `405440fa05301622575dfa9997186107e1da5f9b686aa3b9c055920608da5ffc`다. 영향을 받은 library test target이 `cargo test --offline -p soksak-sidecar-vt-core --lib --no-run`으로 컴파일된다. `cargo fmt --all --check`, records 검사(104개 파일), `git diff --check`가 통과한다. Production 동작은 바꾸지 않았다.
