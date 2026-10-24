@@ -40,6 +40,7 @@ pub struct FrameRenderMetadata {
     pub cols: u32,
     pub grid_origin_x: u32,
     pub grid_origin_y: u32,
+    pub grid_logical_row_origin: u32,
     pub font_family: String,
     pub font_size: f64,
     pub ascent: f64,
@@ -69,6 +70,7 @@ impl FrameRenderMetadata {
                 "rows": self.rows,
                 "cols": self.cols,
                 "origin": { "x": self.grid_origin_x, "y": self.grid_origin_y },
+                "logicalRowOrigin": self.grid_logical_row_origin,
                 "cellWidth": self.cell_width,
                 "cellHeight": self.cell_height
             },
@@ -109,12 +111,50 @@ impl FrameRenderMetadata {
     }
 }
 
+/// The screen copy and cursor used by both the raster and the serialized screen event.
+pub(crate) struct RenderLayout {
+    pub screen: crate::protocol::Screen,
+    pub logical_row_origin: u32,
+}
+
+/// Builds the viewport and preedit overlay without changing the engine screen.
+pub(crate) fn render_layout(screen: &crate::protocol::Screen) -> Result<RenderLayout, String> {
+    let mut render_screen = screen.clone();
+    let logical_row_origin = if let Some(preedit) = render_screen.cursor.preedit.clone() {
+        apply_preedit(&mut render_screen, &preedit)?
+    } else {
+        0
+    };
+    Ok(RenderLayout {
+        screen: render_screen,
+        logical_row_origin,
+    })
+}
+
 fn color_hex(color: [u8; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2])
 }
 
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+
+#[cfg(feature = "fault-injection")]
+pub mod fault {
+    use std::cell::Cell;
+
+    thread_local! {
+        static FAIL_NEXT_FRAME_DRAW: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Fails the next frame draw on the calling thread after layout validation.
+    pub fn fail_next_draw() {
+        FAIL_NEXT_FRAME_DRAW.with(|failure| failure.set(true));
+    }
+
+    pub(super) fn take_next_draw_failure() -> bool {
+        FAIL_NEXT_FRAME_DRAW.with(|failure| failure.replace(false))
+    }
+}
 
 #[repr(C)]
 pub struct CCell {
@@ -428,9 +468,23 @@ impl Frame {
         images: &[crate::protocol::InlineImagePlacement],
         collect_metadata: bool,
     ) -> Result<Option<FrameRenderMetadata>, String> {
-        let mut render_screen = screen.clone();
-        if let Some(preedit) = render_screen.cursor.preedit.clone() {
-            apply_preedit(&mut render_screen, &preedit)?;
+        let layout = render_layout(screen)?;
+        self.draw_render_layout(&layout, metrics, cursor, theme, images, collect_metadata)
+    }
+
+    pub(crate) fn draw_render_layout(
+        &self,
+        layout: &RenderLayout,
+        metrics: &Metrics,
+        cursor: CursorRender,
+        theme: &crate::palette::TerminalTheme,
+        images: &[crate::protocol::InlineImagePlacement],
+        collect_metadata: bool,
+    ) -> Result<Option<FrameRenderMetadata>, String> {
+        let render_screen = &layout.screen;
+        #[cfg(feature = "fault-injection")]
+        if fault::take_next_draw_failure() {
+            return Err("frame draw failed by fault-injection".to_string());
         }
         // 기본 배경은 화면의 현재 기본 배경(OSC 11 포함)이다. 칸 밖 여백도 이 색으로 채운다.
         let (default_background, valid) = parse_hex_color(&Some(render_screen.background.clone()));
@@ -619,7 +673,8 @@ impl Frame {
                 glyphs.push(GlyphRenderBounds {
                     row: row as u32,
                     col: col as u32,
-                    width: u32::from(cell.width),
+                    width: u32::from(cell.width)
+                        .min(u32::from(render_screen.cols).saturating_sub(col as u32)),
                     font_run_count: rendered.font_run_count,
                     grapheme: grapheme.clone(),
                     foreground: rendered.foreground,
@@ -666,6 +721,7 @@ impl Frame {
             cols: u32::from(render_screen.cols),
             grid_origin_x: 0,
             grid_origin_y: 0,
+            grid_logical_row_origin: layout.logical_row_origin,
             font_family: family,
             font_size: f64::from(metrics.font_size),
             ascent: render_output.ascent,
@@ -741,32 +797,43 @@ fn selected_contains(range: Option<crate::protocol::JsonRange>, start: usize, en
 fn apply_preedit(
     screen: &mut crate::protocol::Screen,
     preedit: &crate::protocol::Preedit,
-) -> Result<(), String> {
+) -> Result<u32, String> {
     let length = utf16_length(&preedit.text);
     preedit.validate_marked_range()?;
     valid_json_range(preedit.selected_range, Some(length), "selectedRange")?;
     // replacementRange는 호스트 문서의 marked range인 [location,length]다.
     // 새 preedit 문자열의 범위가 아니므로 preedit UTF-16 길이로 제한하지 않는다.
     valid_json_range(preedit.replacement_range, None, "replacementRange")?;
-    let row = screen.cursor.row as usize;
-    while screen.lines.len() <= row {
-        screen.lines.push(Vec::new());
+    let cols = usize::from(screen.cols);
+    let rows = usize::from(screen.rows);
+    if cols == 0 || rows == 0 {
+        return Err("preedit cannot be rendered on an empty terminal grid".to_string());
     }
-    let display_col = screen.cursor.col as usize;
-    let line = &mut screen.lines[row];
-    let mut marked = Vec::new();
+    let engine_cursor = (
+        usize::from(screen.cursor.row),
+        usize::from(screen.cursor.col),
+    );
+    let mut logical_row = engine_cursor.0;
+    let mut logical_col = engine_cursor.1;
+    let mut placements = Vec::new();
+    let mut last_occupied = None;
     let mut utf16_col = 0;
-    let mut selected_col = None;
+    let mut selected_cursor = None;
     for grapheme in preedit.text.graphemes(true) {
         if grapheme.contains('\n') || grapheme.contains('\r') {
             return Err("preedit must be a single-line renderable grapheme sequence".to_string());
         }
         let utf16_end = utf16_col + grapheme.encode_utf16().count();
+        let width = UnicodeWidthStr::width(grapheme);
+        if width > 0 && logical_col > 0 && logical_col + width > cols {
+            logical_row += 1;
+            logical_col = 0;
+        }
         if preedit
             .selected_range
             .is_some_and(|range| range.location == utf16_col)
         {
-            selected_col = Some(display_col + marked.len());
+            selected_cursor = Some((logical_row, logical_col));
         }
         if preedit
             .selected_range
@@ -774,30 +841,44 @@ fn apply_preedit(
         {
             return Err("selectedRange location splits a preedit grapheme".to_string());
         }
-        let width = UnicodeWidthStr::width(grapheme);
         if width == 0 {
             utf16_col = utf16_end;
             continue;
         }
-        let width = u8::try_from(width)
+        let cell_width = u8::try_from(width)
             .map_err(|_| "preedit grapheme display width exceeds Cell width".to_string())?;
         let mut cell = crate::protocol::Cell {
             ch: Some(grapheme.to_string()),
-            width,
+            width: cell_width,
             underline: selected_contains(preedit.marked_range, utf16_col, utf16_end),
             ..Default::default()
         };
         if selected_contains(preedit.selected_range, utf16_col, utf16_end) {
             cell.bg = Some("#808080".to_string());
         }
-        marked.push(cell);
-        // 엔진이 확정된 넓은 글자에 두는 spacer 와 같이 폭 0 인 이어짐 셀을 둔다.
-        // 폭이 있는 셀은 배경을 그려 앞 글자의 오른쪽 절반을 덮는다.
-        for _ in 1..width {
-            marked.push(crate::protocol::Cell {
-                width: 0,
-                ..crate::protocol::Cell::default()
-            });
+        placements.push((logical_row, logical_col, cell));
+        for offset in 1..width {
+            if logical_col + offset < cols {
+                placements.push((
+                    logical_row,
+                    logical_col + offset,
+                    crate::protocol::Cell {
+                        width: 0,
+                        ..crate::protocol::Cell::default()
+                    },
+                ));
+            }
+        }
+        last_occupied = Some((logical_row, (logical_col + width - 1).min(cols - 1)));
+        if width > cols {
+            logical_row += 1;
+            logical_col = 0;
+        } else {
+            logical_col += width;
+            if logical_col == cols {
+                logical_row += 1;
+                logical_col = 0;
+            }
         }
         utf16_col = utf16_end;
     }
@@ -805,22 +886,91 @@ fn apply_preedit(
         .selected_range
         .is_some_and(|range| range.location == utf16_col)
     {
-        selected_col = Some(display_col + marked.len());
+        selected_cursor = Some((logical_row, logical_col));
     }
-    if display_col + marked.len() > screen.cols as usize {
-        return Err("preedit extends beyond terminal columns".to_string());
+    let logical_caret = selected_cursor.unwrap_or(engine_cursor);
+    let end_boundary = preedit
+        .selected_range
+        .is_some_and(|range| range.location == utf16_col);
+    let wrap_pending = end_boundary
+        && selected_cursor.is_some()
+        && logical_caret.1 == 0
+        && last_occupied.is_some_and(|(row, _)| row + 1 == logical_caret.0);
+    let (caret_row, caret_col) = if wrap_pending {
+        last_occupied.expect("wrap-pending caret has an occupied grapheme")
+    } else {
+        logical_caret
+    };
+    let logical_row_origin = selected_cursor
+        .map(|_| caret_row.saturating_sub(rows.saturating_sub(1)))
+        .unwrap_or(0);
+    let max_logical_row = placements
+        .iter()
+        .map(|(row, _, _)| *row)
+        .chain(std::iter::once(caret_row))
+        .max()
+        .unwrap_or(engine_cursor.0);
+    let mut logical_lines = screen.lines.clone();
+    if logical_lines.len() < max_logical_row + 1 {
+        logical_lines.resize_with(max_logical_row + 1, || Vec::new());
     }
-    while line.len() < display_col + marked.len() {
-        line.push(crate::protocol::Cell::default());
+    for (row, line) in logical_lines.iter_mut().enumerate() {
+        if line.len() > cols {
+            return Err(format!(
+                "screen row {row} contains {} cells beyond terminal columns {cols}",
+                line.len()
+            ));
+        }
+        line.resize(cols, crate::protocol::Cell::default());
     }
-    let tail = line.split_off(display_col + marked.len());
-    line.truncate(display_col);
-    line.extend(marked);
-    line.extend(tail);
-    if let Some(col) = selected_col {
-        screen.cursor.col = col.min(screen.cols.saturating_sub(1) as usize) as u16;
+
+    // Clear any committed wide-cell span touched by the overlay before writing preedit cells.
+    let base_lines = logical_lines.clone();
+    let mut clear_spans = Vec::new();
+    for (row, col, _) in &placements {
+        let line = &base_lines[*row];
+        let cell = &line[*col];
+        let span = if cell.width == 0 {
+            (0..*col).rev().find_map(|start| {
+                let width = usize::from(line[start].width);
+                (width > 1 && start + width > *col).then_some((start, start + width))
+            })
+        } else if cell.width > 1 {
+            Some((*col, *col + usize::from(cell.width)))
+        } else {
+            None
+        };
+        if let Some((start, end)) = span
+            && !clear_spans.contains(&(*row, start, end))
+        {
+            clear_spans.push((*row, start, end));
+        }
     }
-    Ok(())
+    for (row, start, end) in clear_spans {
+        for cell in logical_lines[row].iter_mut().take(end).skip(start) {
+            *cell = crate::protocol::Cell::default();
+        }
+    }
+    for (row, col, cell) in placements {
+        logical_lines[row][col] = cell;
+    }
+
+    let mut visible_lines = Vec::with_capacity(rows);
+    for row in logical_row_origin..logical_row_origin + rows {
+        visible_lines.push(
+            logical_lines
+                .get(row)
+                .cloned()
+                .unwrap_or_else(|| vec![crate::protocol::Cell::default(); cols]),
+        );
+    }
+    screen.lines = visible_lines;
+    screen.cursor.row = u16::try_from(caret_row - logical_row_origin)
+        .map_err(|_| "preedit caret row exceeds terminal grid".to_string())?;
+    screen.cursor.col = u16::try_from(caret_col)
+        .map_err(|_| "preedit caret column exceeds terminal grid".to_string())?;
+    Ok(u32::try_from(logical_row_origin)
+        .map_err(|_| "preedit viewport row origin exceeds render metadata".to_string())?)
 }
 
 impl Drop for Frame {

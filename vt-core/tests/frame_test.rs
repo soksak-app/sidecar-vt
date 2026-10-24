@@ -320,7 +320,7 @@ fn preedit_metadata_reports_effective_overlay_and_inverse_colors() {
     assert_eq!(inverse["background"], "#ff0000");
 
     let message =
-        soksak_sidecar_vt_core::protocol::screen_message("boot", 1, identity, render, &state)
+        soksak_sidecar_vt_core::protocol::screen_message("boot", 1, identity, render, &state, true)
             .expect("screen message");
     assert_eq!(message["cells"][0]["grapheme"], "!");
     assert_eq!(message["cells"][0]["fg"], "#ff0000");
@@ -718,6 +718,470 @@ fn preedit_marked_range_requires_a_valid_utf16_grapheme_range() {
             .expect_err("invalid markedRange");
         assert!(error.contains(expected), "{error}");
     }
+}
+
+#[test]
+fn a_wide_preedit_grapheme_wraps_before_the_last_column() {
+    let metrics = metrics(13.0, 1.0);
+    let cell = metrics.cell_width as u32;
+    let mut state = screen(6, 2);
+    state.cursor.col = 5;
+    state.cursor.focused = true;
+    state.cursor.preedit = Some(Preedit {
+        text: "한".to_string(),
+        marked_range: Some(JsonRange {
+            location: 0,
+            length: 1,
+        }),
+        selected_range: Some(JsonRange {
+            location: 1,
+            length: 0,
+        }),
+        replacement_range: None,
+        attributed: false,
+    });
+    let frame = Frame::new(cell * 6, metrics.cell_height as u32 * 2).expect("frame");
+
+    frame
+        .draw(&state, &metrics)
+        .expect("valid preedit at the last column");
+    assert!(
+        bright_region(
+            &frame,
+            0,
+            cell * 2,
+            metrics.cell_height as u32,
+            metrics.cell_height as u32 * 2,
+        ) > 0,
+        "wrapped grapheme was not drawn on the next row"
+    );
+    assert_eq!((state.cursor.row, state.cursor.col), (0, 5));
+}
+
+#[test]
+fn wrapped_preedit_replaces_only_overlay_cells_and_clear_restores_the_base_frame() {
+    let metrics = metrics(13.0, 1.0);
+    let cell = metrics.cell_width as u32;
+    let row_height = metrics.cell_height as u32;
+    let mut base = screen(4, 3);
+    base.cursor.col = 3;
+    base.cursor.visible = false;
+    base.lines[1][0].ch = Some("P".to_string());
+    base.lines[1][3].ch = Some("Z".to_string());
+    let hidden = CursorRender {
+        visible: false,
+        ..CursorRender::default()
+    };
+    let base_frame = Frame::new(cell * 4, row_height * 3).expect("base frame");
+    base_frame
+        .draw_with_cursor(&base, &metrics, hidden)
+        .expect("base screen");
+
+    let mut overlay = base.clone();
+    overlay.cursor.preedit = Some(Preedit {
+        text: "AB".to_string(),
+        marked_range: Some(JsonRange {
+            location: 0,
+            length: 2,
+        }),
+        selected_range: Some(JsonRange {
+            location: 2,
+            length: 0,
+        }),
+        replacement_range: None,
+        attributed: false,
+    });
+    let overlay_frame = Frame::new(cell * 4, row_height * 3).expect("overlay frame");
+    overlay_frame
+        .draw_with_cursor(&overlay, &metrics, hidden)
+        .expect("wrapped overlay");
+    assert!(bright_region(&overlay_frame, cell * 3, cell * 4, 0, row_height) > 0);
+    assert!(bright_region(&overlay_frame, 0, cell, row_height, row_height * 2) > 0);
+    assert!(
+        bright_region(
+            &overlay_frame,
+            cell * 3,
+            cell * 4,
+            row_height,
+            row_height * 2,
+        ) > 0,
+        "the uncovered committed cell was not preserved"
+    );
+    assert_eq!(
+        overlay.lines, base.lines,
+        "rendering changed committed cells"
+    );
+
+    overlay.cursor.preedit = None;
+    let cleared_frame = Frame::new(cell * 4, row_height * 3).expect("cleared frame");
+    cleared_frame
+        .draw_with_cursor(&overlay, &metrics, hidden)
+        .expect("cleared screen");
+    assert_eq!(
+        pixels(&cleared_frame, cell * 4, row_height * 3),
+        pixels(&base_frame, cell * 4, row_height * 3)
+    );
+}
+
+#[test]
+fn overlay_intersection_clears_the_whole_committed_wide_cell_span() {
+    let metrics = metrics(13.0, 1.0);
+    let cell = metrics.cell_width as u32;
+    let height = metrics.cell_height as u32;
+    let mut state = screen(4, 1);
+    state.cursor.col = 2;
+    state.cursor.visible = false;
+    state.lines[0][1] = Cell {
+        ch: Some("漢".to_string()),
+        width: 2,
+        ..Default::default()
+    };
+    state.lines[0][2] = Cell {
+        width: 0,
+        ..Default::default()
+    };
+    state.cursor.preedit = Some(Preedit {
+        text: "A".to_string(),
+        marked_range: None,
+        selected_range: None,
+        replacement_range: None,
+        attributed: false,
+    });
+    let frame = Frame::new(cell * 4, height).expect("frame");
+    frame
+        .draw_with_cursor(
+            &state,
+            &metrics,
+            CursorRender {
+                visible: false,
+                ..CursorRender::default()
+            },
+        )
+        .expect("overlay over a continuation cell");
+    assert_eq!(bright_in_cell(&frame, cell, height, 0), 0.0);
+    assert!(bright_in_cell(&frame, cell, height, 2) > 0.0);
+    assert_eq!(state.lines[0][1].ch.as_deref(), Some("漢"));
+    assert_eq!(state.lines[0][2].width, 0);
+}
+
+#[test]
+fn a_wide_preedit_grapheme_clips_on_a_one_column_raster() {
+    let metrics = metrics(13.0, 1.0);
+    let cell = metrics.cell_width as u32;
+    let height = metrics.cell_height as u32;
+    let mut state = screen(1, 1);
+    state.cursor.preedit = Some(Preedit {
+        text: "한".to_string(),
+        marked_range: Some(JsonRange {
+            location: 0,
+            length: 1,
+        }),
+        selected_range: Some(JsonRange {
+            location: 0,
+            length: 0,
+        }),
+        replacement_range: None,
+        attributed: false,
+    });
+    let frame = Frame::new(cell, height).expect("one-cell frame");
+    frame.draw(&state, &metrics).expect("clipped wide grapheme");
+    assert!(bright_region(&frame, 0, cell, 0, height) > 0);
+}
+
+#[test]
+fn a_full_single_row_preedit_keeps_its_glyphs_visible_at_the_end_boundary() {
+    let metrics = metrics(13.0, 1.0);
+    let cell = metrics.cell_width as u32;
+    let height = metrics.cell_height as u32;
+    let mut state = screen(4, 1);
+    state.cursor.focused = true;
+    state.cursor.preedit = Some(Preedit {
+        text: "ABCD".to_string(),
+        marked_range: Some(JsonRange {
+            location: 0,
+            length: 4,
+        }),
+        selected_range: Some(JsonRange {
+            location: 4,
+            length: 0,
+        }),
+        replacement_range: None,
+        attributed: false,
+    });
+    let original_cursor = (state.cursor.row, state.cursor.col);
+    let original_preedit = state.cursor.preedit.clone();
+    let frame = Frame::new(cell * 4, height).expect("one-row frame");
+
+    frame
+        .draw_with_cursor(
+            &state,
+            &metrics,
+            CursorRender {
+                visible: true,
+                focused: true,
+                blink_visible: true,
+                shape: CursorShape::Block,
+                unfocused: UnfocusedCursor::Unchanged,
+            },
+        )
+        .expect("full-row preedit with end caret");
+
+    assert!(bright_region(&frame, 0, cell * 4, 0, height) > 0);
+    assert!(
+        bright_in_cell(&frame, cell, height, 3) > 0.5,
+        "wrap-pending caret was not painted on the last occupied cell"
+    );
+    assert_eq!((state.cursor.row, state.cursor.col), original_cursor);
+    assert_eq!(state.cursor.preedit, original_preedit);
+}
+
+#[test]
+fn a_clipped_wide_grapheme_keeps_its_glyph_visible_at_a_one_cell_end_boundary() {
+    let metrics = metrics(13.0, 1.0);
+    let cell = metrics.cell_width as u32;
+    let height = metrics.cell_height as u32;
+    let mut state = screen(1, 1);
+    state.cursor.focused = true;
+    state.cursor.preedit = Some(Preedit {
+        text: "한".to_string(),
+        marked_range: Some(JsonRange {
+            location: 0,
+            length: 1,
+        }),
+        selected_range: Some(JsonRange {
+            location: 1,
+            length: 0,
+        }),
+        replacement_range: None,
+        attributed: false,
+    });
+    let original_cursor = (state.cursor.row, state.cursor.col);
+    let original_preedit = state.cursor.preedit.clone();
+    let frame = Frame::new(cell, height).expect("one-cell frame");
+
+    frame
+        .draw_with_cursor(
+            &state,
+            &metrics,
+            CursorRender {
+                visible: false,
+                unfocused: UnfocusedCursor::Unchanged,
+                ..CursorRender::default()
+            },
+        )
+        .expect("clipped wide preedit with end caret");
+
+    assert!(bright_region(&frame, 0, cell, 0, height) > 0);
+    assert_eq!((state.cursor.row, state.cursor.col), original_cursor);
+    assert_eq!(state.cursor.preedit, original_preedit);
+}
+
+#[test]
+fn a_combining_grapheme_stays_with_its_base_before_a_wide_grapheme_wraps() {
+    let metrics = metrics(13.0, 1.0);
+    let cell = metrics.cell_width as u32;
+    let row_height = metrics.cell_height as u32;
+    let mut state = screen(4, 2);
+    state.cursor.col = 3;
+    state.cursor.visible = false;
+    state.cursor.preedit = Some(Preedit {
+        text: "e\u{301}한".to_string(),
+        marked_range: Some(JsonRange {
+            location: 2,
+            length: 1,
+        }),
+        selected_range: Some(JsonRange {
+            location: 2,
+            length: 0,
+        }),
+        replacement_range: None,
+        attributed: false,
+    });
+    let frame = Frame::new(cell * 4, row_height * 2).expect("frame");
+    frame
+        .draw(&state, &metrics)
+        .expect("combined grapheme wrap");
+    assert!(bright_region(&frame, cell * 3, cell * 4, 0, row_height) > 0);
+    assert!(bright_region(&frame, 0, cell * 2, row_height, row_height * 2) > 0);
+    assert_eq!(state.cursor.col, 3);
+}
+
+#[test]
+fn cropped_preedit_keeps_full_state_and_clear_restores_committed_rows() {
+    let metrics = metrics(13.0, 1.0);
+    let cell = metrics.cell_width as u32;
+    let row_height = metrics.cell_height as u32;
+    let mut base = screen(4, 2);
+    base.cursor.row = 0;
+    base.cursor.col = 3;
+    base.cursor.visible = false;
+    base.lines[0][0].ch = Some("X".to_string());
+    base.lines[1][3].ch = Some("Z".to_string());
+    let hidden = CursorRender {
+        visible: false,
+        ..CursorRender::default()
+    };
+    let base_frame = Frame::new(cell * 4, row_height * 2).expect("base frame");
+    base_frame
+        .draw_with_cursor(&base, &metrics, hidden)
+        .expect("base screen");
+
+    let mut visible = base.clone();
+    visible.cursor.preedit = Some(Preedit {
+        text: "ABCDEFGH".to_string(),
+        marked_range: Some(JsonRange {
+            location: 0,
+            length: 8,
+        }),
+        selected_range: Some(JsonRange {
+            location: 8,
+            length: 0,
+        }),
+        replacement_range: None,
+        attributed: false,
+    });
+    let cropped_frame = Frame::new(cell * 4, row_height * 2).expect("cropped frame");
+    cropped_frame
+        .draw_with_cursor(&visible, &metrics, hidden)
+        .expect("cropped preedit");
+    assert!(bright_region(&cropped_frame, 0, cell * 3, 0, row_height) > 0);
+    assert_eq!((visible.cursor.row, visible.cursor.col), (0, 3));
+    assert_eq!(visible.lines, base.lines);
+    assert_eq!(visible.cursor.preedit.as_ref().unwrap().text, "ABCDEFGH");
+
+    visible.cursor.preedit = None;
+    let restored_frame = Frame::new(cell * 4, row_height * 2).expect("restored frame");
+    restored_frame
+        .draw_with_cursor(&visible, &metrics, hidden)
+        .expect("restored base");
+    assert_eq!(
+        pixels(&restored_frame, cell * 4, row_height * 2),
+        pixels(&base_frame, cell * 4, row_height * 2)
+    );
+}
+
+#[cfg(feature = "diagnostics")]
+#[test]
+fn cropped_preedit_metadata_reports_the_visible_rows_and_in_grid_glyph_span() {
+    let metrics = metrics(13.0, 1.0);
+    let cell = metrics.cell_width as u32;
+    let row_height = metrics.cell_height as u32;
+    let mut state = screen(4, 2);
+    state.cursor.row = 0;
+    state.cursor.col = 3;
+    state.cursor.focused = true;
+    state.cursor.preedit = Some(Preedit {
+        text: "ABCDEFGH".to_string(),
+        marked_range: Some(JsonRange {
+            location: 0,
+            length: 8,
+        }),
+        selected_range: Some(JsonRange {
+            location: 8,
+            length: 0,
+        }),
+        replacement_range: None,
+        attributed: false,
+    });
+    let frame = Frame::new(cell * 4, row_height * 2).expect("frame");
+    let metadata = frame
+        .draw_with_render_metadata(
+            &state,
+            &metrics,
+            CursorRender {
+                visible: true,
+                focused: true,
+                blink_visible: true,
+                shape: CursorShape::Block,
+                unfocused: UnfocusedCursor::Unchanged,
+            },
+            &TerminalTheme::dark(),
+            &[],
+            true,
+        )
+        .expect("cropped preedit draw")
+        .expect("diagnostic metadata");
+    let retained = state
+        .cursor
+        .preedit
+        .as_ref()
+        .expect("preedit remains in input state");
+    assert_eq!(retained.text, "ABCDEFGH");
+    assert_eq!(
+        retained.marked_range,
+        Some(JsonRange {
+            location: 0,
+            length: 8
+        })
+    );
+    assert_eq!(
+        retained.selected_range,
+        Some(JsonRange {
+            location: 8,
+            length: 0
+        })
+    );
+    let value = metadata.value(serde_json::json!({ "generation": 1, "raster": 1, "sequence": 1 }));
+    assert_eq!(value["grid"]["logicalRowOrigin"], 1);
+    let glyphs = value["glyphs"].as_array().unwrap();
+    assert!(!glyphs.iter().any(|glyph| glyph["grapheme"] == "A"));
+    assert!(
+        glyphs
+            .iter()
+            .any(|glyph| { glyph["grapheme"] == "B" && glyph["row"] == 0 && glyph["col"] == 0 })
+    );
+    assert!(
+        glyphs
+            .iter()
+            .any(|glyph| { glyph["grapheme"] == "B" && glyph["underline"]["rect"].is_object() })
+    );
+    let cursor = &value["cursor"]["rect"];
+    assert_eq!(cursor["y"].as_f64(), Some(row_height as f64));
+    assert_eq!(cursor["x"].as_f64(), Some((cell * 3) as f64));
+
+    let mut narrow = screen(1, 1);
+    narrow.cursor.focused = true;
+    narrow.cursor.preedit = Some(Preedit {
+        text: "한".to_string(),
+        marked_range: Some(JsonRange {
+            location: 0,
+            length: 1,
+        }),
+        selected_range: Some(JsonRange {
+            location: 0,
+            length: 0,
+        }),
+        replacement_range: None,
+        attributed: false,
+    });
+    let narrow_frame = Frame::new(cell, row_height).expect("narrow frame");
+    let narrow_metadata = narrow_frame
+        .draw_with_render_metadata(
+            &narrow,
+            &metrics,
+            CursorRender {
+                visible: true,
+                focused: true,
+                blink_visible: true,
+                shape: CursorShape::Block,
+                unfocused: UnfocusedCursor::Unchanged,
+            },
+            &TerminalTheme::dark(),
+            &[],
+            true,
+        )
+        .expect("one-column clipped draw")
+        .expect("one-column metadata");
+    let narrow_value =
+        narrow_metadata.value(serde_json::json!({ "generation": 1, "raster": 1, "sequence": 2 }));
+    let wide_glyph = narrow_value["glyphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|glyph| glyph["grapheme"] == "한")
+        .expect("clipped glyph metadata");
+    assert_eq!(wide_glyph["width"], 1);
+    assert_eq!(narrow_value["grid"]["logicalRowOrigin"], 0);
 }
 
 #[test]

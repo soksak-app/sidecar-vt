@@ -4,6 +4,8 @@ mod events_test;
 mod tracked_session_port;
 
 use async_trait::async_trait;
+#[cfg(feature = "fault-injection")]
+use soksak_sidecar_vt_core::platform::darwin::frame::fault;
 use soksak_sidecar_vt_core::platform::darwin::frame::{Frame, metrics};
 /// fake daemon을 사용하는 serve contract 통합 테스트
 use soksak_sidecar_vt_core::protocol::{
@@ -6525,13 +6527,17 @@ async fn a_screen_read_names_the_next_frame_while_a_change_waits_for_the_answer(
         serde_json::json!({"generation": 1, "raster": 1, "sequence": 2}),
         "{read}"
     );
+    assert!(
+        read["body"]["cursor"]["caret"].is_null(),
+        "an unsent future frame must not publish a native caret: {read}"
+    );
     drop(to_serve);
     task.await.unwrap().unwrap();
 }
 
-/// A composition wider than the rest of the row makes the frame refuse to draw, so the screen is in no frame. The screen
-/// names the next frame, and the next change draws it.
-#[tokio::test]
+/// A controlled draw failure leaves the changed screen out of any frame. The screen names the next frame, and a later change draws it.
+#[cfg(feature = "fault-injection")]
+#[tokio::test(flavor = "current_thread")]
 async fn a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it() {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let port = Arc::new(FakeSessionPort::new("raster".into(), calls.clone()));
@@ -6556,13 +6562,13 @@ async fn a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it() {
     to_serve.write_all(br#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
 "#).await.unwrap();
 
-    // 1000 wide graphemes need 2000 cells, more than an 800 px raster holds in one row. The draw of the frame fails.
-    let wide = "하".repeat(1000);
+    // The accepted composition is valid; the test seam fails only the next raster draw.
+    fault::fail_next_draw();
     let compose = serde_json::json!({
         "surface": "s1",
         "body": {"operation": "input", "compose": {
-            "text": wide,
-            "markedRange": null,
+            "text": "a",
+            "markedRange": {"location": 0, "length": 1},
             "selectedRange": {"location": 1, "length": 0},
             "replacementRange": null,
             "attributed": true
@@ -6574,7 +6580,7 @@ async fn a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it() {
         .unwrap();
     let failure = next_line_except_screen(&mut lines).await;
     assert!(
-        failure.contains("preedit extends beyond terminal columns"),
+        failure.contains("frame draw failed by fault-injection"),
         "{failure}"
     );
 
@@ -6592,11 +6598,11 @@ async fn a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it() {
         "{read}"
     );
 
-    // The cause is gone: a short composition is a change, and the change draws the frame that the screen named.
+    // The one-shot draw fault is consumed; a different valid composition draws the frame the screen named.
     let short = serde_json::json!({
         "surface": "s1",
         "body": {"operation": "input", "compose": {
-            "text": "a",
+            "text": "b",
             "markedRange": {"location": 0, "length": 1},
             "selectedRange": {"location": 1, "length": 0},
             "replacementRange": null,

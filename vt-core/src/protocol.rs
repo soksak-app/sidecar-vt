@@ -1426,14 +1426,48 @@ pub fn screen_message(
     frame: Value,
     render: Value,
     screen: &Screen,
+    frame_accepted: bool,
+) -> Result<Value, String> {
+    let layout = crate::platform::darwin::frame::render_layout(screen)?;
+    screen_message_with_layout(
+        segment,
+        sequence,
+        frame,
+        render,
+        screen,
+        &layout,
+        frame_accepted,
+    )
+}
+
+fn screen_message_with_layout(
+    segment: &str,
+    sequence: u64,
+    frame: Value,
+    render: Value,
+    screen: &Screen,
+    layout: &crate::platform::darwin::frame::RenderLayout,
+    frame_accepted: bool,
 ) -> Result<Value, String> {
     if sequence == 0 {
         return Err("screen message: sequence must be an integer from 1".to_string());
+    }
+    if frame_accepted && frame.is_null() {
+        return Err("screen message: accepted frame identity is required".to_string());
     }
     if !render.is_null() && (frame.is_null() || render["frame"] != frame) {
         return Err("screen message: render.frame must match frame".to_string());
     }
     let cells = crate::screen_hash::message_cells(screen)?;
+    let mut cursor = json!(screen.cursor);
+    cursor["caret"] = if frame_accepted {
+        json!({
+            "row": layout.screen.cursor.row,
+            "col": layout.screen.cursor.col,
+        })
+    } else {
+        Value::Null
+    };
     Ok(json!({
         "event": "screen",
         "sequence": sequence,
@@ -1442,7 +1476,7 @@ pub fn screen_message(
         "render": render,
         "rows": screen.rows,
         "cols": screen.cols,
-        "cursor": screen.cursor,
+        "cursor": cursor,
         "cells": cells,
         "scrollback": screen.scrollback,
         "background": screen.background,
@@ -1456,6 +1490,7 @@ fn screen_event(
     sequence: u64,
     image: Option<&ImageState>,
     screen: &Screen,
+    layout: &crate::platform::darwin::frame::RenderLayout,
 ) -> Result<Value, String> {
     let frame = shown_frame(image);
     let render = image
@@ -1463,9 +1498,11 @@ fn screen_event(
         .filter(|metadata| metadata["frame"] == frame)
         .cloned()
         .unwrap_or(Value::Null);
-    Ok(
-        json!({"surface": surface_id, "body": screen_message(log.boot(), sequence, frame, render, screen)?}),
-    )
+    let frame_accepted = image.is_some_and(|state| !state.dirty && state.sequence > 0);
+    Ok(json!({
+        "surface": surface_id,
+        "body": screen_message_with_layout(log.boot(), sequence, frame, render, screen, layout, frame_accepted)?
+    }))
 }
 
 fn collect_render_metadata(trace_dir: Option<&std::path::Path>) -> bool {
@@ -1540,7 +1577,14 @@ async fn send_plain_screen(
     sequence: u64,
     image: Option<&ImageState>,
 ) -> bool {
-    let line = match screen_event(surface_id, log, sequence, image, screen) {
+    let layout = match crate::platform::darwin::frame::render_layout(screen) {
+        Ok(layout) => layout,
+        Err(error) => {
+            log.record_error("screen", error);
+            return true;
+        }
+    };
+    let line = match screen_event(surface_id, log, sequence, image, screen, &layout) {
         Ok(line) => line,
         Err(error) => {
             log.record_error("screen", error);
@@ -1630,15 +1674,21 @@ async fn present_screen(
     }
     let draw_started = std::time::Instant::now();
     let collect_render = collect_render_metadata(log.trace_dir());
-    let render = match state.frame.draw_with_render_metadata(
-        screen,
-        &state.metrics,
-        crate::platform::darwin::frame::CursorRender::from_protocol(&screen.cursor),
-        &state.theme,
-        &state.inline_images,
-        collect_render,
-    ) {
-        Ok(render) => render,
+    let draw = crate::platform::darwin::frame::render_layout(screen).and_then(|layout| {
+        state
+            .frame
+            .draw_render_layout(
+                &layout,
+                &state.metrics,
+                crate::platform::darwin::frame::CursorRender::from_protocol(&screen.cursor),
+                &state.theme,
+                &state.inline_images,
+                collect_render,
+            )
+            .map(|render| (layout, render))
+    });
+    let (layout, render) = match draw {
+        Ok(result) => result,
         Err(reason) => {
             // The failed screen is in no frame. It stays dirty, so the `screen` event names the next frame, and the next
             // change draws that frame. Clearing it would name the last sent frame, which shows an earlier screen.
@@ -1712,7 +1762,14 @@ async fn present_screen(
         Ok(carrier) => state.carrier = carrier,
         Err(()) => return false,
     }
-    match screen_event(surface_id, log, input_sequence, Some(&*state), screen) {
+    match screen_event(
+        surface_id,
+        log,
+        input_sequence,
+        Some(&*state),
+        screen,
+        &layout,
+    ) {
         Ok(line) => {
             if output_tx.send(line.to_string()).await.is_err() {
                 return false;

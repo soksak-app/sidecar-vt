@@ -34,6 +34,7 @@ test: build node_modules
 	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test --workspace
 	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -p soksak-sidecar-vt-core --features diagnostics --test engine_trace_test
 	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -p soksak-sidecar-vt-core --features fault-injection --test fault_injection
+	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -p soksak-sidecar-vt-core --features fault-injection --test serve_contract -- a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it --exact
 	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo clippy --workspace --all-targets --features diagnostics -- -D warnings
 	$(SOKSAK_EVENTS) --census census.json --catalog vt-alacritty/events.json .
 	node --test tests/
@@ -57,14 +58,14 @@ push-check: test
 	pnpm exec soksak-commits "$(or $(RANGE),origin/main..HEAD)"
 
 # Repeats the tests of PACKAGE, or only the test TEST, COUNT times and reports each run with its elapsed time; the
-# first failing run prints its output and fails. Intermittent failures are reproduced and accepted with this target.
+# first failing run prints its output and fails. FEATURES selects the package features used by each run.
 repeat:
-	@case "$(PACKAGE)" in '') echo "make repeat PACKAGE=<package> COUNT=<n> [TEST=<name>]" >&2; exit 2;; esac
+	@case "$(PACKAGE)" in '') echo "make repeat PACKAGE=<package> COUNT=<n> [TEST=<name>] [FEATURES=<features>]" >&2; exit 2;; esac
 	@case "$(COUNT)" in ''|*[!0-9]*|0) echo "make repeat requires COUNT=<n> with n >= 1" >&2; exit 2;; esac
-	@$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -q -p $(PACKAGE) --no-run
+	@$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -q -p $(PACKAGE) $(CARGO_FEATURE_ARGS) --no-run
 	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT; run=1; while [ $$run -le $(COUNT) ]; do \
 	  started=$$(date +%s); \
-	  if ! $(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -q -p $(PACKAGE) $(if $(TEST),-- --exact $(TEST)) > "$$output" 2>&1; then \
+	  if ! $(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -q -p $(PACKAGE) $(CARGO_FEATURE_ARGS) $(if $(TEST),-- --exact $(TEST)) > "$$output" 2>&1; then \
 	    cat "$$output"; echo "FAIL run $$run of $(COUNT) after $$(( $$(date +%s) - started )) s"; exit 1; fi; \
 	  echo "PASS run $$run of $(COUNT) in $$(( $$(date +%s) - started )) s"; run=$$((run + 1)); done
 
