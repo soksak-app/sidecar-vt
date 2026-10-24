@@ -55,6 +55,9 @@ typedef struct {
     uint32_t row;
     uint32_t col;
     uint32_t width;
+    uint32_t font_run_count;
+    uint8_t foreground[3];
+    uint8_t background[3];
     uint8_t has_ink;
     uint8_t has_underline;
     double ink_x;
@@ -79,6 +82,7 @@ typedef struct {
     double underline_thickness;
     uint8_t cursor_visible;
     uint8_t cursor_blend_difference;
+    uint8_t cursor_color[3];
     double cursor_x;
     double cursor_y;
     double cursor_width;

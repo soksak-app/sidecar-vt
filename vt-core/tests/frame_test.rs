@@ -6,6 +6,8 @@ use soksak_sidecar_vt_core::platform::darwin::frame::{
 use soksak_sidecar_vt_core::protocol::{
     Cell, Cursor, CursorShape, InlineImagePlacement, JsonRange, Preedit, Screen,
 };
+#[cfg(feature = "diagnostics")]
+use unicode_segmentation::UnicodeSegmentation;
 
 fn screen(cols: u16, rows: u16) -> Screen {
     Screen {
@@ -220,6 +222,212 @@ fn opt_in_render_metadata_describes_the_drawn_glyph_underline_and_cursor() {
     assert!(
         contains_ink,
         "the reported ink bounds contain no drawn pixel: {bounds}"
+    );
+}
+
+#[cfg(feature = "diagnostics")]
+#[test]
+fn preedit_metadata_reports_effective_overlay_and_inverse_colors() {
+    let metrics = metrics(13.0, 1.0);
+    let frame =
+        Frame::new(metrics.cell_width as u32 * 3, metrics.cell_height as u32).expect("frame");
+    let mut state = screen(3, 1);
+    state.lines[0][0] = Cell {
+        ch: Some("!".to_string()),
+        fg: Some("#ff0000".to_string()),
+        bg: Some("#0000ff".to_string()),
+        inverse: true,
+        ..Default::default()
+    };
+    state.lines[0][2] = Cell {
+        ch: Some("Z".to_string()),
+        fg: Some("#ff0000".to_string()),
+        bg: Some("#0000ff".to_string()),
+        inverse: true,
+        ..Default::default()
+    };
+    state.cursor.preedit = Some(Preedit {
+        text: "한".to_string(),
+        marked_range: Some(JsonRange {
+            location: 0,
+            length: 1,
+        }),
+        selected_range: Some(JsonRange {
+            location: 0,
+            length: 1,
+        }),
+        replacement_range: None,
+        attributed: false,
+    });
+    let metadata = frame
+        .draw_with_render_metadata(
+            &state,
+            &metrics,
+            CursorRender {
+                visible: true,
+                focused: true,
+                blink_visible: true,
+                shape: CursorShape::Beam,
+                unfocused: UnfocusedCursor::Unchanged,
+            },
+            &TerminalTheme::dark(),
+            &[],
+            true,
+        )
+        .expect("draw frame")
+        .expect("diagnostic metadata");
+    let identity = serde_json::json!({ "generation": 1, "raster": 1, "sequence": 1 });
+    let render = metadata.value(identity.clone());
+    let overlay = render["glyphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|glyph| glyph["row"] == 0 && glyph["col"] == 0)
+        .expect("preedit glyph");
+    assert_eq!(overlay["grapheme"], "한");
+    assert_eq!(overlay["foreground"], "#d0d0d0");
+    assert_eq!(overlay["background"], "#808080");
+    assert_eq!(render["underline"]["colorSource"], "glyph.foreground");
+    assert_eq!(render["cursor"]["blend"], "normal");
+    assert_eq!(render["cursor"]["color"], "#d0d0d0");
+    let difference_cursor = frame
+        .draw_with_render_metadata(
+            &state,
+            &metrics,
+            CursorRender {
+                visible: true,
+                focused: true,
+                blink_visible: true,
+                shape: CursorShape::Block,
+                unfocused: UnfocusedCursor::Unchanged,
+            },
+            &TerminalTheme::dark(),
+            &[],
+            true,
+        )
+        .expect("draw difference cursor")
+        .expect("diagnostic metadata")
+        .value(identity.clone());
+    assert_eq!(difference_cursor["cursor"]["blend"], "difference");
+    assert!(difference_cursor["cursor"]["color"].is_null());
+    let inverse = render["glyphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|glyph| glyph["row"] == 0 && glyph["col"] == 2)
+        .expect("inverse glyph");
+    assert_eq!(inverse["foreground"], "#0000ff");
+    assert_eq!(inverse["background"], "#ff0000");
+
+    let message =
+        soksak_sidecar_vt_core::protocol::screen_message("boot", 1, identity, render, &state)
+            .expect("screen message");
+    assert_eq!(message["cells"][0]["grapheme"], "!");
+    assert_eq!(message["cells"][0]["fg"], "#ff0000");
+    assert_eq!(message["cells"][0]["bg"], "#0000ff");
+    assert_eq!(
+        message["cells"][0]["attributes"].as_u64().unwrap() & 0x20,
+        0x20
+    );
+    assert_eq!(state.lines[0][0].ch.as_deref(), Some("!"));
+}
+
+#[cfg(feature = "diagnostics")]
+#[test]
+fn fallback_multirun_metadata_bounds_match_the_pixels_in_the_drawn_frame() {
+    use soksak_sidecar_vt_core::platform::darwin::frame::{metrics_for, resolve_font_list};
+    let font = resolve_font_list("Menlo").expect("Menlo").font;
+    let metrics = metrics_for(&font, 13.0, 1.0).expect("Menlo metrics");
+    let width = metrics.cell_width as u32 + 5;
+    let height = metrics.cell_height as u32 + 7;
+    let graphemes = [
+        "a\u{301}",
+        "a\u{20dd}",
+        "a\u{20e3}",
+        "A\u{0654}",
+        "A\u{093c}",
+        "漢\u{301}",
+        "\u{2764}\u{fe0f}",
+        "\u{2600}\u{fe0f}",
+        "\u{1f469}\u{200d}\u{1f4bb}",
+        "\u{1f9d1}\u{200d}\u{1f680}",
+        "\u{0915}\u{093c}",
+    ];
+    let mut measured_multirun = None;
+    for grapheme in graphemes {
+        assert_eq!(grapheme.graphemes(true).count(), 1, "{grapheme:?}");
+        let frame = Frame::new(width, height).expect("frame");
+        let mut state = screen(1, 1);
+        state.lines[0][0].ch = Some(grapheme.to_string());
+        state.lines[0][0].fg = Some("#ff0000".to_string());
+        let metadata = frame
+            .draw_with_render_metadata(
+                &state,
+                &metrics,
+                CursorRender {
+                    visible: false,
+                    ..CursorRender::default()
+                },
+                &TerminalTheme::dark(),
+                &[],
+                true,
+            )
+            .expect("draw fallback line")
+            .expect("diagnostic metadata");
+        let value = metadata.value(serde_json::json!({
+            "generation": 9,
+            "raster": 4,
+            "sequence": 2
+        }));
+        let glyph = value["glyphs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|glyph| glyph["row"] == 0 && glyph["col"] == 0)
+            .expect("fallback grapheme metadata");
+        if glyph["fontRuns"].as_u64().unwrap_or(0) <= 1 {
+            continue;
+        }
+        measured_multirun.get_or_insert(grapheme);
+        assert_eq!(glyph["grapheme"], grapheme);
+        assert_eq!(glyph["foreground"], "#ff0000");
+        let bounds = &glyph["bounds"];
+        assert!(
+            bounds.is_object(),
+            "fallback line has no ink bounds: {glyph}"
+        );
+        let x0 = bounds["x"].as_f64().unwrap().floor() as u32;
+        let y0 = bounds["y"].as_f64().unwrap().floor() as u32;
+        let x1 = (bounds["x"].as_f64().unwrap() + bounds["width"].as_f64().unwrap()).ceil() as u32;
+        let y1 = (bounds["y"].as_f64().unwrap() + bounds["height"].as_f64().unwrap()).ceil() as u32;
+        let background = frame
+            .read_pixel(
+                metrics.cell_width as u32 - 1,
+                metrics.cell_height as u32 - 1,
+            )
+            .expect("untouched cell corner");
+        let mut total_ink = 0;
+        let mut ink_in_bounds = 0;
+        for y in 0..metrics.cell_height as u32 {
+            for x in 0..metrics.cell_width as u32 {
+                if frame.read_pixel(x, y).expect("pixel") != background {
+                    total_ink += 1;
+                    if x >= x0 && x < x1 && y >= y0 && y < y1 {
+                        ink_in_bounds += 1;
+                    }
+                }
+            }
+        }
+        assert!(total_ink > 0, "fallback line drew no ink: {grapheme:?}");
+        assert_eq!(
+            ink_in_bounds, total_ink,
+            "reported bounds omit line pixels: {bounds}"
+        );
+    }
+    assert_eq!(
+        measured_multirun,
+        Some("A\u{093c}"),
+        "the named Menlo fallback fixture must split into multiple CoreText runs"
     );
 }
 

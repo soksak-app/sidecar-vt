@@ -21,7 +21,10 @@ pub struct GlyphRenderBounds {
     pub row: u32,
     pub col: u32,
     pub width: u32,
+    pub font_run_count: u32,
     pub grapheme: String,
+    pub foreground: [u8; 3],
+    pub background: [u8; 3],
     pub ink: Option<[f64; 4]>,
     pub underline: Option<[f64; 4]>,
 }
@@ -82,7 +85,7 @@ impl FrameRenderMetadata {
                 "positionCoordinate": "CoreText y-up",
                 "thickness": self.underline_thickness,
                 "minimumThickness": 1.0,
-                "colorSource": "cell.foregroundAfterInverse"
+                "colorSource": "glyph.foreground"
             },
             "cursor": self.cursor,
             "glyphs": self.glyphs.iter().map(|glyph| {
@@ -90,7 +93,10 @@ impl FrameRenderMetadata {
                     "row": glyph.row,
                     "col": glyph.col,
                     "width": glyph.width,
+                    "fontRuns": glyph.font_run_count,
                     "grapheme": glyph.grapheme,
+                    "foreground": color_hex(glyph.foreground),
+                    "background": color_hex(glyph.background),
                     "bounds": glyph.ink.map(|rect| serde_json::json!({
                         "x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3]
                     })),
@@ -101,6 +107,10 @@ impl FrameRenderMetadata {
             }).collect::<Vec<_>>()
         })
     }
+}
+
+fn color_hex(color: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2])
 }
 
 use unicode_segmentation::UnicodeSegmentation;
@@ -127,6 +137,9 @@ pub struct CRenderCell {
     pub row: u32,
     pub col: u32,
     pub width: u32,
+    pub font_run_count: u32,
+    pub foreground: [u8; 3],
+    pub background: [u8; 3],
     pub has_ink: u8,
     pub has_underline: u8,
     pub ink_x: f64,
@@ -152,6 +165,7 @@ pub struct CRenderOutput {
     pub underline_thickness: f64,
     pub cursor_visible: u8,
     pub cursor_blend_difference: u8,
+    pub cursor_color: [u8; 3],
     pub cursor_x: f64,
     pub cursor_y: f64,
     pub cursor_width: f64,
@@ -547,6 +561,7 @@ impl Frame {
             underline_thickness: 0.0,
             cursor_visible: 0,
             cursor_blend_difference: 0,
+            cursor_color: [0; 3],
             cursor_x: 0.0,
             cursor_y: 0.0,
             cursor_width: 0.0,
@@ -605,7 +620,10 @@ impl Frame {
                     row: row as u32,
                     col: col as u32,
                     width: u32::from(cell.width),
+                    font_run_count: rendered.font_run_count,
                     grapheme: grapheme.clone(),
+                    foreground: rendered.foreground,
+                    background: rendered.background,
                     ink: (rendered.has_ink != 0).then(|| {
                         cell_rect(
                             rendered.ink_x,
@@ -669,6 +687,8 @@ impl Frame {
                 "blinkVisible": cursor.blink_visible,
                 "focused": cursor.focused,
                 "blend": if render_output.cursor_blend_difference != 0 { "difference" } else { "normal" },
+                "color": (render_output.cursor_visible != 0 && render_output.cursor_blend_difference == 0)
+                    .then(|| color_hex(render_output.cursor_color)),
                 "border": render_output.cursor_border
             }),
             glyphs,

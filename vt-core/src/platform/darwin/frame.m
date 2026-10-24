@@ -259,6 +259,19 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
             bg_color = fg_color;
             fg_color = tmp;
         }
+#ifdef SOKSAK_DIAGNOSTICS
+        if (render_cell) {
+            const uint8_t *resolved_foreground = cell->has_fg ? cell->fg : screen->default_foreground;
+            const uint8_t *resolved_background = cell->has_bg ? cell->bg : screen->default_background;
+            if (cell->inverse) {
+                const uint8_t *tmp = resolved_background;
+                resolved_background = resolved_foreground;
+                resolved_foreground = tmp;
+            }
+            memcpy(render_cell->foreground, resolved_foreground, sizeof(render_cell->foreground));
+            memcpy(render_cell->background, resolved_background, sizeof(render_cell->background));
+        }
+#endif
 
         // 기본 배경은 이미 칠했다.
         if (bg_color != default_bg_color) {
@@ -268,6 +281,9 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
 
         CGGlyph glyph = (cell->ch_len > 0 && cell->width > 0 && cell->ch) ? single_glyph(font, cell->ch, cell->ch_len) : 0;
         if (glyph != 0) {
+#ifdef SOKSAK_DIAGNOSTICS
+            if (render_cell) render_cell->font_run_count = 1;
+#endif
             // 기본 글꼴의 글리프 하나는 줄 객체 없이 그린다. 넓은 글자는 CoreText 줄과 같이 두 칸 가운데에 둔다.
             CGFloat offset = 0;
             if (cell->width == 2) {
@@ -327,6 +343,12 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
                 if (attr_str) {
                     CTLineRef line = CTLineCreateWithAttributedString(attr_str);
                     if (line) {
+#ifdef SOKSAK_DIAGNOSTICS
+                        if (render_cell) {
+                            CFArrayRef runs = CTLineGetGlyphRuns(line);
+                            render_cell->font_run_count = (uint32_t)CFArrayGetCount(runs);
+                        }
+#endif
                         // 넓은 글자의 폭이 두 칸보다 좁으면(대체 글꼴의 한글 등) 두 칸 안에서 가로 가운데에 둔다.
                         // 글자 크기는 바꾸지 않는다. 두 칸보다 넓은 글자는 칸의 시작에 둔다.
                         CGFloat offset = 0;
@@ -439,6 +461,7 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
             render_output->cursor_height = cursor_height;
             render_output->cursor_border = 0;
             render_output->cursor_blend_difference = screen->cursor_shape == 0;
+            memcpy(render_output->cursor_color, screen->default_cursor, sizeof(render_output->cursor_color));
             if (screen->cursor_shape == 1) {
                 render_output->cursor_y = cursor_y;
                 render_output->cursor_height = 2.0;
