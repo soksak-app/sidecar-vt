@@ -4,6 +4,7 @@
 
 ## 미배포
 
+- S75: Preedit는 `text` 기준 UTF-16 범위 또는 null인 필수 `markedRange`를 가진다. Renderer는 유효한 비어 있지 않은 범위의 grapheme에만 밑줄을 긋고 `selectedRange`의 선택 동작은 독립적으로 유지한다. Protocol input boundary는 preedit를 enqueue하기 전에 잘못된 marked range를 거부해 거부된 입력이 surface state를 바꾸지 않는다. Red: 변경 전 renderer의 `preedit_underlines_only_the_marked_utf16_graphemes`와 input 경계의 `an_invalid_marked_range_is_rejected_before_preedit_changes_surface_state`가 renderer 오류 반복으로 실패했다. Green: frame test 22개, serve-event test 23개, 영향받은 serve-contract test 3개, format, package/crate version 검사, records 검사가 통과한다. VT candidate version은 0.0.13이며 transport protocol은 1을 유지하고 preedit는 다시 읽을 format을 바꾸지 않는다. pnpm이 resolve한 native process-identity package directory가 비어 `make build`의 `process-identity-check`가 `MODULE_NOT_FOUND`로 실패해 local candidate build는 대기 중이다. Release는 게시하지 않았다.
 - S74: VT sidecar는 build 시 `sidecar.json.displayName`을 embed하고 host 환경 변수를 읽지 않고 등록한다. Red: 변경 전 service가 필수 환경 값을 보고하고 ready endpoint를 게시하지 못했다. Green: 변수 부재 또는 충돌 값에서 live LaunchServices identity가 embedded manifest와 일치하며, service-cleanup 10개와 log-dir 6개, format 검사, macOS arm64 build가 통과한다. Release는 게시하지 않았다.
 - S73: VT service는 선언된 process display identity를 필수로 받아 runtime 초기화 전에 LaunchServices에 등록하며 executable 이름과 첫 시작 기록을 유지한다. Red: 변경 전 service에는 LaunchServices 항목이 없었고 identity 누락도 보고하지 않았다. Green: service cleanup test 8개, scoped event/records 검사, format 검사와 macOS arm64 local version 0.0.12 build가 통과한다.
 

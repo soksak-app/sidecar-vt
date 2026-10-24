@@ -422,6 +422,7 @@ fn apply_preedit(
     preedit: &crate::protocol::Preedit,
 ) -> Result<(), String> {
     let length = utf16_length(&preedit.text);
+    preedit.validate_marked_range()?;
     valid_json_range(preedit.selected_range, Some(length), "selectedRange")?;
     // replacementRange는 호스트 문서의 marked range인 [location,length]다.
     // 새 preedit 문자열의 범위가 아니므로 preedit UTF-16 길이로 제한하지 않는다.
@@ -462,7 +463,7 @@ fn apply_preedit(
         let mut cell = crate::protocol::Cell {
             ch: Some(grapheme.to_string()),
             width,
-            underline: true,
+            underline: selected_contains(preedit.marked_range, utf16_col, utf16_end),
             ..Default::default()
         };
         if selected_contains(preedit.selected_range, utf16_col, utf16_end) {

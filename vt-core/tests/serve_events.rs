@@ -245,7 +245,7 @@ async fn a_served_request_records_its_whole_body_and_an_unparsed_line_as_it_arri
     serve_lines(
         &events,
         br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
-{"surface":"s1","body":{"operation":"input","compose":{"text":"\ud55c","selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":false}}}
+{"surface":"s1","body":{"operation":"input","compose":{"text":"\ud55c","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":false}}}
 not json at all
 "#,
     )

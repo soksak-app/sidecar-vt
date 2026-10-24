@@ -105,6 +105,13 @@ fn pixels(frame: &Frame, width: u32, height: u32) -> Vec<[u8; 4]> {
         .collect()
 }
 
+fn differing_pixels(left: &Frame, right: &Frame, x0: u32, x1: u32, height: u32) -> usize {
+    (x0..x1)
+        .flat_map(|x| (0..height).map(move |y| (x, y)))
+        .filter(|(x, y)| left.read_pixel(*x, *y) != right.read_pixel(*x, *y))
+        .count()
+}
+
 #[test]
 fn cursor_styles_and_row_coordinates_are_pixel_distinct() {
     let metrics = metrics(13.0, 1.0);
@@ -172,6 +179,7 @@ fn complex_utf8_and_cjk_are_not_truncated_or_overlapped() {
     state.lines[0][2].ch = Some("T".to_string());
     state.cursor.preedit = Some(Preedit {
         text: "한".to_string(),
+        marked_range: None,
         selected_range: None,
         replacement_range: None,
         attributed: false,
@@ -197,16 +205,18 @@ fn complex_utf8_and_cjk_are_not_truncated_or_overlapped() {
 #[test]
 fn preedit_uses_json_location_length_and_document_replacement_range() {
     let decoded: Preedit = serde_json::from_str(
-        r#"{"text":"한글","selectedRange":{"location":2,"length":0},"replacementRange":{"location":400,"length":30},"attributed":true}"#,
+        r#"{"text":"한글","markedRange":null,"selectedRange":{"location":2,"length":0},"replacementRange":{"location":400,"length":30},"attributed":true}"#,
     )
     .expect("native JSON range contract");
     assert_eq!(decoded.selected_range.unwrap().location, 2);
     assert_eq!(decoded.replacement_range.unwrap().length, 30);
+    assert_eq!(decoded.marked_range, None);
 
     let metrics = metrics(13.0, 1.0);
     let mut state = screen(8, 1);
     state.cursor.preedit = Some(Preedit {
         text: "한😀".to_string(),
+        marked_range: None,
         selected_range: Some(JsonRange {
             location: 0,
             length: 1,
@@ -231,6 +241,160 @@ fn preedit_uses_json_location_length_and_document_replacement_range() {
 }
 
 #[test]
+fn preedit_underlines_only_the_marked_utf16_graphemes() {
+    let metrics = metrics(13.0, 1.0);
+    let cell = metrics.cell_width as u32;
+    let height = metrics.cell_height as u32;
+    let mut unmarked = screen(8, 1);
+    unmarked.cursor.preedit = Some(
+        serde_json::from_str(
+            r#"{"text":"한글","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}"#,
+        )
+        .expect("null marked range"),
+    );
+    let mut partially_marked = screen(8, 1);
+    partially_marked.cursor.preedit = Some(
+        serde_json::from_str(
+            r#"{"text":"한글","markedRange":{"location":1,"length":1},"selectedRange":null,"replacementRange":null,"attributed":false}"#,
+        )
+        .expect("second Hangul grapheme marked"),
+    );
+
+    let unmarked_frame = Frame::new(cell * 8, height).expect("unmarked frame");
+    unmarked_frame
+        .draw(&unmarked, &metrics)
+        .expect("unmarked preedit");
+    let marked_frame = Frame::new(cell * 8, height).expect("partially marked frame");
+    marked_frame
+        .draw(&partially_marked, &metrics)
+        .expect("partially marked preedit");
+
+    assert_eq!(
+        differing_pixels(&unmarked_frame, &marked_frame, 0, cell * 2, height),
+        0,
+        "the first, unmarked grapheme changed"
+    );
+    assert!(
+        differing_pixels(&unmarked_frame, &marked_frame, cell * 2, cell * 4, height) > 0,
+        "the second, marked grapheme has no underline difference"
+    );
+
+    let mut empty_range = screen(8, 1);
+    empty_range.cursor.preedit = Some(
+        serde_json::from_str(
+            r#"{"text":"한글","markedRange":{"location":1,"length":0},"selectedRange":null,"replacementRange":null,"attributed":false}"#,
+        )
+        .expect("empty marked range"),
+    );
+    let empty_frame = Frame::new(cell * 8, height).expect("empty-range frame");
+    empty_frame
+        .draw(&empty_range, &metrics)
+        .expect("empty marked range");
+    assert_eq!(
+        differing_pixels(&unmarked_frame, &empty_frame, 0, cell * 8, height),
+        0,
+        "an empty marked range must draw no underline"
+    );
+}
+
+#[test]
+fn selected_range_keeps_its_background_when_marked_range_is_null() {
+    let metrics = metrics(13.0, 1.0);
+    let cell = metrics.cell_width as u32;
+    let height = metrics.cell_height as u32;
+    let hidden = CursorRender {
+        visible: false,
+        ..CursorRender::default()
+    };
+    let mut unselected = screen(8, 1);
+    unselected.cursor.preedit = Some(
+        serde_json::from_str(
+            r#"{"text":"한글","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}"#,
+        )
+        .expect("unselected preedit"),
+    );
+    let mut selected = screen(8, 1);
+    selected.cursor.preedit = Some(
+        serde_json::from_str(
+            r#"{"text":"한글","markedRange":null,"selectedRange":{"location":1,"length":1},"replacementRange":null,"attributed":false}"#,
+        )
+        .expect("selected preedit"),
+    );
+    let unselected_frame = Frame::new(cell * 8, height).expect("unselected frame");
+    unselected_frame
+        .draw_with_cursor(&unselected, &metrics, hidden)
+        .expect("unselected preedit render");
+    let selected_frame = Frame::new(cell * 8, height).expect("selected frame");
+    selected_frame
+        .draw_with_cursor(&selected, &metrics, hidden)
+        .expect("selected preedit render");
+    assert_eq!(
+        differing_pixels(&unselected_frame, &selected_frame, 0, cell * 2, height),
+        0,
+        "selectedRange changed the unselected grapheme"
+    );
+    assert!(
+        differing_pixels(
+            &unselected_frame,
+            &selected_frame,
+            cell * 2,
+            cell * 4,
+            height
+        ) > 0,
+        "selectedRange did not change the selected grapheme background"
+    );
+}
+
+#[test]
+fn preedit_marked_range_requires_a_valid_utf16_grapheme_range() {
+    let missing = serde_json::from_str::<Preedit>(
+        r#"{"text":"한","selectedRange":null,"replacementRange":null,"attributed":false}"#,
+    )
+    .expect_err("missing markedRange must be rejected");
+    assert!(missing.to_string().contains("markedRange"), "{missing}");
+
+    let malformed = serde_json::from_str::<Preedit>(
+        r#"{"text":"한","markedRange":{"location":-1,"length":1},"selectedRange":null,"replacementRange":null,"attributed":false}"#,
+    )
+    .expect_err("negative markedRange must be rejected");
+    assert!(malformed.to_string().contains("markedRange"), "{malformed}");
+
+    let metrics = metrics(13.0, 1.0);
+    let width = metrics.cell_width as u32 * 8;
+    let height = metrics.cell_height as u32;
+    for (text, range, expected) in [
+        (
+            "한",
+            r#"{"location":18446744073709551615,"length":1}"#,
+            "markedRange JSON range overflows UTF-16 location",
+        ),
+        (
+            "한",
+            r#"{"location":1,"length":1}"#,
+            "markedRange JSON range [1, 1] exceeds preedit UTF-16 length 1",
+        ),
+        (
+            "é",
+            r#"{"location":0,"length":1}"#,
+            "markedRange endpoint splits a preedit grapheme",
+        ),
+    ] {
+        let encoded_text = serde_json::to_string(text).expect("text JSON");
+        let input = format!(
+            r#"{{"text":{encoded_text},"markedRange":{range},"selectedRange":null,"replacementRange":null,"attributed":false}}"#
+        );
+        let preedit: Preedit = serde_json::from_str(&input).expect("markedRange JSON shape");
+        let mut state = screen(8, 1);
+        state.cursor.preedit = Some(preedit);
+        let frame = Frame::new(width, height).expect("frame");
+        let error = frame
+            .draw(&state, &metrics)
+            .expect_err("invalid markedRange");
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
 fn preedit_cursor_follows_selected_utf16_location() {
     let metrics = metrics(13.0, 1.0);
     let cell = metrics.cell_width as u32;
@@ -239,6 +403,7 @@ fn preedit_cursor_follows_selected_utf16_location() {
     state.cursor.focused = true;
     state.cursor.preedit = Some(Preedit {
         text: "글은".to_string(),
+        marked_range: None,
         selected_range: Some(JsonRange {
             location: 2,
             length: 0,
@@ -640,6 +805,7 @@ fn block_cursor_covers_the_full_width_of_the_character_under_it() {
     wide_preedit.cursor.focused = true;
     wide_preedit.cursor.preedit = Some(Preedit {
         text: "글".to_string(),
+        marked_range: None,
         selected_range: None,
         replacement_range: None,
         attributed: false,
@@ -676,6 +842,7 @@ fn block_cursor_covers_the_full_width_of_the_character_under_it() {
     narrow.cursor.focused = true;
     narrow.cursor.preedit = Some(Preedit {
         text: "a".to_string(),
+        marked_range: None,
         selected_range: None,
         replacement_range: None,
         attributed: false,
@@ -726,6 +893,7 @@ fn wide_preedit_glyph_is_not_clipped_by_its_continuation_cell() {
     let mut preedit = screen(4, 1);
     preedit.cursor.preedit = Some(Preedit {
         text: "글".to_string(),
+        marked_range: None,
         selected_range: None,
         replacement_range: None,
         attributed: false,

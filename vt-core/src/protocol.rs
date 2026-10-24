@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant, MissedTickBehavior};
+use unicode_segmentation::UnicodeSegmentation;
 
 /// A request of a client while the service handles it: what a reply and the request event need. The replies of the request
 /// carry its `cids` beside `surface` and `body`, and each reply is the event `sidecar.vt.reply` in the result form of core
@@ -729,6 +730,8 @@ pub struct JsonRange {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Preedit {
     pub text: String,
+    #[serde(rename = "markedRange", deserialize_with = "deserialize_marked_range")]
+    pub marked_range: Option<JsonRange>,
     #[serde(
         rename = "selectedRange",
         default,
@@ -743,6 +746,54 @@ pub struct Preedit {
     pub replacement_range: Option<JsonRange>,
     #[serde(default)]
     pub attributed: bool,
+}
+
+impl Preedit {
+    pub(crate) fn validate_marked_range(&self) -> Result<(), String> {
+        let Some(JsonRange { location, length }) = self.marked_range else {
+            return Ok(());
+        };
+        let end = location
+            .checked_add(length)
+            .ok_or_else(|| "markedRange JSON range overflows UTF-16 location".to_string())?;
+        let text_length = self.text.encode_utf16().count();
+        if end > text_length {
+            return Err(format!(
+                "markedRange JSON range [{location}, {length}] exceeds preedit UTF-16 length {text_length}"
+            ));
+        }
+        if !preedit_grapheme_boundary(&self.text, location)
+            || !preedit_grapheme_boundary(&self.text, end)
+        {
+            return Err("markedRange endpoint splits a preedit grapheme".to_string());
+        }
+        Ok(())
+    }
+}
+
+fn preedit_grapheme_boundary(text: &str, target: usize) -> bool {
+    if target == 0 {
+        return true;
+    }
+    let mut offset = 0;
+    for grapheme in text.graphemes(true) {
+        offset += grapheme.encode_utf16().count();
+        if offset == target {
+            return true;
+        }
+        if offset > target {
+            return false;
+        }
+    }
+    false
+}
+
+fn deserialize_marked_range<'de, D>(deserializer: D) -> Result<Option<JsonRange>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<JsonRange>::deserialize(deserializer)
+        .map_err(|error| serde::de::Error::custom(format!("markedRange: {error}")))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -3998,7 +4049,12 @@ where
                                     let parsed = if value.is_null() {
                                         Ok(None)
                                     } else {
-                                        serde_json::from_value::<Preedit>(value.clone()).map(Some)
+                                        serde_json::from_value::<Preedit>(value.clone())
+                                            .map_err(|error| error.to_string())
+                                            .and_then(|preedit| {
+                                                preedit.validate_marked_range().map(|()| preedit)
+                                            })
+                                            .map(Some)
                                     };
                                     match parsed {
                                         Ok(preedit) => {

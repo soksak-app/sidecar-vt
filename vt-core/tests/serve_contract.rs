@@ -654,7 +654,7 @@ async fn native_input_ack_is_not_reported_as_an_unsolicited_event() {
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 {"surface":"s1","body":{"operation":"input","focus":{"focused":true}}}
-{"surface":"s1","body":{"operation":"input","compose":{"text":"한","selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
+{"surface":"s1","body":{"operation":"input","compose":{"text":"한","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
     let mut writer = Vec::new();
@@ -698,11 +698,11 @@ async fn each_native_preedit_update_presents_a_fresh_terminal_frame() {
 {"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
 {"surface":"s1","body":{"operation":"input","focus":{"focused":true}}}
 {"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":2}}}}
-{"surface":"s1","body":{"operation":"input","compose":{"text":"ㅎ","selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
+{"surface":"s1","body":{"operation":"input","compose":{"text":"ㅎ","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
 {"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":3}}}}
-{"surface":"s1","body":{"operation":"input","compose":{"text":"하","selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
+{"surface":"s1","body":{"operation":"input","compose":{"text":"하","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
 {"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":4}}}}
-{"surface":"s1","body":{"operation":"input","compose":{"text":"한","selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
+{"surface":"s1","body":{"operation":"input","compose":{"text":"한","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":true}}}
 {"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":5}}}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
@@ -722,6 +722,69 @@ async fn each_native_preedit_update_presents_a_fresh_terminal_frame() {
     assert!(
         frames >= 5,
         "initial frame, focus frame, and all three successive preedit frames must be presented; got {frames}"
+    );
+}
+
+#[tokio::test]
+async fn an_invalid_marked_range_is_rejected_before_preedit_changes_surface_state() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let factory_calls = calls.clone();
+    let factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "invalid-marked-range".to_string(),
+            factory_calls.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+    let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
+{"surface":"s1","body":{"operation":"input","compose":{"text":"한","markedRange":{"location":1,"length":1},"selectedRange":null,"replacementRange":null,"attributed":false}}}
+{"surface":"s1","body":{"operation":"input","focus":{"focused":true}}}
+"#;
+    let reader = std::io::Cursor::new(input.as_bytes());
+    let mut writer = Vec::new();
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        serve(engine_factory, reader, &mut writer, factory),
+    )
+    .await
+    .expect("invalid marked range and valid redraw complete within 2 s")
+    .unwrap();
+
+    let messages: Vec<serde_json::Value> = String::from_utf8(writer)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("message JSON"))
+        .collect();
+    let summary: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|message| {
+            serde_json::json!({
+                "event": message["body"]["event"],
+                "error": message["body"]["error"],
+                "reason": message["body"]["reason"],
+                "imageSequence": message["body"]["image"]["sequence"],
+                "ack": message["body"]["ack"]
+            })
+        })
+        .collect();
+    assert!(
+        messages.iter().any(|message| {
+            message["body"]["error"] == "invalidParams"
+                && message["body"]["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("markedRange"))
+        }),
+        "the out-of-text markedRange was not rejected at the input boundary: {summary:?}"
+    );
+    let frames = messages
+        .iter()
+        .filter(|message| message["body"]["image"]["sequence"].is_number())
+        .count();
+    assert_eq!(
+        frames, 2,
+        "the later valid focus redraw must present after rejecting markedRange: {summary:?}"
     );
 }
 
@@ -5270,6 +5333,7 @@ async fn a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it() {
         "surface": "s1",
         "body": {"operation": "input", "compose": {
             "text": wide,
+            "markedRange": null,
             "selectedRange": {"location": 1, "length": 0},
             "replacementRange": null,
             "attributed": true
@@ -5304,6 +5368,7 @@ async fn a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it() {
         "surface": "s1",
         "body": {"operation": "input", "compose": {
             "text": "a",
+            "markedRange": {"location": 0, "length": 1},
             "selectedRange": {"location": 1, "length": 0},
             "replacementRange": null,
             "attributed": true
