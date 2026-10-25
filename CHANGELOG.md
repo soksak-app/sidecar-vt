@@ -8,6 +8,8 @@
 
 ## Unreleased
 
+- S89-1: Install the diagnostic candidate in fresh host configurations and correlate all 104 completed supplier waits with exact host receipts and answers. Most measured time precedes host receipt; post-answer delay is below 0.521 ms. Both log audits and process cleanup pass, while both drag recordings still exceed the unchanged 33 ms cadence bound. No public release is included.
+
 - S89: Add the exact image name, generation, raster and sequence to the existing consumed-wait event. The served-protocol owner fails on the missing name before correction and passes afterward; all five catalog owners pass. The event remains debug-gated and its interval includes supplier actor and transport work. Installed application delivery remains pending.
 
 - S86-1: Integrate the schema-3 catalog and bounded event writer with

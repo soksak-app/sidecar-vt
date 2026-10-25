@@ -8,6 +8,8 @@
 
 ## 미배포
 
+- S89-1: 새 host 설정에 diagnostic candidate를 설치하고 완료된 supplier wait 104개 전체를 정확한 host 수신 및 응답과 연결한다. 측정 시간 대부분은 host 수신 전이며 응답 후 지연은 0.521 ms 미만이다. 두 log 감사와 process 정리는 통과하지만 두 drag 기록은 변경하지 않은 33 ms cadence 기준을 계속 초과한다. 공개 release는 포함하지 않는다.
+
 - S89: 기존 consumed-wait event에 정확한 image name, generation, raster, sequence를 추가한다. served-protocol owner는 수정 전 name 누락으로 실패하고 수정 후 통과하며 catalog owner 다섯 개가 모두 통과한다. event는 debug gate를 유지하며 구간은 supplier actor 및 transport 작업을 포함한다. 설치된 application 전달은 남아 있다.
 
 - S86-1: Schema-3 catalog와 bounded event writer를 현재 VT 0.0.17
