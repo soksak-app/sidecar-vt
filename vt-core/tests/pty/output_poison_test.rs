@@ -1,7 +1,7 @@
 use super::*;
 use crate::events::test_support::TestEvents;
 
-fn poison<T>(field: &Mutex<T>) {
+pub(super) fn poison<T>(field: &Mutex<T>) {
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = field.lock().expect("lock before poisoning");
@@ -12,7 +12,7 @@ fn poison<T>(field: &Mutex<T>) {
     assert!(field.is_poisoned());
 }
 
-async fn completed(
+pub(super) async fn completed(
     events: &TestEvents,
 ) -> (
     crate::platform::pty::NativePtyTestLock,
@@ -77,7 +77,7 @@ async fn retained(rx: &mut tokio::sync::mpsc::UnboundedReceiver<DaemonEvent>, id
     .expect("retained output did not arrive");
 }
 
-fn reported_once(events: &TestEvents, session: &Session, field: &str) {
+pub(super) fn reported_once(events: &TestEvents, session: &Session, field: &str) {
     let lines = events.lines();
     let errors: Vec<_> = lines
         .iter()

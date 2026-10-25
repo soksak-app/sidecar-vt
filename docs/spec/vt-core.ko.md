@@ -157,3 +157,5 @@ PTY service는 mutex poisoning 후 공유 session registry를 유지한다. 첫 
 연결 image transfer store는 mutex poisoning 후에도 활성 image 목록 또는 종료 상태를 유지한다. 회수는 해당 연결의 구조화 오류 writer로 한 번 보고하고 guard를 유지한 채 poison flag를 지운다. release는 계속 정확한 frame identity로 결정한다. 연결 종료는 보관 frame을 놓고 반복해도 같으며 늦은 retain이나 answer가 종료를 되돌리지 못한다.
 
 PTY output ring과 attachment map은 mutex poisoning 후 내용을 유지한다. 첫 접근은 guard를 회수하고 session 및 필드 이름으로 구조화 오류 하나를 기록한 뒤 해당 필드의 poison flag를 지운다. replay 순서, byte 보관, attachment identity와 dropped-buffer 보고는 유지한다. 필드 회수는 sequence counter나 child 상태를 재구성하지 않는다.
+
+PTY session 필드 회수는 closed flag, optional I/O 및 join handle, counter, 기록된 child 결과를 유지한다. 닫힌 handle을 다시 열거나 값을 재구성하지 않고 회수한 필드를 session identity와 함께 한 번 보고한다. child 완료 wait는 회수한 child guard를 유지하고 poisoning 후 기록된 완료 predicate를 계속 확인하며 wake 자체를 성공한 종료로 취급하지 않는다.

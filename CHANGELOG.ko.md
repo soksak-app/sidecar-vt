@@ -8,6 +8,8 @@
 
 ## 미배포
 
+- S88-7: 저장한 값을 재구성하지 않고 남은 PTY session 필드 guard와 poisoned child condition wait를 회수한다. 제어된 Red case 열 개가 Green이 되고 기존 Rust owner 여덟 개가 통과한다. current-core catalog/census owner 두 개가 통과하며 VT source 감사 S88은 finding, pending rule, marker 오류 0개로 완료한다. local application 전달은 남아 있다.
+
 - S88-4-1: 남은 feature-gated PTY wait-fault fixture를 공개 module 및 동작을 유지하며 소유 test 디렉터리에 배치한다. 기존 일회성 wait-failure owner가 통과한다. test 전용 source match 두 개를 production 분류에서 분리하며 production match 20개가 남는다. census 기준이나 제외 설정은 바꾸지 않는다.
 
 - S88-6: retained 데이터나 수신자를 교체하지 않고 PTY output과 attachment lock을 회수한다. 각 필드 회수를 session identity와 함께 한 번 기록한다. 제어된 Red case 세 개가 Green이 되고 기존 replay/buffer owner 세 개가 통과한다. source census는 29건에서 22건으로 줄며 local diagnostic 전달은 남아 있다.

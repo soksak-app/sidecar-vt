@@ -8,6 +8,8 @@
 
 ## Unreleased
 
+- S88-7: Recover the remaining PTY session field guards and poisoned child condition waits without reconstructing stored values. Ten controlled Red cases become Green and eight existing Rust owners pass. Both current-core catalog/census owners pass; the VT source audit S88 closes with zero findings, pending rules and marker errors, while local application delivery remains pending.
+
 - S88-4-1: Place the remaining feature-gated PTY wait-fault fixture in its owning test directory with its public module and behavior unchanged. The existing one-shot wait-failure owner passes. Two test-only source matches leave production classification; 20 production matches remain. No census criteria or exclusions change.
 
 - S88-6: Recover PTY output and attachment locks without replacing retained data or receivers. Record each field recovery once with its session identity. Three controlled Red cases become Green and three existing replay/buffer owners pass. The source census decreases from 29 to 22 findings; local diagnostic delivery remains pending.

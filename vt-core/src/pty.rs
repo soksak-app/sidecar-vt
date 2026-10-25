@@ -93,21 +93,54 @@ struct Session {
 }
 
 impl Session {
+    fn recovered<'a, T>(
+        &self,
+        field: &Mutex<T>,
+        error: std::sync::PoisonError<MutexGuard<'a, T>>,
+        name: &str,
+    ) -> MutexGuard<'a, T> {
+        let value = error.into_inner();
+        self.log.emit_for(
+            Level::Error,
+            "sidecar.vt.record.error",
+            Subject::session(&self.id, &[]),
+            &serde_json::json!({
+                "where": format!("pty {name}"),
+                "text": "lock was poisoned; field value retained",
+            }),
+        );
+        field.clear_poison();
+        value
+    }
+
     fn recover<'a, T>(&self, field: &'a Mutex<T>, name: &str) -> MutexGuard<'a, T> {
-        field.lock().unwrap_or_else(|error| {
-            let value = error.into_inner();
-            self.log.emit_for(
-                Level::Error,
-                "sidecar.vt.record.error",
-                Subject::session(&self.id, &[]),
-                &serde_json::json!({
-                    "where": format!("pty {name}"),
-                    "text": "lock was poisoned; field value retained",
-                }),
-            );
-            field.clear_poison();
-            value
-        })
+        field
+            .lock()
+            // default: recover the retained guard and report the field through the session writer.
+            .unwrap_or_else(|error| self.recovered(field, error, name))
+    }
+
+    fn wait_reaped<'a>(&self, child: MutexGuard<'a, SessionChild>) -> MutexGuard<'a, SessionChild> {
+        self.wait_reaped_observed(child, || {})
+    }
+
+    fn wait_reaped_observed<'a>(
+        &self,
+        mut child: MutexGuard<'a, SessionChild>,
+        mut recovered: impl FnMut(),
+    ) -> MutexGuard<'a, SessionChild> {
+        while child.reaped.is_none() {
+            child = self
+                .child_reaped
+                .wait_while(child, |child| child.reaped.is_none())
+                // default: recover the same child guard and recheck completion after poisoning.
+                .unwrap_or_else(|error| {
+                    let child = self.recovered(&self.child, error, "child");
+                    recovered();
+                    child
+                });
+        }
+        child
     }
 }
 
@@ -285,7 +318,7 @@ impl PtyService {
                 "cwd": cwd,
                 "cols": cols,
                 "rows": rows,
-                "pid": session.child.lock().unwrap().child.process_id(),
+                "pid": session.recover(&session.child, "child").child.process_id(),
             }),
         );
         let reader_handle = crate::thread::start(&self.log, "pty-reader", move || {
@@ -295,12 +328,12 @@ impl PtyService {
         // request 경로에서 분리하므로 멈춘 PTY reader가 이후의 session open을
         // 막을 수 없다.
         let session = self.sessions().get(&session_id).cloned().unwrap();
-        *session.reader.lock().unwrap() = Some(reader_handle);
+        *session.recover(&session.reader, "reader") = Some(reader_handle);
         let session_for_reaper = session.clone();
         let reaper_handle = crate::thread::start(&self.log, "pty-reaper", move || {
             reap_child(session_for_reaper)
         })?;
-        *session.reaper.lock().unwrap() = Some(reaper_handle);
+        *session.recover(&session.reaper, "reaper") = Some(reaper_handle);
 
         Ok((session_id, attachment_id))
     }
@@ -365,14 +398,12 @@ impl PtyService {
     /// Writes `data` to the session. The surface that sends it records the write as a replay input.
     pub fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
         let session = self.session(session_id)?;
-        if *session.closed.lock().unwrap() {
+        if *session.recover(&session.closed, "closed") {
             return Err("session is closed".into());
         }
 
         session
-            .writer
-            .lock()
-            .unwrap()
+            .recover(&session.writer, "writer")
             .as_mut()
             .ok_or_else(|| "session writer is closed".to_string())?
             .write_all(data)
@@ -383,9 +414,7 @@ impl PtyService {
         let session = self.session(session_id)?;
 
         session
-            .master
-            .lock()
-            .unwrap()
+            .recover(&session.master, "master")
             .as_ref()
             .ok_or_else(|| "session master is closed".to_string())?
             .resize(PtySize {
@@ -402,24 +431,24 @@ impl PtyService {
     /// reader 가 지금까지 읽은 자식 출력의 누적 바이트 수다.
     pub fn pty_measurement(&self, session_id: &str) -> Result<PtyMeasurement, String> {
         let session = self.session(session_id)?;
-        if *session.closed.lock().unwrap() {
+        if *session.recover(&session.closed, "closed") {
             return Err("session is closed".into());
         }
         let pending = {
-            let guard = session.master.lock().unwrap();
+            let guard = session.recover(&session.master, "master");
             let master = guard
                 .as_ref()
                 .ok_or_else(|| "session master is closed".to_string())?;
             pending_input(master.as_ref())?
         };
-        let written = *session.written_output.lock().unwrap();
+        let written = *session.recover(&session.written_output, "written_output");
         Ok(PtyMeasurement { pending, written })
     }
 
     pub fn close(&self, session_id: &str) -> Result<(), String> {
         let session = self.session(session_id)?;
         {
-            let mut closed = session.closed.lock().unwrap();
+            let mut closed = session.recover(&session.closed, "closed");
             if *closed {
                 return Ok(());
             }
@@ -435,15 +464,12 @@ impl PtyService {
             // process group 신호가 자식에 닿지 않았을 수 있으므로 자식에 pid 로 SIGKILL 을 보내고, 회수 thread 가 자식을
             // 회수한 뒤에 돌아온다. 회수 thread 는 child lock 을 쥐지 않고 기다리고 이 lock 을 쥔 채 회수하므로,
             // reaped 가 None 인 동안 이 lock 을 쥐고 보내는 신호는 다른 프로세스에 가지 않는다.
-            let child = session.child.lock().unwrap();
+            let child = session.recover(&session.child, "child");
             let child_result = match &child.reaped {
                 Some(result) => result.clone(),
                 None => kill_child(child.child.as_ref()).and_then(|(pid, result)| {
                     record_kill(&session, "child", pid, result);
-                    let child = session
-                        .child_reaped
-                        .wait_while(child, |child| child.reaped.is_none())
-                        .unwrap();
+                    let child = session.wait_reaped(child);
                     child
                         .reaped
                         .clone()
@@ -456,10 +482,10 @@ impl PtyService {
                 (Ok(_), Ok(())) => Ok(()),
             }
         };
-        session.writer.lock().unwrap().take();
-        session.master.lock().unwrap().take();
-        let reader = session.reader.lock().unwrap().take();
-        let reaper = session.reaper.lock().unwrap().take();
+        session.recover(&session.writer, "writer").take();
+        session.recover(&session.master, "master").take();
+        let reader = session.recover(&session.reader, "reader").take();
+        let reaper = session.recover(&session.reaper, "reaper").take();
         let log = session.log.clone();
         // The threads end without a panic (the entrance records one), so the join fails only when the entrance itself failed.
         let joined = crate::thread::start(&log, "pty-joiner", {
@@ -503,7 +529,7 @@ impl PtyService {
 
     pub fn process_id(&self, session_id: &str) -> Result<u32, String> {
         let session = self.session(session_id)?;
-        let process_id = session.child.lock().unwrap().child.process_id();
+        let process_id = session.recover(&session.child, "child").child.process_id();
         process_id.ok_or_else(|| "PTY child has no process id".to_string())
     }
 
@@ -542,9 +568,9 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
             }
             Ok(size) => {
                 let data = buffer[..size].to_vec();
-                *session.written_output.lock().unwrap() += size as u64;
+                *session.recover(&session.written_output, "written_output") += size as u64;
                 let sequence = {
-                    let mut next = session.next_sequence.lock().unwrap();
+                    let mut next = session.recover(&session.next_sequence, "next_sequence");
                     let sequence = *next;
                     *next += 1;
                     sequence
@@ -620,12 +646,12 @@ fn kill_child(child: &(dyn Child + Send)) -> Result<(i32, KillResult), String> {
 /// 자식에 신호를 보낸다. 끝난 자식은 회수될 때까지 좀비로 남아 그 pid 가 다시 쓰이지 않는다. 회수와 그 결과는 같은
 /// lock 안에서 적고 child_reaped 로 알린다.
 fn reap_child(session: Arc<Session>) {
-    let process_id = session.child.lock().unwrap().child.process_id();
+    let process_id = session.recover(&session.child, "child").child.process_id();
     let exited = process_id
         .ok_or_else(|| "PTY child has no process id".to_string())
         .and_then(|pid| wait_for_child_exit(&session.id, pid));
     let result = {
-        let mut child = session.child.lock().unwrap();
+        let mut child = session.recover(&session.child, "child");
         let result = exited.and_then(|()| {
             child
                 .child
@@ -746,3 +772,7 @@ mod registry_poison_test;
 #[cfg(test)]
 #[path = "../tests/pty/output_poison_test.rs"]
 mod output_poison_test;
+
+#[cfg(test)]
+#[path = "../tests/pty/session_poison_test.rs"]
+mod session_poison_test;
