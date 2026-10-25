@@ -92,6 +92,25 @@ struct Session {
     log: Events,
 }
 
+impl Session {
+    fn recover<'a, T>(&self, field: &'a Mutex<T>, name: &str) -> MutexGuard<'a, T> {
+        field.lock().unwrap_or_else(|error| {
+            let value = error.into_inner();
+            self.log.emit_for(
+                Level::Error,
+                "sidecar.vt.record.error",
+                Subject::session(&self.id, &[]),
+                &serde_json::json!({
+                    "where": format!("pty {name}"),
+                    "text": "lock was poisoned; field value retained",
+                }),
+            );
+            field.clear_poison();
+            value
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct PtyService {
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
@@ -253,9 +272,7 @@ impl PtyService {
             log: self.log.clone(),
         });
         session
-            .attachments
-            .lock()
-            .unwrap()
+            .recover(&session.attachments, "attachments")
             .insert(attachment_id.clone(), events);
 
         self.sessions().insert(session_id.clone(), session.clone());
@@ -297,7 +314,7 @@ impl PtyService {
         let session = self.session(session_id)?;
         let attachment_id = Uuid::new_v4().to_string();
         let replay = {
-            let output = session.output.lock().unwrap();
+            let output = session.recover(&session.output, "output");
             let oldest = output
                 .front()
                 .map(|(sequence, _)| *sequence)
@@ -317,9 +334,7 @@ impl PtyService {
                 .collect::<Vec<_>>()
         };
         session
-            .attachments
-            .lock()
-            .unwrap()
+            .recover(&session.attachments, "attachments")
             .insert(attachment_id.clone(), events.clone());
         for (sequence, data, truncated) in replay {
             events
@@ -330,7 +345,9 @@ impl PtyService {
                     truncated,
                 })
                 .map_err(|_| {
-                    session.attachments.lock().unwrap().remove(&attachment_id);
+                    session
+                        .recover(&session.attachments, "attachments")
+                        .remove(&attachment_id);
                     "PTY attachment closed during replay".to_string()
                 })?;
         }
@@ -339,7 +356,9 @@ impl PtyService {
 
     pub fn detach(&self, session_id: &str, attachment_id: &str) -> Result<(), String> {
         let session = self.session(session_id)?;
-        session.attachments.lock().unwrap().remove(attachment_id);
+        session
+            .recover(&session.attachments, "attachments")
+            .remove(attachment_id);
         Ok(())
     }
 
@@ -531,7 +550,7 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
                     sequence
                 };
                 {
-                    let mut output = session.output.lock().unwrap();
+                    let mut output = session.recover(&session.output, "output");
                     output.push_back((sequence, data.clone()));
                     while output.len() > session.retained_output {
                         if let Some((_, left)) = output.pop_front() {
@@ -714,7 +733,7 @@ fn record_kill(session: &Session, target: &str, id: i32, result: KillResult) {
 }
 
 fn broadcast(session: &Session, event: DaemonEvent) {
-    let mut attachments = session.attachments.lock().unwrap();
+    let mut attachments = session.recover(&session.attachments, "attachments");
     let before = attachments.len();
     attachments.retain(|_, sender| sender.send(event.clone()).is_ok());
     let removed = before - attachments.len();
@@ -744,3 +763,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../tests/pty/registry_poison_test.rs"]
 mod registry_poison_test;
+
+#[cfg(test)]
+#[path = "../tests/pty/output_poison_test.rs"]
+mod output_poison_test;

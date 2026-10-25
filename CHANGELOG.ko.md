@@ -8,6 +8,8 @@
 
 ## 미배포
 
+- S88-6: retained 데이터나 수신자를 교체하지 않고 PTY output과 attachment lock을 회수한다. 각 필드 회수를 session identity와 함께 한 번 기록한다. 제어된 Red case 세 개가 Green이 되고 기존 replay/buffer owner 세 개가 통과한다. source census는 29건에서 22건으로 줄며 local diagnostic 전달은 남아 있다.
+
 - S88-5: 연결 event writer를 사용해 poisoning 후 image transfer store를 회수한다. frame 소유와 종료 상태를 유지하고 회수를 한 번 보고하며 정확한 응답으로만 release한다. 제어된 Red case 세 개가 Green이 되고 기존 connection/image owner 네 개가 통과한다. source census는 모두 PTY에 남은 finding 29개로 30개에서 줄었다. 설치된 application 전달은 남아 있다.
 
 - S88-4: 기존 watchdog, PTY lifecycle 및 feature-gated event fault fixture를 소유 test 디렉터리에 배치한다. 실행 test 코드, feature 제공 범위, 공개 helper method와 test 이름을 유지한다. 소유 case 일곱 개가 통과한다. 기준이나 제외 설정 변경 없이 test 전용 census match 열한 개를 production 분류에서 분리하며 production lock finding 30개가 남는다. test 배치 및 분류이며 runtime 수정이 아니다.

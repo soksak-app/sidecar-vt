@@ -155,3 +155,5 @@ Engine event queue는 poisoning 후 mutex guard를 회수하고 기존 FIFO even
 PTY service는 mutex poisoning 후 공유 session registry를 유지한다. 첫 registry 접근은 회수를 구조화 오류 writer로 보고하고 회수한 guard를 보유한 채 poison flag를 지워 이후 접근에서 같은 회수 기록을 반복하지 않는다. registry 회수는 session 내부 상태의 일관성을 재구성하거나 가정하지 않는다.
 
 연결 image transfer store는 mutex poisoning 후에도 활성 image 목록 또는 종료 상태를 유지한다. 회수는 해당 연결의 구조화 오류 writer로 한 번 보고하고 guard를 유지한 채 poison flag를 지운다. release는 계속 정확한 frame identity로 결정한다. 연결 종료는 보관 frame을 놓고 반복해도 같으며 늦은 retain이나 answer가 종료를 되돌리지 못한다.
+
+PTY output ring과 attachment map은 mutex poisoning 후 내용을 유지한다. 첫 접근은 guard를 회수하고 session 및 필드 이름으로 구조화 오류 하나를 기록한 뒤 해당 필드의 poison flag를 지운다. replay 순서, byte 보관, attachment identity와 dropped-buffer 보고는 유지한다. 필드 회수는 sequence counter나 child 상태를 재구성하지 않는다.
