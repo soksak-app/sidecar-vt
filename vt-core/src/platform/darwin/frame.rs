@@ -888,6 +888,7 @@ fn apply_preedit(
     {
         selected_cursor = Some((logical_row, logical_col));
     }
+    // default: without a selected preedit range, the engine cursor remains the caret.
     let logical_caret = selected_cursor.unwrap_or(engine_cursor);
     let end_boundary = preedit
         .selected_range
@@ -903,13 +904,12 @@ fn apply_preedit(
     };
     let logical_row_origin = selected_cursor
         .map(|_| caret_row.saturating_sub(rows.saturating_sub(1)))
+        // default: without a selected preedit caret, the viewport keeps its original first row.
         .unwrap_or(0);
     let max_logical_row = placements
         .iter()
         .map(|(row, _, _)| *row)
-        .chain(std::iter::once(caret_row))
-        .max()
-        .unwrap_or(engine_cursor.0);
+        .fold(caret_row, usize::max);
     let mut logical_lines = screen.lines.clone();
     if logical_lines.len() < max_logical_row + 1 {
         logical_lines.resize_with(max_logical_row + 1, || Vec::new());
@@ -961,6 +961,7 @@ fn apply_preedit(
             logical_lines
                 .get(row)
                 .cloned()
+                // default: rows beyond the logical content are blank terminal cells.
                 .unwrap_or_else(|| vec![crate::protocol::Cell::default(); cols]),
         );
     }

@@ -8,6 +8,8 @@
 
 ## 미배포
 
+- S88-1: 정상적인 optional caret, viewport, blank-row 및 diagnostic metadata 기본값의 이유를 기록하고 비어 있지 않은 extent maximum의 fallback을 caret에서 시작하는 fold로 바꾼다. frame owner 두 개가 통과한다. current-core census는 60건에서 55건으로 줄고 남은 항목은 모두 poisoned lock이며 catalog는 event 32개를 수용한다. conformance 감사이며 새 display 수정은 아니다.
+
 - S91: pending-image fixture가 관계없는 stale identity 대신 실제 첫 frame에 응답하게 한다. 이전 fixture는 unchanged source에서 실패하며 정확한 frame 계약과 충돌한다. 수정 owner는 기존 image 부재 구간 전체를 관측하고 다음 frame identity를 검증해 통과하며 production 코드와 시간 제한은 바꾸지 않는다.
 
 - S90: raster 관련 screen JSON을 runtime blocking pool에서 준비해 async worker가 image output을 처리할 수 있게 한다. 완전한 screen/frame 데이터와 FIFO 순서를 유지하며 preparation 및 task 실패를 보고한다. 제어된 Red가 Green이 되고 집중 owner 일곱 개가 통과한다. 두 설치 diagnostic host의 log 감사와 정리가 통과하지만 drag latency와 capture 수용은 미완료다. unchanged source에서 재현한 기존 stale-response fixture 실패는 S91로 추적한다.

@@ -8,6 +8,8 @@
 
 ## Unreleased
 
+- S88-1: Document the valid optional caret, viewport, blank-row and diagnostic metadata defaults and replace the nonempty extent maximum fallback with a caret-seeded fold. Both frame owners pass. The current-core census decreases from 60 to 55 findings, all remaining findings concerning poisoned locks; the catalog accepts all 32 events. This is a conformance audit, not a new display fix.
+
 - S91: Make the pending-image fixture answer its actual first frame instead of an unrelated stale identity. The old fixture fails unchanged source and contradicts the exact-frame contract. The corrected owner passes, observes the entire existing no-image interval and validates the next frame identity without changing production code or time limits.
 
 - S90: Prepare raster-associated screen JSON on the runtime blocking pool so its async worker remains available for image output. Keep complete screen/frame data and FIFO order; report preparation and task failures. The controlled Red becomes Green and seven focused owners pass. Both installed diagnostic hosts pass log audits and cleanup, while drag latency and capture acceptance remain open. S91 tracks an existing stale-response fixture failure reproduced on unchanged source.

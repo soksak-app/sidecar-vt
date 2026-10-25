@@ -1697,6 +1697,7 @@ fn screen_event(
         .and_then(|state| state.render.as_ref())
         .filter(|metadata| metadata["frame"] == frame)
         .cloned()
+        // default: a frame without matching diagnostic metadata reports no render metadata.
         .unwrap_or(Value::Null);
     let frame_accepted = image.is_some_and(|state| !state.dirty && state.sequence > 0);
     Ok(json!({
