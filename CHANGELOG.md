@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- S86: Keep the event-writer batch deadline independent of arriving
+  messages. Continuous non-error traffic no longer postpones the 100 ms
+  flush until input becomes idle. The new owner reproduces zero stored
+  records during 268 ms of continuous input before correction; all 14
+  event-contract cases pass afterward, preserving accepted-event order.
+  Integration, diagnostic package delivery and publication remain open.
+
 - F239-77-vt-sidecar: Convert the VT 0.0.17 package catalog to schema 3 JSON
   Schema while preserving its event and chain declarations. Red: the current
   core reader reported schema-2 and compact-field findings. Green: the focused

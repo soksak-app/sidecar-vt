@@ -21,6 +21,10 @@
 
 사이드카는 터미널 화면이 바뀔 때마다 `{event: "screen", ...}`을 보내며, 그 `frame`은 그 화면을 보이는 frame의 `{generation, raster, sequence}`(보낸 frame의 답을 기다리는 동안 바뀐 것이 있으면 다음 frame)이거나 surface에 image가 없는 동안 null이다. 그리고 새 프레임이 그려질 때마다 호스트의 그림 릴레이를 통해 그림 봉투를 보낸다. 호스트 `configure`가 페이지 주도 `resize` 요청을 대체하며 최신 래스터 리비전으로 합쳐진다. 전송 그림이 `consumed`나 오류를 기다리는 동안 사이드카는 그 그림을 수정하지 않는다. 화면과 설정 변경은 대기 상태로 남고, 응답 뒤 다음 프레임이 최신 설정을 사용한다.
 
+## Event writer
+
+Service는 공통 event-log contract를 따른다. 100 ms batch interval은 이전 flush부터 pending batch의 대기 시간을 제한하며 다른 이벤트를 받아도 deadline을 다시 시작하지 않는다. Error 및 명시적 flush 요청은 pending 기록을 즉시 쓴다.
+
 ## 영속 터미널 서비스
 
 아래 절은 이 저장소가 가진 터미널 서비스 계약이다. 서비스 자체는 [영속 서비스](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.ko.md)가 정의하며, 이 절들이 이름만 드는 다른 core 명세는 이름으로만 가리킨다.

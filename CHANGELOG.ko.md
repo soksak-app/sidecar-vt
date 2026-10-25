@@ -4,6 +4,12 @@
 
 ## 미배포
 
+- S86: 도착 메시지와 독립적으로 event-writer batch deadline을 유지한다.
+  연속 non-error traffic이 더 이상 입력이 멈출 때까지 100 ms flush를 미루지
+  않는다. 새 owner는 수정 전에 268 ms 연속 입력 중 저장 기록 0개를 재현하고
+  수정 후 event-contract 14 case가 수락 이벤트 순서를 유지하며 통과한다.
+  Integration, diagnostic package delivery 및 publication은 열어 둔다.
+
 - F239-77-vt-sidecar: VT 0.0.17 package catalog를 schema 3 JSON Schema로
   변환하고 event와 chain 선언을 유지한다. Red: 현재 core reader가 schema-2와
   compact-field 문제를 보고했다. Green: focused catalog test와 current-core

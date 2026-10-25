@@ -21,6 +21,10 @@ An envelope that does not parse is answered with `{surface, body: {error: "inval
 
 The sidecar sends `{event: "screen", ...}` whenever the terminal screen changes; its `frame` is `{generation, raster, sequence}` of the frame that shows that screen (the next frame while changes wait for the answer of a sent one), or null while the surface has no image, and sends image envelopes through the host's image relay when a new frame is drawn. Host `configure` replaces the page-driven `resize` request and is coalesced to its latest raster revision. While a transfer image awaits `consumed` or an error, the sidecar does not modify it. Screen and configuration changes remain pending, and the next frame uses the latest configuration after the response.
 
+## Event writer
+
+The service follows the shared event-log contract. Its 100 ms batch interval bounds the age of a pending batch from the preceding flush; receiving another event does not restart that deadline. Errors and explicit flush requests write pending records immediately.
+
 ## Persistent terminal service
 
 The sections below are the terminal service contract that this repository holds. The service itself is defined by [persistent services](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.md); the other core specifications that these sections name are referred to by their names only.
