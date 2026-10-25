@@ -1,5 +1,7 @@
 # 변경 기록
 
+- S86-2: Terminal 0.0.21과 함께 local 설치한 diagnostic package에서 bounded event writer를 검증했다. 연속 ASCII 입력은 기존 package에서 실패하고 수정 package에서 통과하며 종료 후 승인된 기록 50개 전체의 순서가 유지된다. 실패한 package 검사는 diagnostic 증거를 보존한다. 공개 release는 포함하지 않는다.
+
 - S87: 큐의 flush는 다음 요청을 소비하지 않고 자신의 FIFO 경계에 응답한다. 제어된 owner는 수정 전 두 번째 응답 누락으로 실패하고 수정 후 통과하며 event-contract 14개가 통과한다. Application 전달은 남아 있다.
 
 [English](CHANGELOG.md)

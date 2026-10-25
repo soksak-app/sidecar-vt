@@ -143,3 +143,5 @@ Native IME는 marked text를 소유한다. 각 native input report는 순서 있
 반복 검사는 전체 화면 고정 TUI(`e2e/fixture-tui.mjs`)를 쓴다. 이 TUI는 `?1003` 움직임과 `?1006` SGR 보고를 켜고 자기 선택을 그린다. 검사는 OS 포인터 입력을 쓴다. 끌기, 같은 TUI 안의 세 번째 점 클릭, 그리고 다시 포커스하거나 상태를 재설정하지 않고 바로 다시 끌기를 한다. 실패한 뒤에만 검사는 다른 카드를 클릭해 복구를 관찰할 수 있다. 복구는 실패한 시도를 통과로 바꾸지 않는다. 각 호스트는 세 번 연속 중단 없는 주기를 통과해야 한다. 주기는 세 번째 점 영역(입력, 출력, 빈 곳)마다 하나씩이며, 가운데 주기는 느린 속도로 한다. 간헐적 실패는 반복 대상을 통해 재현하고 수용한다. 모든 제스처는 대응하는 입력 결과와 보이는 효과의 완전한 캡처 측정을 가진다. Shift 선택은 별도의 제어다.
 
 각 명시적 flush는 앞선 기록을 쓴 뒤 자신의 FIFO marker에 응답하며 이후 flush 또는 stop marker를 소비하지 않는다.
+
+Packaged diagnostic owner는 `SOKSAK_DIAGNOSTIC_PACKAGE_RELEASE`의 release 또는 `SOKSAK_DIAGNOSTIC_PACKAGE_DIRECTORY`의 설치된 package directory를 검사한다. Application 활성화 없이 연속 ASCII 입력을 수행하여 종료 전 supplier 기록이 disk에 도달하는지 확인하고 종료 후 승인된 모든 기록을 확인한다. 실패한 실행은 diagnostic artifact를 보존한다.

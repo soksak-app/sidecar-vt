@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { access, copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import test from "node:test";
 
 const release = process.env.SOKSAK_DIAGNOSTIC_PACKAGE_RELEASE;
+const installed = process.env.SOKSAK_DIAGNOSTIC_PACKAGE_DIRECTORY;
 const STEP_TIMEOUT_MS = 5000;
 const SERVICE_TIMEOUT_MS = 30000;
 
@@ -27,7 +28,8 @@ function screenText(body) {
 }
 
 test("packaged diagnostics binary reports matching render metadata and engine trace", {
-  skip: release ? false : "candidate-release supplies SOKSAK_DIAGNOSTIC_PACKAGE_RELEASE",
+  skip: release || installed ? false : "candidate-release supplies SOKSAK_DIAGNOSTIC_PACKAGE_RELEASE",
+  timeout: 30000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "vt-diagnostic-package-"));
   const extracted = join(root, "package");
@@ -38,15 +40,21 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
   await Promise.all([
     mkdir(extracted, { recursive: true }), mkdir(serviceDir, { recursive: true }),
     mkdir(logsDir, { recursive: true }), mkdir(traceDir, { recursive: true }),
-    copyFile(release, assetPath),
+    ...(release ? [copyFile(release, assetPath)] : []),
   ]);
-  execFileSync("tar", ["-xzf", assetPath, "-C", extracted], { stdio: "pipe" });
-  const packageInfo = JSON.parse(await readFile(join(extracted, "package.json"), "utf8"));
+  await writeFile(join(root, "log-policy.json"), JSON.stringify({
+    schema: 1,
+    classes: Object.fromEntries(["lifecycle", "input", "call", "io", "frame"].map((name) => [name, "trace"])),
+  }));
+  if (release) execFileSync("tar", ["-xzf", assetPath, "-C", extracted], { stdio: "pipe" });
+  const packageRoot = installed ?? extracted;
+  const packageInfo = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
   assert.equal(packageInfo.name, "@soksak/sidecar-vt-alacritty", "release package identity differs");
   assert.match(packageInfo.version, /^0\.0\.\d+$/, "release package version is invalid");
-  const binary = join(extracted, "build", "soksak-vt-alacritty");
+  const binary = join(packageRoot, "build", "soksak-vt-alacritty");
   const surface = "s85-diagnostic-surface";
   const project = "/s85-diagnostic-project";
+  let passed = false;
   let service;
   let socket;
   let exited;
@@ -173,6 +181,36 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
     assert.deepEqual(outputScreen.body.render?.frame, outputScreen.body.frame,
       "controlled output screen has no render metadata for its frame");
     t.diagnostic(`PASS output_frame=${JSON.stringify(outputScreen.body.frame)}`);
+    // The timer defines a continuous workload; no external event supplies its cadence.
+    const starts = [];
+    for (let index = 0; index < 50; index++) {
+      starts.push(performance.now());
+      const cid = `batch-deadline-${index}`;
+      socket.write(`${JSON.stringify({ surface, root: project, cids: [cid], body: {
+        operation: "input",
+        actions: [{ type: "insert", text: "x", replacementRange: null, attributed: false }],
+        preedit: { text: "", markedRange: null, selectedRange: null, replacementRange: null, attributed: false },
+      } })}\n`);
+      const reply = await readMessage((message) => message.cids?.includes(cid), `continuous input ${index}`);
+      assert.equal(reply.body?.ack, true, `continuous input ${index} was refused`);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const span = starts.at(-1) - starts[0];
+    const maxGap = Math.max(...starts.slice(1).map((value, index) => value - starts[index]));
+    assert.ok(span > 100 && maxGap < 100, `workload was not continuous: span=${span}, maxGap=${maxGap}`);
+    const files = (await readdir(logsDir)).filter((name) => name.endsWith(".jsonl"));
+    const stored = [];
+    for (const name of files) {
+      const text = await readFile(join(logsDir, name), "utf8");
+      const end = text.lastIndexOf("\n");
+      if (end + 1 < text.length) t.diagnostic(`pending log tail: ${name}, ${Buffer.byteLength(text.slice(end + 1))} bytes`);
+      for (const line of text.slice(0, end + 1).split("\n").filter(Boolean)) {
+        const row = JSON.parse(line);
+        if (row.event === "sidecar.vt.pty_write" && row.cids?.some((cid) => cid.startsWith("batch-deadline-"))) stored.push(row);
+      }
+    }
+    assert.ok(stored.length > 0, "continuous input postponed every batch until service shutdown");
+    t.diagnostic(`PASS live supplier batches records=${stored.length} span=${span.toFixed(3)}ms maxGap=${maxGap.toFixed(3)}ms`);
     socket.destroy();
     socket = null;
     service.kill("SIGTERM");
@@ -180,6 +218,19 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
     assert.ok(result.code === 0 || result.signal === "SIGTERM",
       `service exited unexpectedly: ${JSON.stringify(result)}; ${stderr}`);
     service = null;
+    const completed = [];
+    for (const name of (await readdir(logsDir)).filter((name) => name.endsWith(".jsonl"))) {
+      const text = await readFile(join(logsDir, name), "utf8");
+      assert.ok(text.endsWith("\n"), `closed log has an unfinished record: ${name}`);
+      for (const line of text.trimEnd().split("\n")) {
+        const row = JSON.parse(line);
+        if (row.event === "sidecar.vt.pty_write") {
+          for (const cid of row.cids ?? []) if (cid.startsWith("batch-deadline-")) completed.push(cid);
+        }
+      }
+    }
+    assert.deepEqual(completed, Array.from({ length: 50 }, (_, index) => `batch-deadline-${index}`),
+      "completed log lost, duplicated or reordered accepted input records");
     await assert.rejects(access(socketDirectory), (error) => error.code === "ENOENT",
       `service left its socket directory ${socketDirectory}`);
     const trace = await readFile(join(traceDir, `${surface}.trace`), "utf8");
@@ -191,6 +242,7 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
     assert.ok(fedBytes.includes(expected),
       `engine trace lacks controlled PTY input ${expected.toString("base64")}: ${trace}`);
     t.diagnostic("PASS engine trace includes controlled PTY input");
+    passed = true;
   } finally {
     socket?.destroy();
     if (service) {
@@ -201,6 +253,7 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
         await within(exited, "service reaping", 10000);
       }
     }
-    await rm(root, { recursive: true, force: true });
+    if (passed) await rm(root, { recursive: true, force: true });
+    else t.diagnostic(`FAIL retained package evidence: ${root}`);
   }
 });
