@@ -1,5 +1,7 @@
 # Changelog
 
+- S87: A queued flush now acknowledges its own FIFO boundary without consuming the next request. A controlled owner fails on the discarded second acknowledgement before correction and passes afterward; all 14 event-contract cases pass. Application delivery remains pending.
+
 [한국어](CHANGELOG.ko.md)
 
 ## Unreleased

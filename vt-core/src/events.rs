@@ -1292,28 +1292,6 @@ fn write_loop(
         queued_events.fetch_sub(1, Ordering::Relaxed);
         out.push(pending);
     };
-    // Takes every event that is queued now, then the loss counted so far, and writes them.
-    let drain = |out: &mut Output| -> Option<Message> {
-        let mut request = None;
-        while let Ok(message) = receiver.try_recv() {
-            match message {
-                Message::Event(pending) => take(out, &pending),
-                Message::PolicyChanged => out.policy_changed(),
-                Message::PolicyWatchFailed(text) => out.record_error("log policy", text),
-                Message::PolicyWatchStarted(folder) => out.policy_watch_started(&folder),
-                Message::PolicyWatchEvent { vnode, flags } => {
-                    out.policy_watch_event(&vnode, &flags)
-                }
-                other => {
-                    request = Some(other);
-                    break;
-                }
-            }
-        }
-        record_loss(out);
-        out.flush();
-        request
-    };
     let mut flushed = Instant::now();
     loop {
         // A busy receiver may never time out, so arrivals cannot determine the batch deadline.
@@ -1332,7 +1310,8 @@ fn write_loop(
                 continue;
             }
             Err(RecvTimeoutError::Disconnected) => {
-                drain(&mut out);
+                record_loss(&mut out);
+                out.flush();
                 return;
             }
         };
@@ -1347,17 +1326,17 @@ fn write_loop(
                 }
             }
             Message::Flush(done) => {
-                let following = drain(&mut out);
+                // FIFO reception has already consumed every event preceding this marker.
+                record_loss(&mut out);
+                out.flush();
                 flushed = Instant::now();
                 if done.send(()).is_err() {
                     out.record_failure("the flush was answered after its deadline".into());
                 }
-                if matches!(following, Some(Message::Stop)) {
-                    return;
-                }
             }
             Message::Stop => {
-                drain(&mut out);
+                record_loss(&mut out);
+                out.flush();
                 return;
             }
             Message::PolicyChanged => out.policy_changed(),
@@ -1502,3 +1481,7 @@ pub mod test_support {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/events/flush_boundary_test.rs"]
+mod flush_boundary_test;
