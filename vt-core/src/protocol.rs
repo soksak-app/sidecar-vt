@@ -163,10 +163,10 @@ struct Connection {
 }
 
 impl Connection {
-    fn new(sender: mpsc::Sender<String>) -> Self {
+    fn new(sender: mpsc::Sender<String>, log: Events) -> Self {
         Self {
             sender,
-            transfers: TransferStore::new(),
+            transfers: TransferStore::new(log),
         }
     }
 }
@@ -177,6 +177,7 @@ impl Connection {
 pub struct TransferStore {
     /// None 은 끝난 연결이다.
     images: std::sync::Mutex<Option<Vec<RetainedTransfer>>>,
+    log: Events,
 }
 
 struct RetainedTransfer {
@@ -191,15 +192,23 @@ struct RetainedTransfer {
 }
 
 impl TransferStore {
-    fn new() -> Arc<Self> {
+    fn new(log: Events) -> Arc<Self> {
         Arc::new(Self {
             images: std::sync::Mutex::new(Some(Vec::new())),
+            log,
         })
     }
 
     fn images(&self) -> std::sync::MutexGuard<'_, Option<Vec<RetainedTransfer>>> {
-        // 잠금 안에서는 목록만 바꾸고 panic 하는 일을 하지 않으므로 잠금은 오염되지 않는다.
-        self.images.lock().expect("transfer store lock is poisoned")
+        self.images.lock().unwrap_or_else(|error| {
+            let images = error.into_inner();
+            self.log.record_error(
+                "image transfer store",
+                "transfer store lock was poisoned; transfer state retained",
+            );
+            self.images.clear_poison();
+            images
+        })
     }
 
     /// 끝난 연결이면 답이 올 수 없으므로 바로 놓는다.
@@ -4255,7 +4264,7 @@ where
 {
     let buf_reader = BufReader::new(PolledReader::new(reader, options.log.clone()));
     let (output_sender, output_rx) = mpsc::channel::<String>(100);
-    let connection = Connection::new(output_sender);
+    let connection = Connection::new(output_sender, options.log.clone());
     let transfers = connection.transfers.clone();
     let output_tx = if options.registry.is_some() {
         OutputSink::detachable(connection)
@@ -5628,3 +5637,7 @@ async fn prepare_screen_line(
 #[cfg(test)]
 #[path = "../tests/support/screen_preparation_test.rs"]
 mod screen_preparation_test;
+
+#[cfg(test)]
+#[path = "../tests/support/transfer_store_poison_test.rs"]
+mod transfer_store_poison_test;

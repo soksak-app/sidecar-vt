@@ -8,6 +8,8 @@
 
 ## Unreleased
 
+- S88-5: Recover the image transfer store after poisoning with its connection event writer. Retain frame ownership and ended state, report recovery once and keep exact-answer release. Three controlled Red cases become Green and four existing connection/image owners pass. The source census decreases from 30 to 29 findings, all in PTY. Installed application delivery remains pending.
+
 - S88-4: Place existing watchdog, PTY lifecycle and feature-gated event fault fixtures under their owning test directories. Preserve executable test code, feature availability, public helper methods and test names. Seven owning cases pass. Eleven test-only census matches leave production classification without changing criteria or exclusions; 30 production lock findings remain. This is test placement and classification, not a runtime correction.
 
 - S88-3: Recover the PTY session registry at its six production access sites, retain the shared map and record each poisoning once. Three controlled Red cases become Green, and real PTY close/exit and reattach owners pass. Unknown-session errors remain unchanged. The source census decreases from 47 to 41 findings; local package delivery remains pending.
