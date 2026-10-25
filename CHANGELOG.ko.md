@@ -8,6 +8,8 @@
 
 ## 미배포
 
+- F239-77-vt-sidecar: 일치하는 설치 diagnostic cohort로 로컬 schema-3 catalog acceptance를 완료한다. 현재 SDK가 source 34개와 pending rule 0개, event 32개를 검사하며 양쪽 host 설치본의 catalog가 source와 정확히 일치하고 application log audit을 통과한다. Public publication은 별도다.
+
 - S88-2-1: 검증된 recovery 수정을 로컬 설치 Darwin diagnostic package에 전달한다. Package owner가 metadata, engine trace와 연속 logging으로 통과하며 양쪽 application host는 retention 완료 후 shared service를 유지하고 모든 terminal child를 회수한다. 주입된 poison recovery는 source fixture가 입증한다. Public release나 IME acceptance는 포함하지 않는다.
 
 - S88-7: 저장한 값을 재구성하지 않고 남은 PTY session 필드 guard와 poisoned child condition wait를 회수한다. 제어된 Red case 열 개가 Green이 되고 기존 Rust owner 여덟 개가 통과한다. current-core catalog/census owner 두 개가 통과하며 VT source 감사 S88은 finding, pending rule, marker 오류 0개로 완료한다. local application 전달은 남아 있다.

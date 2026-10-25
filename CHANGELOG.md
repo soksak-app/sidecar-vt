@@ -8,6 +8,8 @@
 
 ## Unreleased
 
+- F239-77-vt-sidecar: Complete local schema-3 catalog acceptance with the matching installed diagnostic cohort. The current SDK checks 34 sources with zero pending rules and 32 events; both host installations contain the exact source catalog and pass application log audits. Public publication remains separate.
+
 - S88-2-1: Deliver the verified recovery corrections in a locally installed Darwin diagnostic package. The package owner passes with metadata, engine trace and continuous logging; both application hosts preserve the shared service and reap all terminal children after completed retention. Source fixtures prove injected poison recovery. No public release or IME acceptance is included.
 
 - S88-7: Recover the remaining PTY session field guards and poisoned child condition waits without reconstructing stored values. Ten controlled Red cases become Green and eight existing Rust owners pass. Both current-core catalog/census owners pass; the VT source audit S88 closes with zero findings, pending rules and marker errors, while local application delivery remains pending.
