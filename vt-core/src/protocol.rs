@@ -1962,16 +1962,28 @@ async fn present_screen(
         Ok(carrier) => state.carrier = carrier,
         Err(()) => return false,
     }
-    match screen_event(
-        surface_id,
-        log,
-        input_sequence,
-        Some(&*state),
-        screen,
-        &layout,
-    ) {
+    let surface = surface_id.to_string();
+    let segment = log.boot().to_string();
+    let screen = screen.clone();
+    let frame = shown_frame(Some(state));
+    // default: render metadata is absent when diagnostic frame tracing is disabled.
+    let render = state.render.clone().unwrap_or(Value::Null);
+    match prepare_screen_line(move || {
+        let body = screen_message_with_layout(
+            &segment,
+            input_sequence,
+            frame,
+            render,
+            &screen,
+            &layout,
+            true,
+        )?;
+        Ok(json!({"surface": surface, "body": body}).to_string())
+    })
+    .await
+    {
         Ok(line) => {
-            if output_tx.send(line.to_string()).await.is_err() {
+            if output_tx.send(line).await.is_err() {
                 return false;
             }
         }
@@ -5597,3 +5609,16 @@ fn base64_encode(data: &[u8]) -> String {
 #[cfg(test)]
 #[path = "../tests/support/protocol_test.rs"]
 mod tests;
+
+/// Prepares one complete screen line before its actor submits subsequent events.
+async fn prepare_screen_line(
+    work: impl FnOnce() -> Result<String, String> + Send + 'static,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|error| format!("screen preparation task failed: {error}"))?
+}
+
+#[cfg(test)]
+#[path = "../tests/support/screen_preparation_test.rs"]
+mod screen_preparation_test;

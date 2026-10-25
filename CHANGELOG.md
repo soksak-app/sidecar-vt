@@ -8,6 +8,8 @@
 
 ## Unreleased
 
+- S90: Prepare raster-associated screen JSON on the runtime blocking pool so its async worker remains available for image output. Keep complete screen/frame data and FIFO order; report preparation and task failures. The controlled Red becomes Green and seven focused owners pass. Both installed diagnostic hosts pass log audits and cleanup, while drag latency and capture acceptance remain open. S91 tracks an existing stale-response fixture failure reproduced on unchanged source.
+
 - S89-1: Install the diagnostic candidate in fresh host configurations and correlate all 104 completed supplier waits with exact host receipts and answers. Most measured time precedes host receipt; post-answer delay is below 0.521 ms. Both log audits and process cleanup pass, while both drag recordings still exceed the unchanged 33 ms cadence bound. No public release is included.
 
 - S89: Add the exact image name, generation, raster and sequence to the existing consumed-wait event. The served-protocol owner fails on the missing name before correction and passes afterward; all five catalog owners pass. The event remains debug-gated and its interval includes supplier actor and transport work. Installed application delivery remains pending.

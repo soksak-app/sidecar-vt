@@ -147,3 +147,5 @@ Native IME는 marked text를 소유한다. 각 native input report는 순서 있
 Packaged diagnostic owner는 `SOKSAK_DIAGNOSTIC_PACKAGE_RELEASE`의 release 또는 `SOKSAK_DIAGNOSTIC_PACKAGE_DIRECTORY`의 설치된 package directory를 검사한다. Application 활성화 없이 연속 ASCII 입력을 수행하여 종료 전 supplier 기록이 disk에 도달하는지 확인하고 종료 후 승인된 모든 기록을 확인한다. 실패한 실행은 diagnostic artifact를 보존한다.
 
 기존 debug event `sidecar.vt.consumed_wait`는 완료된 in-flight image identity를 `name`, `generation`, `raster`, `sequence`로 기록하며 `answer`, `wait_us`를 함께 기록한다. 구간은 image output 제출 전 시작하고 surface actor가 정확히 일치하는 응답을 처리할 때 끝난다. host presentation뿐 아니라 supplier actor 작업과 transport 지연을 포함한다. 기본 logging gate는 유지한다.
+
+Raster 관련 screen JSON 구성과 직렬화는 runtime blocking pool에서 실행한다. surface actor는 결과를 기다린 뒤 screen과 presentation event를 큐에 넣는다. image는 같은 FIFO output channel에서 해당 screen보다 앞선다. preparation 실패는 screen 오류로 보고하며 task 실패는 preparation context를 포함한다. surface마다 진행 중 preparation 하나만 유지하고 background history나 detached 작업은 추가하지 않는다.
