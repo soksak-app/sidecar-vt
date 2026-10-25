@@ -693,29 +693,8 @@ fn injected_wait_failure(_session_id: &str, _pid: u32) -> Result<(), String> {
 
 /// Test-only faults of the session reaper, compiled only with the fault-injection feature.
 #[cfg(feature = "fault-injection")]
-pub mod fault {
-    use std::sync::Mutex;
-
-    /// The identifiers of the sessions whose next wait fails.
-    static FAILING_WAITS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
-    /// Makes the next wait of the child of the session `session_id` fail.
-    pub fn fail_wait_of(session_id: &str) {
-        FAILING_WAITS.lock().unwrap().push(session_id.to_string());
-    }
-
-    /// Whether the next wait of the session fails; the failure is taken once.
-    pub(crate) fn take_wait_failure(session_id: &str) -> bool {
-        let mut failing = FAILING_WAITS.lock().unwrap();
-        match failing.iter().position(|id| id == session_id) {
-            Some(index) => {
-                failing.remove(index);
-                true
-            }
-            None => false,
-        }
-    }
-}
+#[path = "../tests/pty/wait_fault_test.rs"]
+pub mod fault;
 
 /// Records the SIGKILL that closing a session sent to its process group or its child, and what it reached.
 fn record_kill(session: &Session, target: &str, id: i32, result: KillResult) {

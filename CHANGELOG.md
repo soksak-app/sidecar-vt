@@ -8,6 +8,8 @@
 
 ## Unreleased
 
+- S88-4-1: Place the remaining feature-gated PTY wait-fault fixture in its owning test directory with its public module and behavior unchanged. The existing one-shot wait-failure owner passes. Two test-only source matches leave production classification; 20 production matches remain. No census criteria or exclusions change.
+
 - S88-6: Recover PTY output and attachment locks without replacing retained data or receivers. Record each field recovery once with its session identity. Three controlled Red cases become Green and three existing replay/buffer owners pass. The source census decreases from 29 to 22 findings; local diagnostic delivery remains pending.
 
 - S88-5: Recover the image transfer store after poisoning with its connection event writer. Retain frame ownership and ended state, report recovery once and keep exact-answer release. Three controlled Red cases become Green and four existing connection/image owners pass. The source census decreases from 30 to 29 findings, all in PTY. Installed application delivery remains pending.
