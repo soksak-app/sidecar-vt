@@ -8,6 +8,8 @@
 
 ## Unreleased
 
+- S88-3: Recover the PTY session registry at its six production access sites, retain the shared map and record each poisoning once. Three controlled Red cases become Green, and real PTY close/exit and reattach owners pass. Unknown-session errors remain unchanged. The source census decreases from 47 to 41 findings; local package delivery remains pending.
+
 - S88-2: Recover the engine event queue after poisoning, retain FIFO events and report one internal runtime error through the existing structured error writer. Separate internal runtime failures from program sequence rejections, including headless operation. Four controlled owners and three existing event owners pass. The source census decreases from 55 to 47 findings. Installed application delivery remains pending.
 
 - S88-1: Document the valid optional caret, viewport, blank-row and diagnostic metadata defaults and replace the nonempty extent maximum fallback with a caret-seeded fold. Both frame owners pass. The current-core census decreases from 60 to 55 findings, all remaining findings concerning poisoned locks; the catalog accepts all 32 events. This is a conformance audit, not a new display fix.

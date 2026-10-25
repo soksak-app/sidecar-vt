@@ -13,7 +13,7 @@ use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use uuid::Uuid;
 
@@ -258,10 +258,7 @@ impl PtyService {
             .unwrap()
             .insert(attachment_id.clone(), events);
 
-        self.sessions
-            .lock()
-            .unwrap()
-            .insert(session_id.clone(), session.clone());
+        self.sessions().insert(session_id.clone(), session.clone());
         session.log.emit_for(
             Level::Info,
             "sidecar.vt.session_open",
@@ -280,13 +277,7 @@ impl PtyService {
         // handle은 session이 게시된 뒤에 설치된다. close는 그 join을
         // request 경로에서 분리하므로 멈춘 PTY reader가 이후의 session open을
         // 막을 수 없다.
-        let session = self
-            .sessions
-            .lock()
-            .unwrap()
-            .get(&session_id)
-            .cloned()
-            .unwrap();
+        let session = self.sessions().get(&session_id).cloned().unwrap();
         *session.reader.lock().unwrap() = Some(reader_handle);
         let session_for_reaper = session.clone();
         let reaper_handle = crate::thread::start(&self.log, "pty-reaper", move || {
@@ -470,15 +461,13 @@ impl PtyService {
         if let Err(error) = joined {
             session.log.record_error("pty close", error);
         }
-        self.sessions.lock().unwrap().remove(session_id);
+        self.sessions().remove(session_id);
         kill_result
     }
 
     pub fn close_owner(&self, owner: &str) -> Result<(), String> {
         let ids = self
-            .sessions
-            .lock()
-            .unwrap()
+            .sessions()
             .values()
             .filter(|session| session.owner == owner)
             .map(|session| session.id.clone())
@@ -490,7 +479,7 @@ impl PtyService {
     }
 
     pub fn session_count(&self) -> usize {
-        self.sessions.lock().unwrap().len()
+        self.sessions().len()
     }
 
     pub fn process_id(&self, session_id: &str) -> Result<u32, String> {
@@ -499,10 +488,20 @@ impl PtyService {
         process_id.ok_or_else(|| "PTY child has no process id".to_string())
     }
 
+    fn sessions(&self) -> MutexGuard<'_, HashMap<String, Arc<Session>>> {
+        self.sessions.lock().unwrap_or_else(|error| {
+            let sessions = error.into_inner();
+            self.log.record_error(
+                "pty registry",
+                "session registry lock was poisoned; sessions retained",
+            );
+            self.sessions.clear_poison();
+            sessions
+        })
+    }
+
     fn session(&self, session_id: &str) -> Result<Arc<Session>, String> {
-        self.sessions
-            .lock()
-            .unwrap()
+        self.sessions()
             .get(session_id)
             .cloned()
             .ok_or_else(|| format!("session {session_id} not found"))
@@ -1155,3 +1154,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/pty/registry_poison_test.rs"]
+mod registry_poison_test;
