@@ -8,6 +8,8 @@
 
 ## Unreleased
 
+- S88-2-1: Deliver the verified recovery corrections in a locally installed Darwin diagnostic package. The package owner passes with metadata, engine trace and continuous logging; both application hosts preserve the shared service and reap all terminal children after completed retention. Source fixtures prove injected poison recovery. No public release or IME acceptance is included.
+
 - S88-7: Recover the remaining PTY session field guards and poisoned child condition waits without reconstructing stored values. Ten controlled Red cases become Green and eight existing Rust owners pass. Both current-core catalog/census owners pass; the VT source audit S88 closes with zero findings, pending rules and marker errors, while local application delivery remains pending.
 
 - S88-4-1: Place the remaining feature-gated PTY wait-fault fixture in its owning test directory with its public module and behavior unchanged. The existing one-shot wait-failure owner passes. Two test-only source matches leave production classification; 20 production matches remain. No census criteria or exclusions change.

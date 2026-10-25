@@ -8,6 +8,8 @@
 
 ## 미배포
 
+- S88-2-1: 검증된 recovery 수정을 로컬 설치 Darwin diagnostic package에 전달한다. Package owner가 metadata, engine trace와 연속 logging으로 통과하며 양쪽 application host는 retention 완료 후 shared service를 유지하고 모든 terminal child를 회수한다. 주입된 poison recovery는 source fixture가 입증한다. Public release나 IME acceptance는 포함하지 않는다.
+
 - S88-7: 저장한 값을 재구성하지 않고 남은 PTY session 필드 guard와 poisoned child condition wait를 회수한다. 제어된 Red case 열 개가 Green이 되고 기존 Rust owner 여덟 개가 통과한다. current-core catalog/census owner 두 개가 통과하며 VT source 감사 S88은 finding, pending rule, marker 오류 0개로 완료한다. local application 전달은 남아 있다.
 
 - S88-4-1: 남은 feature-gated PTY wait-fault fixture를 공개 module 및 동작을 유지하며 소유 test 디렉터리에 배치한다. 기존 일회성 wait-failure owner가 통과한다. test 전용 source match 두 개를 production 분류에서 분리하며 production match 20개가 남는다. census 기준이나 제외 설정은 바꾸지 않는다.
