@@ -8,6 +8,8 @@
 
 ## Unreleased
 
+- S89: Add the exact image name, generation, raster and sequence to the existing consumed-wait event. The served-protocol owner fails on the missing name before correction and passes afterward; all five catalog owners pass. The event remains debug-gated and its interval includes supplier actor and transport work. Installed application delivery remains pending.
+
 - S86-1: Integrate the schema-3 catalog and bounded event writer with
   the current VT 0.0.17 protocol source. The diagnostic service builds
   against the installed native package 0.0.21; 14 writer cases and five

@@ -320,14 +320,30 @@
           },
           "answer": {
             "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "number"
+          },
+          "raster": {
+            "type": "number"
+          },
+          "sequence": {
+            "type": "number"
           }
         },
         "required": [
           "wait_us",
-          "answer"
+          "answer",
+          "name",
+          "generation",
+          "raster",
+          "sequence"
         ]
       },
-      "description": "The time from sending a frame to the answer of the host."
+      "description": "The interval from image submission to handling its matching host answer, with the complete frame identity."
     },
     "sidecar.vt.runtime_stall": {
       "layer": "sidecar",

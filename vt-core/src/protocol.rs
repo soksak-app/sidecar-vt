@@ -3975,8 +3975,13 @@ async fn surface_task(
                                 && (consumed.is_some() || is_error));
                         if releases_pending {
                             // 전송 완료 대기의 계기(V5-104): 보낸 순간부터 consumed/오류 응답까지.
-                            if let Some(sent) = image_state.as_mut().unwrap().sent_at.take() {
+                            let state = image_state.as_mut().unwrap();
+                            if let Some(sent) = state.sent_at.take() {
                                 log.emit_for(Level::Debug, "sidecar.vt.consumed_wait", Subject::surface(&surface_id), &serde_json::json!({
+                                    "name": state.name,
+                                    "generation": state.generation,
+                                    "raster": state.raster,
+                                    "sequence": state.sequence,
                                     "wait_us": sent.elapsed().as_micros() as u64,
                                     "answer": if consumed.is_some() { "consumed" } else { "error" },
                                 }));

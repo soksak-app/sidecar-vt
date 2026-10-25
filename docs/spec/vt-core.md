@@ -143,3 +143,5 @@ Repeat acceptance uses the full-screen fixture TUI (`e2e/fixture-tui.mjs`), whic
 Each explicit flush acknowledges its own FIFO marker after writing preceding records; it does not consume later flush or stop markers.
 
 The packaged diagnostic owner accepts a release through `SOKSAK_DIAGNOSTIC_PACKAGE_RELEASE` or an installed package directory through `SOKSAK_DIAGNOSTIC_PACKAGE_DIRECTORY`. It exercises continuous ASCII input without application activation, checks that supplier records reach disk before shutdown, and checks all accepted records after shutdown. Failed runs retain their diagnostic artifacts.
+
+The existing debug event `sidecar.vt.consumed_wait` records the completed in-flight image identity as `name`, `generation`, `raster` and `sequence`, together with `answer` and `wait_us`. The interval starts before image output submission and ends when the surface actor handles its exact matching answer; it includes supplier actor work and transport delay, not only host presentation. Default logging gates remain unchanged.

@@ -276,7 +276,7 @@ async fn the_answer_of_the_host_to_a_frame_is_the_event_consumed_wait() {
         &events,
         br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","body":{"image":{"consumed":{"name":"view","sequence":1}}}}
+{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
 "#,
     )
     .await;
@@ -285,6 +285,10 @@ async fn the_answer_of_the_host_to_a_frame_is_the_event_consumed_wait() {
     assert_eq!(waits[0]["level"], "debug");
     assert_eq!(waits[0]["surface"], "s1");
     assert_eq!(waits[0]["fields"]["answer"], "consumed");
+    assert_eq!(waits[0]["fields"]["name"], "view");
+    assert_eq!(waits[0]["fields"]["generation"], 1);
+    assert_eq!(waits[0]["fields"]["raster"], 1);
+    assert_eq!(waits[0]["fields"]["sequence"], 1);
     assert!(waits[0]["fields"]["wait_us"].is_u64(), "{}", waits[0]);
 }
 

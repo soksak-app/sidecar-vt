@@ -145,3 +145,5 @@ Native IME는 marked text를 소유한다. 각 native input report는 순서 있
 각 명시적 flush는 앞선 기록을 쓴 뒤 자신의 FIFO marker에 응답하며 이후 flush 또는 stop marker를 소비하지 않는다.
 
 Packaged diagnostic owner는 `SOKSAK_DIAGNOSTIC_PACKAGE_RELEASE`의 release 또는 `SOKSAK_DIAGNOSTIC_PACKAGE_DIRECTORY`의 설치된 package directory를 검사한다. Application 활성화 없이 연속 ASCII 입력을 수행하여 종료 전 supplier 기록이 disk에 도달하는지 확인하고 종료 후 승인된 모든 기록을 확인한다. 실패한 실행은 diagnostic artifact를 보존한다.
+
+기존 debug event `sidecar.vt.consumed_wait`는 완료된 in-flight image identity를 `name`, `generation`, `raster`, `sequence`로 기록하며 `answer`, `wait_us`를 함께 기록한다. 구간은 image output 제출 전 시작하고 surface actor가 정확히 일치하는 응답을 처리할 때 끝난다. host presentation뿐 아니라 supplier actor 작업과 transport 지연을 포함한다. 기본 logging gate는 유지한다.
