@@ -4,6 +4,26 @@
 
 ## 미배포
 
+- S86-1: Schema-3 catalog와 bounded event writer를 현재 VT 0.0.17
+  protocol source와 통합한다. 설치된 native package 0.0.21로 diagnostic
+  service가 build되고 writer 14 case 및 catalog 선언/emit-name 5 case가
+  통과한다. Current-core catalog 검증은 event 32개를 수락하지만 전체 census는
+  S88에서 추적하는 기존 source 60곳을 보고한다. Source integration으로 설치
+  package 검증이나 publication 통과를 주장하지 않는다.
+
+- S86: 도착 메시지와 독립적으로 event-writer batch deadline을 유지한다.
+  연속 non-error traffic이 더 이상 입력이 멈출 때까지 100 ms flush를 미루지
+  않는다. 새 owner는 수정 전에 268 ms 연속 입력 중 저장 기록 0개를 재현하고
+  수정 후 event-contract 14 case가 수락 이벤트 순서를 유지하며 통과한다.
+  Integration, diagnostic package delivery 및 publication은 열어 둔다.
+
+- F239-77-vt-sidecar: VT 0.0.17 package catalog를 schema 3 JSON Schema로
+  변환하고 event와 chain 선언을 유지한다. Red: 현재 core reader가 schema-2와
+  compact-field 문제를 보고했다. Green: focused catalog test와 current-core
+  catalog 검사가 통과한다. Runtime acceptance에는 current schema-3 plugin
+  catalog를 새로 설치해야 하며 candidate의 P47 executable과 replay bytes는
+  그대로 유지한다.
+
 - S85: S84의 current ordered input transaction을 검증하는 VT 0.0.17
   local diagnostics candidate를 준비한다. Archive smoke는 strict insert action과
   필수 최종 preedit을 보내고 correlated acknowledgement 및 일치하는

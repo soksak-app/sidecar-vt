@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::json;
@@ -167,7 +167,7 @@ pub struct Options {
     pub queue_events: usize,
     /// The bound of the queue in bytes of serialized fields.
     pub queue_bytes: usize,
-    /// How long the writer waits for more events before it writes a batch.
+    /// The maximum interval between batch flushes while events continue arriving.
     pub batch_interval: Duration,
     /// The size at which the writer starts a new file; the file that was full becomes generation 1.
     pub rotate_bytes: u64,
@@ -1314,15 +1314,22 @@ fn write_loop(
         out.flush();
         request
     };
+    let mut flushed = Instant::now();
     loop {
-        let message = match receiver.recv_timeout(interval) {
+        // A busy receiver may never time out, so arrivals cannot determine the batch deadline.
+        if flushed.elapsed() >= interval {
+            record_loss(&mut out);
+            out.flush();
+            flushed = Instant::now();
+        }
+        let wait = interval.saturating_sub(flushed.elapsed());
+        let message = match receiver.recv_timeout(wait) {
             Ok(message) => message,
             Err(RecvTimeoutError::Timeout) => {
-                // The interval ended: write what has gathered, and handle a request that was queued behind it.
-                match drain(&mut out) {
-                    Some(request) => request,
-                    None => continue,
-                }
+                record_loss(&mut out);
+                out.flush();
+                flushed = Instant::now();
+                continue;
             }
             Err(RecvTimeoutError::Disconnected) => {
                 drain(&mut out);
@@ -1336,10 +1343,12 @@ fn write_loop(
                 if urgent {
                     record_loss(&mut out);
                     out.flush();
+                    flushed = Instant::now();
                 }
             }
             Message::Flush(done) => {
                 let following = drain(&mut out);
+                flushed = Instant::now();
                 if done.send(()).is_err() {
                     out.record_failure("the flush was answered after its deadline".into());
                 }

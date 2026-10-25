@@ -4,6 +4,28 @@
 
 ## Unreleased
 
+- S86-1: Integrate the schema-3 catalog and bounded event writer with
+  the current VT 0.0.17 protocol source. The diagnostic service builds
+  against the installed native package 0.0.21; 14 writer cases and five
+  catalog declaration/emit-name cases pass. Current-core catalog validation
+  accepts all 32 events, while its full census reports 60 existing source
+  findings tracked by S88. No installed-package or publication pass is
+  claimed by this source integration.
+
+- S86: Keep the event-writer batch deadline independent of arriving
+  messages. Continuous non-error traffic no longer postpones the 100 ms
+  flush until input becomes idle. The new owner reproduces zero stored
+  records during 268 ms of continuous input before correction; all 14
+  event-contract cases pass afterward, preserving accepted-event order.
+  Integration, diagnostic package delivery and publication remain open.
+
+- F239-77-vt-sidecar: Convert the VT 0.0.17 package catalog to schema 3 JSON
+  Schema while preserving its event and chain declarations. Red: the current
+  core reader reported schema-2 and compact-field findings. Green: the focused
+  catalog test and current-core catalog check pass. Runtime acceptance requires
+  a fresh install with current schema-3 plugin catalogs; the candidate keeps the
+  P47 executable and replay bytes unchanged.
+
 - S85: Prepare the local VT 0.0.17 diagnostics candidate for S84's current
   ordered input transaction. The archive smoke sends a strict insert action and
   required final preedit, checks the correlated acknowledgement and matching

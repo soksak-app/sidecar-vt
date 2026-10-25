@@ -31,6 +31,10 @@ For an exact configured name and generation, the sidecar removes that generation
 
 The acknowledgement means the render attachment, pending configuration, and requested image have been detached. An already-sent image transfer remains immutable and retained under its existing lifetime rule until its exact `consumed` or error response, or connection end; detach does not free or move that lease. Image responses match the full name, generation, raster, and sequence identity, so a late response for a detached image cannot release a newer generation's pending draw. `open` without `image` is allowed after the acknowledgement and reuses the existing session. A later image-bearing `open` and `configure` may attach a new generation to that session. `close` continues to close the PTY and is not an image-detach operation. The message envelope remains protocol 1; no persisted format changes.
 
+## Event writer
+
+The service follows the shared event-log contract. Its 100 ms batch interval bounds the age of a pending batch from the preceding flush; receiving another event does not restart that deadline. Errors and explicit flush requests write pending records immediately.
+
 ## Persistent terminal service
 
 The sections below are the terminal service contract that this repository holds. The service itself is defined by [persistent services](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.md); the other core specifications that these sections name are referred to by their names only.

@@ -31,6 +31,10 @@ Host는 terminal session을 닫지 않고 native image owner를 해제하기 위
 
 Acknowledgement는 render attachment, 대기 중 configuration, 요청 image가 분리되었음을 뜻한다. 이미 보낸 image transfer는 기존 수명 규칙에 따라 정확히 일치하는 `consumed` 또는 오류 응답을 받거나 연결이 끝날 때까지 불변으로 보존한다. Detach는 해당 lease를 해제하거나 옮기지 않는다. Image 응답은 name, generation, raster, sequence 전체가 일치해야 하므로 분리된 image의 늦은 응답이 새 generation의 pending draw를 해제할 수 없다. Acknowledgement 뒤 image 없는 `open`은 허용되며 기존 session을 재사용한다. 이후 image가 있는 `open`과 `configure`는 같은 session에 새 generation을 연결할 수 있다. `close`는 계속 PTY를 닫으며 image detach 용도로 쓰지 않는다. Message envelope는 protocol 1을 유지하고 저장 형식은 바꾸지 않는다.
 
+## Event writer
+
+Service는 공통 event-log contract를 따른다. 100 ms batch interval은 이전 flush부터 pending batch의 대기 시간을 제한하며 다른 이벤트를 받아도 deadline을 다시 시작하지 않는다. Error 및 명시적 flush 요청은 pending 기록을 즉시 쓴다.
+
 ## 영속 터미널 서비스
 
 아래 절은 이 저장소가 가진 터미널 서비스 계약이다. 서비스 자체는 [영속 서비스](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.ko.md)가 정의하며, 이 절들이 이름만 드는 다른 core 명세는 이름으로만 가리킨다.

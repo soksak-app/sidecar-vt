@@ -7,7 +7,7 @@ use soksak_sidecar_vt_core::events::{
 };
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
@@ -549,5 +549,76 @@ fn a_line_without_seq_is_refused_by_the_run_reader() {
     assert!(
         error.contains("vt-b1.jsonl:2"),
         "the error does not name the line: {error}"
+    );
+}
+
+#[test]
+fn continuous_events_do_not_postpone_the_batch_deadline() {
+    let dir = directory("continuous-batch");
+    let mut configured = options(&dir);
+    let interval = Duration::from_millis(100);
+    configured.batch_interval = interval;
+    let log = EventLog::start(configured).unwrap();
+    log.flush(DEADLINE).unwrap();
+    let (_pace, pacing) = std::sync::mpsc::channel::<()>();
+    let mut previous = Instant::now();
+    let began = previous;
+    let mut longest = Duration::ZERO;
+    for index in 0..40 {
+        let now = Instant::now();
+        longest = longest.max(now.duration_since(previous));
+        previous = now;
+        assert!(log.emit(Level::Info, "sidecar.vt.test", &json!({"index": index})));
+        // Timed input is the workload: no external event supplies a continuous producer's cadence.
+        if index < 39 {
+            assert!(matches!(
+                pacing.recv_timeout(Duration::from_millis(5)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ));
+        }
+    }
+    let elapsed = began.elapsed();
+    let bytes = std::fs::read(log.path()).unwrap();
+    // Observe only newline-committed records while the writer is live, and report an unfinished tail.
+    let committed = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |index| index + 1);
+    let prefix = std::str::from_utf8(&bytes[..committed]).unwrap();
+    let during: Vec<Value> = prefix
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let stored = during
+        .iter()
+        .filter(|event| event["event"] == "sidecar.vt.test")
+        .count();
+    eprintln!(
+        "continuous input: elapsed {elapsed:?}, longest gap {longest:?}, stored {stored}, tail bytes {}",
+        bytes.len() - committed
+    );
+    log.flush(DEADLINE).unwrap();
+    let complete = lines_of(log.path());
+    let indices: Vec<u64> = complete
+        .iter()
+        .filter(|event| event["event"] == "sidecar.vt.test")
+        .map(|event| event["fields"]["index"].as_u64().unwrap())
+        .collect();
+    assert_eq!(
+        indices,
+        (0..40).collect::<Vec<_>>(),
+        "batch boundaries lost or reordered events"
+    );
+    assert!(
+        elapsed >= interval,
+        "the producer did not span a batch deadline"
+    );
+    assert!(
+        longest < interval,
+        "the producer became idle for {longest:?}"
+    );
+    assert!(
+        stored > 0,
+        "continuous events postponed the batch until input stopped"
     );
 }

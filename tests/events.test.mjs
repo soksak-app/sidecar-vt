@@ -30,7 +30,7 @@ function sources(directory = join(root, "vt-core/src")) {
 }
 
 test("the catalog declares the layer sidecar and events of the form sidecar.vt.<name>", () => {
-  assert.equal(catalog.schema, 2);
+  assert.equal(catalog.schema, 3);
   assert.deepEqual(catalog.layers, ["sidecar"]);
   assert.ok(Object.keys(catalog.events).length > 0);
   for (const [name, event] of Object.entries(catalog.events)) {
@@ -40,9 +40,12 @@ test("the catalog declares the layer sidecar and events of the form sidecar.vt.<
     for (const level of [event.level].flat()) assert.ok(LEVELS.includes(level), `${name}: level ${level}`);
     assert.equal(typeof event.description, "string", name);
     assert.ok(event.description.length > 0, name);
-    for (const [field, type] of Object.entries(event.fields)) {
-      // A type such as string|null accepts each of its parts (core docs/spec/logging.md#catalog).
-      for (const part of type.split("|")) assert.ok(TYPES.includes(part), `${name}.${field}: type ${type}`);
+    assert.equal(event.fields.$schema, "https://json-schema.org/draft/2020-12/schema", name);
+    assert.equal(event.fields.type, "object", name);
+    assert.ok(Array.isArray(event.fields.required), name);
+    for (const field of event.fields.required) assert.ok(Object.hasOwn(event.fields.properties, field), `${name}.${field}`);
+    for (const [field, property] of Object.entries(event.fields.properties)) {
+      for (const type of [property.type].flat()) assert.ok(TYPES.includes(type), `${name}.${field}: type ${type}`);
     }
   }
 });
