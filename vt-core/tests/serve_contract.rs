@@ -3845,7 +3845,7 @@ async fn test_i2_no_image_envelope_until_consumed() {
     });
 
     // 첫 image envelope를 기다린다
-    let _image_line1 =
+    let image_line1 =
         tokio::time::timeout(std::time::Duration::from_millis(500), lines.next_line())
             .await
             .expect("timeout on first image envelope")
@@ -3860,43 +3860,70 @@ async fn test_i2_no_image_envelope_until_consumed() {
         truncated: false,
     });
 
-    // 대신 screen event를 기다린다(300ms 안에 image envelope를 받지 않아야 한다)
-    let result =
-        tokio::time::timeout(std::time::Duration::from_millis(300), lines.next_line()).await;
-
-    // image envelope가 아니라 timeout 또는 screen event가 와야 한다
-    if let Ok(Ok(Some(line))) = result {
-        let json: serde_json::Value = serde_json::from_str(&line).expect("failed to parse JSON");
-        // image envelope\ub97c \ubc1b\uc558\ub2e4\uba74 \uc798\ubabb\ub41c \uac83\uc774\ub2e4
-        assert!(
-            json.get("body").and_then(|b| b.get("image")).is_none(),
-            "should NOT have image envelope before release"
-        );
-    }
-
-    // layout \uad50\uccb4\ub294 sidecar\uac00 \ubcf4\uae30 \uc804\uc5d0 \uc9c4\ud589 \uc911\uc778 response\ub97c stale\ub85c \ub9cc\ub4e4 \uc218 \uc788\ub2e4.
-    // \uadf8\ub798\ub3c4 \uadf8 response\ub294 \uc9c1\ub82c\ud654\ub41c \uc804\uc1a1\uc744 \ud574\uc81c\ud558\uc5ec dirty screen\uc744 \ubcf4\ub0bc \uc218 \uc788\uac8c \ud574\uc57c \ud55c\ub2e4.
-    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"error":"stale","name":"view","generation":2,"raster":9,"sequence":7}}}
-"#).await.unwrap();
-
-    // 2초 안에 두 번째 image envelope(sequence 2)를 기다린다
-    let mut found_sequence_2 = false;
-    for _ in 0..20 {
-        if let Ok(Ok(Some(line))) =
-            tokio::time::timeout(std::time::Duration::from_millis(100), lines.next_line()).await
-            && let Ok(json) = serde_json::from_str::<serde_json::Value>(&line)
-            && let Some(img) = json.get("body").and_then(|b| b.get("image"))
-            && img["sequence"] == 2
-        {
-            found_sequence_2 = true;
-            break;
+    // Absence has no event source: observe the entire existing 300 ms interval, including every screen line.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(300);
+    loop {
+        match tokio::time::timeout_at(deadline, lines.next_line()).await {
+            Err(_) => break,
+            Ok(line) => {
+                let line = line
+                    .expect("read before image release")
+                    .expect("connection ended before image release");
+                let message: serde_json::Value =
+                    serde_json::from_str(&line).expect("valid message before image release");
+                assert!(
+                    message["body"].get("image").is_none(),
+                    "image arrived before release: {message}"
+                );
+            }
         }
     }
 
+    // An error releases only the exact image in flight, including its generation and raster.
+    let first: serde_json::Value =
+        serde_json::from_str(&image_line1).expect("the first image envelope is valid JSON");
+    let image = first["body"]["image"]
+        .as_object()
+        .expect("the first envelope contains an image");
     assert!(
-        found_sequence_2,
-        "should get image envelope with sequence 2 after release"
+        image.contains_key("token"),
+        "the first envelope contains the native image token"
     );
+    let answer = serde_json::json!({"surface": "s1", "body": {"image": {
+        "error": "stale",
+        "name": image["name"],
+        "generation": image["generation"],
+        "raster": image["raster"],
+        "sequence": image["sequence"],
+    }}});
+    to_serve
+        .write_all(format!("{answer}\n").as_bytes())
+        .await
+        .unwrap();
+
+    let next_image = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let line = lines
+                .next_line()
+                .await
+                .expect("read after image release")
+                .expect("connection ended before the second image");
+            let message: serde_json::Value =
+                serde_json::from_str(&line).expect("valid message after image release");
+            if let Some(image) = message["body"].get("image") {
+                break image.clone();
+            }
+        }
+    })
+    .await
+    .expect("second image did not arrive after the matching answer");
+    assert!(
+        next_image.get("token").is_some(),
+        "the second image has a native token"
+    );
+    assert_eq!(next_image["sequence"], 2);
+    assert_eq!(next_image["generation"], image["generation"]);
+    assert_eq!(next_image["raster"], image["raster"]);
 
     drop(to_serve);
     task.await.unwrap().unwrap();

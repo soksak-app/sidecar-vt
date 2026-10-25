@@ -8,6 +8,8 @@
 
 ## 미배포
 
+- S91: pending-image fixture가 관계없는 stale identity 대신 실제 첫 frame에 응답하게 한다. 이전 fixture는 unchanged source에서 실패하며 정확한 frame 계약과 충돌한다. 수정 owner는 기존 image 부재 구간 전체를 관측하고 다음 frame identity를 검증해 통과하며 production 코드와 시간 제한은 바꾸지 않는다.
+
 - S90: raster 관련 screen JSON을 runtime blocking pool에서 준비해 async worker가 image output을 처리할 수 있게 한다. 완전한 screen/frame 데이터와 FIFO 순서를 유지하며 preparation 및 task 실패를 보고한다. 제어된 Red가 Green이 되고 집중 owner 일곱 개가 통과한다. 두 설치 diagnostic host의 log 감사와 정리가 통과하지만 drag latency와 capture 수용은 미완료다. unchanged source에서 재현한 기존 stale-response fixture 실패는 S91로 추적한다.
 
 - S89-1: 새 host 설정에 diagnostic candidate를 설치하고 완료된 supplier wait 104개 전체를 정확한 host 수신 및 응답과 연결한다. 측정 시간 대부분은 host 수신 전이며 응답 후 지연은 0.521 ms 미만이다. 두 log 감사와 process 정리는 통과하지만 두 drag 기록은 변경하지 않은 33 ms cadence 기준을 계속 초과한다. 공개 release는 포함하지 않는다.
