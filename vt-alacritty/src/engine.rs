@@ -12,7 +12,7 @@ use soksak_sidecar_vt_core::{
     inline_image::parse as parse_inline_image,
 };
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OscOutcome {
@@ -518,9 +518,26 @@ impl EventQueue {
         })
     }
 
+    fn entries(&self) -> MutexGuard<'_, VecDeque<QueuedEvent>> {
+        self.events
+            .lock()
+            // default: poison retains a valid VecDeque; report recovery before clearing the flag.
+            .unwrap_or_else(|error| {
+                let mut events = error.into_inner();
+                events.push_back(QueuedEvent::Neutral(EngineEvent::RuntimeError(
+                    "engine event queue lock was poisoned; queued events retained".to_string(),
+                )));
+                self.events.clear_poison();
+                events
+            })
+    }
+
+    fn push(&self, event: QueuedEvent) {
+        self.entries().push_back(event);
+    }
+
     fn drain(&self) -> Vec<QueuedEvent> {
-        let mut events = self.events.lock().expect("engine event queue poisoned");
-        events.drain(..).collect()
+        self.entries().drain(..).collect()
     }
 }
 
@@ -529,11 +546,7 @@ struct EventSink(Arc<EventQueue>);
 
 impl EventListener for EventSink {
     fn send_event(&self, event: Event) {
-        self.0
-            .events
-            .lock()
-            .expect("engine event queue poisoned")
-            .push_back(QueuedEvent::Alacritty(event));
+        self.0.push(QueuedEvent::Alacritty(event));
     }
 }
 
@@ -749,11 +762,7 @@ impl AlacrittyEngine {
                 });
             }
             if let Some(event) = event {
-                self.events
-                    .events
-                    .lock()
-                    .expect("engine event queue poisoned")
-                    .push_back(QueuedEvent::Neutral(event));
+                self.events.push(QueuedEvent::Neutral(event));
             }
             self.pending_osc.clear();
         }
@@ -1184,10 +1193,7 @@ impl AlacrittyEngine {
             };
             if let Some(selector) = unsupported {
                 self.events
-                    .events
-                    .lock()
-                    .expect("engine event queue poisoned")
-                    .push_back(QueuedEvent::Neutral(EngineEvent::Error(format!(
+                    .push(QueuedEvent::Neutral(EngineEvent::Error(format!(
                         "unsupported CSI {selector}"
                     ))));
             }
@@ -1277,19 +1283,13 @@ impl AlacrittyEngine {
             match parse_inline_image(&payload) {
                 Ok(command) => self
                     .events
-                    .events
-                    .lock()
-                    .expect("engine event queue poisoned")
-                    .push_back(QueuedEvent::Neutral(EngineEvent::InlineImage {
+                    .push(QueuedEvent::Neutral(EngineEvent::InlineImage {
                         command,
                         anchor,
                     })),
                 Err(error) => self
                     .events
-                    .events
-                    .lock()
-                    .expect("engine event queue poisoned")
-                    .push_back(QueuedEvent::Neutral(EngineEvent::Error(error))),
+                    .push(QueuedEvent::Neutral(EngineEvent::Error(error))),
             }
         }
     }
@@ -1391,13 +1391,9 @@ impl AlacrittyEngine {
             .pending_clipboard
             .remove(&request_id)
             .ok_or_else(|| format!("unknown clipboard request {request_id}"))?;
-        self.events
-            .events
-            .lock()
-            .expect("engine event queue poisoned")
-            .push_back(QueuedEvent::Neutral(EngineEvent::PtyWrite(
-                callback(text).into_bytes(),
-            )));
+        self.events.push(QueuedEvent::Neutral(EngineEvent::PtyWrite(
+            callback(text).into_bytes(),
+        )));
         Ok(())
     }
 
@@ -1662,10 +1658,7 @@ impl Engine for AlacrittyEngine {
             Err(error) => {
                 if self.prompt_start.is_some() {
                     self.events
-                        .events
-                        .lock()
-                        .expect("engine event queue poisoned")
-                        .push_back(QueuedEvent::Neutral(EngineEvent::Error(format!(
+                        .push(QueuedEvent::Neutral(EngineEvent::Error(format!(
                             "terminal resize: {error}"
                         ))));
                 }
@@ -1861,3 +1854,7 @@ impl Engine for AlacrittyEngine {
         *self = Self::new();
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/engine/poisoned_queue_test.rs"]
+mod poisoned_queue_test;

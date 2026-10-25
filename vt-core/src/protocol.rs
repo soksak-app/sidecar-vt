@@ -682,6 +682,8 @@ pub enum EngineEvent {
     /// OSC 22 가 정한 포인터 모양. CSS cursor 값이다.
     PointerShape(String),
     Error(String),
+    /// An internal engine failure, recorded independently of surface output.
+    RuntimeError(String),
 }
 
 /// 인라인 그림 시퀀스를 만났을 때의 커서 칸과 스크롤 세대. 그림은 이 자리에 놓인다.
@@ -2744,6 +2746,9 @@ async fn send_engine_events(
                 if output_tx.send(response.to_string()).await.is_err() {
                     return false;
                 }
+            }
+            EngineEvent::RuntimeError(reason) => {
+                log.record_error("engine", reason);
             }
             EngineEvent::Error(reason) => {
                 if !emit_surface_events {

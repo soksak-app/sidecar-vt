@@ -22,6 +22,7 @@ use tokio::sync::mpsc;
 struct TraceEngine {
     cols: u16,
     rows: u16,
+    runtime_error: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -36,7 +37,11 @@ impl Engine for TraceEngine {
     }
     fn feed(&mut self, _bytes: &[u8]) {}
     fn drain_events(&mut self) -> Vec<EngineEvent> {
-        Vec::new()
+        self.runtime_error
+            .take()
+            .map(EngineEvent::RuntimeError)
+            .into_iter()
+            .collect()
     }
     fn resolve_clipboard(&mut self, _request_id: u64, _text: &str) -> Result<(), String> {
         Ok(())
@@ -1269,5 +1274,33 @@ async fn an_open_without_image_for_a_surface_with_an_image_is_refused_and_its_ou
             .is_some_and(|reason| reason.contains("s1")),
         "{}",
         refusals[0]
+    );
+}
+
+#[tokio::test]
+async fn an_engine_runtime_error_is_logged_instead_of_a_sequence_rejection() {
+    let events = TestEvents::new();
+    let engine_factory = Arc::new(|| {
+        Box::new(TraceEngine {
+            runtime_error: Some("fixture engine queue recovery".to_string()),
+            ..TraceEngine::default()
+        }) as Box<dyn Engine>
+    });
+    let factory = Arc::new(|| Arc::new(TracePort) as Arc<dyn SessionPort>);
+    let replies = serve_with(&events, engine_factory, factory,
+        b"{\"surface\":\"s1\",\"root\":\"/tmp\",\"body\":{\"operation\":\"open\",\"shell\":\"/bin/sh\"}}\n{\"surface\":\"s1\",\"body\":{\"operation\":\"clipboard.resolve\",\"requestId\":1,\"text\":\"x\"}}\n").await;
+    let errors = events.named("sidecar.vt.record.error");
+    assert_eq!(
+        errors.len(),
+        1,
+        "the runtime failure must reach the structured error log: {errors:?}"
+    );
+    assert_eq!(errors[0]["fields"]["where"], "engine");
+    assert_eq!(errors[0]["fields"]["text"], "fixture engine queue recovery");
+    assert!(
+        !replies
+            .iter()
+            .any(|line| line.contains("sequence.rejected")),
+        "an internal engine failure is not a program sequence rejection"
     );
 }

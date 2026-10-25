@@ -8,6 +8,8 @@
 
 ## 미배포
 
+- S88-2: poisoning 후 engine event queue를 회수하고 FIFO event를 유지하며 내부 runtime 오류 하나를 기존 구조화 오류 writer로 보고한다. headless 동작에서도 내부 runtime 실패를 program sequence rejection과 구분한다. 제어된 owner 네 개와 기존 event owner 세 개가 통과한다. source census는 55건에서 47건으로 줄었다. 설치된 application 전달은 남아 있다.
+
 - S88-1: 정상적인 optional caret, viewport, blank-row 및 diagnostic metadata 기본값의 이유를 기록하고 비어 있지 않은 extent maximum의 fallback을 caret에서 시작하는 fold로 바꾼다. frame owner 두 개가 통과한다. current-core census는 60건에서 55건으로 줄고 남은 항목은 모두 poisoned lock이며 catalog는 event 32개를 수용한다. conformance 감사이며 새 display 수정은 아니다.
 
 - S91: pending-image fixture가 관계없는 stale identity 대신 실제 첫 frame에 응답하게 한다. 이전 fixture는 unchanged source에서 실패하며 정확한 frame 계약과 충돌한다. 수정 owner는 기존 image 부재 구간 전체를 관측하고 다음 frame identity를 검증해 통과하며 production 코드와 시간 제한은 바꾸지 않는다.
