@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "sidecar": "vt",
   "layers": [
     "sidecar"
@@ -20,7 +20,16 @@
       "class": "lifecycle",
       "level": "info",
       "fields": {
-        "role": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "role"
+        ]
       },
       "description": "The service started and accepts clients."
     },
@@ -29,7 +38,16 @@
       "class": "lifecycle",
       "level": "info",
       "fields": {
-        "owner": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "owner": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner"
+        ]
       },
       "description": "A client authenticated; owner is the name it gave."
     },
@@ -38,11 +56,38 @@
       "class": "lifecycle",
       "level": "info",
       "fields": {
-        "owner": "string",
-        "cwd": "string|null",
-        "cols": "number",
-        "rows": "number",
-        "pid": "number|null"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "owner": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cols": {
+            "type": "number"
+          },
+          "rows": {
+            "type": "number"
+          },
+          "pid": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "owner",
+          "cwd",
+          "cols",
+          "rows",
+          "pid"
+        ]
       },
       "description": "A terminal session started; the line names it in session. cwd and pid are null when unknown."
     },
@@ -51,7 +96,16 @@
       "class": "lifecycle",
       "level": "info",
       "fields": {
-        "status": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ]
       },
       "description": "The child of a session was reaped; status is the exit status."
     },
@@ -60,7 +114,16 @@
       "class": "lifecycle",
       "level": "error",
       "fields": {
-        "error": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
       },
       "description": "Waiting for the child of a session failed. The record is stored whether or not a view is attached."
     },
@@ -68,7 +131,12 @@
       "layer": "sidecar",
       "class": "lifecycle",
       "level": "info",
-      "fields": {},
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
       "description": "The read side of the PTY of a session ended."
     },
     "sidecar.vt.pty_read_error": {
@@ -76,7 +144,16 @@
       "class": "lifecycle",
       "level": "info",
       "fields": {
-        "error": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
       },
       "description": "Reading the PTY of a session failed."
     },
@@ -85,10 +162,27 @@
       "class": "io",
       "level": "info",
       "fields": {
-        "sequence": "number",
-        "hex": "string",
-        "ok": "boolean",
-        "error?": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "number"
+          },
+          "hex": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sequence",
+          "hex",
+          "ok"
+        ]
       },
       "description": "Bytes written to the PTY of a session, all of them as hex, with the cids of the inputs that caused the write. A replay input: sequence counts the inputs of the session from 1 (core docs/spec/replay.md). error is present when the write failed."
     },
@@ -97,8 +191,20 @@
       "class": "io",
       "level": "debug",
       "fields": {
-        "sequence": "number",
-        "hex": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "number"
+          },
+          "hex": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sequence",
+          "hex"
+        ]
       },
       "description": "Bytes of the output of the program that the engine of the session is fed with, all of them as hex. A replay input: sequence counts the inputs of the session from 1."
     },
@@ -107,11 +213,32 @@
       "class": "io",
       "level": "info",
       "fields": {
-        "operation": "string",
-        "owner": "string",
-        "connection": "number",
-        "idle_us": "number",
-        "us": "number"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "connection": {
+            "type": "number"
+          },
+          "idle_us": {
+            "type": "number"
+          },
+          "us": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "operation",
+          "owner",
+          "connection",
+          "idle_us",
+          "us"
+        ]
       },
       "description": "A request line of a client with its whole body, written when its handling ended; a line that is not JSON is body.unparsed."
     },
@@ -120,14 +247,41 @@
       "class": "frame",
       "level": "debug",
       "fields": {
-        "reason": "string",
-        "sequence": "number",
-        "rows": "number",
-        "cols": "number",
-        "hash": "string",
-        "draw_us?": "number",
-        "raster?": "string",
-        "image?": "number"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": "number"
+          },
+          "rows": {
+            "type": "number"
+          },
+          "cols": {
+            "type": "number"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "draw_us": {
+            "type": "number"
+          },
+          "raster": {
+            "type": "string"
+          },
+          "image": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "reason",
+          "sequence",
+          "rows",
+          "cols",
+          "hash"
+        ]
       },
       "description": "A frame of a surface was drawn: a frame record of core (docs/spec/replay.md). sequence is the sequence of the last input of the session that the screen includes, rows and cols the size of the screen, and hash the screen hash. image is the number of the image frame of the surface and raster its size in pixels, reason what caused the frame. A screen sent without a raster is a frame record too, without draw_us, raster and image."
     },
@@ -136,8 +290,20 @@
       "class": "lifecycle",
       "level": "info",
       "fields": {
-        "mode": "string",
-        "cause": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string"
+          },
+          "cause": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "cause"
+        ]
       },
       "description": "The drawing mode that an open or an applied image configure left on a surface: image draws the output of the session, headless feeds it without drawing. cause is open or configure."
     },
@@ -146,8 +312,20 @@
       "class": "frame",
       "level": "debug",
       "fields": {
-        "wait_us": "number",
-        "answer": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "wait_us": {
+            "type": "number"
+          },
+          "answer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "wait_us",
+          "answer"
+        ]
       },
       "description": "The time from sending a frame to the answer of the host."
     },
@@ -156,7 +334,16 @@
       "class": "lifecycle",
       "level": "warn",
       "fields": {
-        "late_ms": "number"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "late_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "late_ms"
+        ]
       },
       "description": "The heartbeat of the runtime of the service was late_ms milliseconds late, 1 s or more: no task of the runtime ran in that time."
     },
@@ -165,8 +352,19 @@
       "class": "lifecycle",
       "level": "warn",
       "fields": {
-        "path": "string",
-        "error?": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ]
       },
       "description": "The file in the logs folder with the stacks of the threads of the service during a stall; error states why the file was not written."
     },
@@ -175,7 +373,16 @@
       "class": "lifecycle",
       "level": "info",
       "fields": {
-        "stalled_ms": "number"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "stalled_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "stalled_ms"
+        ]
       },
       "description": "The runtime of the service ran again after a stall of stalled_ms milliseconds."
     },
@@ -184,10 +391,28 @@
       "class": "lifecycle",
       "level": "info",
       "fields": {
-        "waited_us": "number",
-        "pending_polls": "number",
-        "since_last_poll_us": "number",
-        "bytes": "number"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "waited_us": {
+            "type": "number"
+          },
+          "pending_polls": {
+            "type": "number"
+          },
+          "since_last_poll_us": {
+            "type": "number"
+          },
+          "bytes": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "waited_us",
+          "pending_polls",
+          "since_last_poll_us",
+          "bytes"
+        ]
       },
       "description": "The read side of a connection waited one second or more for data."
     },
@@ -196,8 +421,20 @@
       "class": "lifecycle",
       "level": "info",
       "fields": {
-        "us": "number",
-        "bytes": "number"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "us": {
+            "type": "number"
+          },
+          "bytes": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "us",
+          "bytes"
+        ]
       },
       "description": "Writing a line to a client took 10 milliseconds or more."
     },
@@ -206,7 +443,16 @@
       "class": "lifecycle",
       "level": "info",
       "fields": {
-        "folder": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "folder": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "folder"
+        ]
       },
       "description": "The watch of the policy file is armed on folder, the parent folder of the policy file."
     },
@@ -215,8 +461,20 @@
       "class": "lifecycle",
       "level": "info",
       "fields": {
-        "vnode": "string",
-        "flags": "array"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "vnode": {
+            "type": "string"
+          },
+          "flags": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "vnode",
+          "flags"
+        ]
       },
       "description": "The kernel reported a change of the folder of the policy file or of the policy file: vnode is folder or file, and flags names the vnode events of the change."
     },
@@ -225,8 +483,20 @@
       "class": "lifecycle",
       "level": "error",
       "fields": {
-        "where": "string",
-        "text": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "where": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "where",
+          "text"
+        ]
       },
       "description": "An error that the service reports to its operator."
     },
@@ -235,8 +505,20 @@
       "class": "lifecycle",
       "level": "info",
       "fields": {
-        "where": "string",
-        "text": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "where": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "where",
+          "text"
+        ]
       },
       "description": "A fact that the service reports to its operator."
     },
@@ -249,10 +531,27 @@
       ],
       "result": true,
       "fields": {
-        "operation": "string",
-        "ok": "boolean",
-        "micros": "number",
-        "error?": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "micros": {
+            "type": "number"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation",
+          "ok",
+          "micros"
+        ]
       },
       "description": "A reply line that the service sent to the request of a client, in the result form of core: ok, the microseconds since the request was read, and the error as <code>: <text> for a failed request. The line carries the cids of the request."
     },
@@ -261,8 +560,20 @@
       "class": "lifecycle",
       "level": "info",
       "fields": {
-        "reason": "string",
-        "clients": "number"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "clients": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "reason",
+          "clients"
+        ]
       },
       "description": "The service stops. reason is SIGTERM, SIGINT, shutdown (the shutdown request of the last client), folder-removed (the service folder was removed), endpoint-removed (endpoint.json was removed) or endpoint-replaced (endpoint.json names another service). clients is the number of client tasks the service still holds."
     },
@@ -271,8 +582,19 @@
       "class": "lifecycle",
       "level": "info",
       "fields": {
-        "ok": "boolean",
-        "error?": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok"
+        ]
       },
       "description": "The serve loop returned and the queued events are flushed next. error is present when the service ended with an error."
     },
@@ -281,9 +603,23 @@
       "class": "lifecycle",
       "level": "info",
       "fields": {
-        "owner": "string",
-        "ok": "boolean",
-        "error?": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "owner": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "ok"
+        ]
       },
       "description": "The connection of a client ended. error is present when the connection ended with an error."
     },
@@ -292,10 +628,28 @@
       "class": "lifecycle",
       "level": "info",
       "fields": {
-        "target": "string",
-        "id": "number",
-        "signal": "string",
-        "result": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string"
+          },
+          "id": {
+            "type": "number"
+          },
+          "signal": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "id",
+          "signal",
+          "result"
+        ]
       },
       "description": "Closing a session sent a signal to its process group or its child. target is process group or child, id is the group or the pid, and result is sent, ESRCH (nothing with that identifier exists any more) or EPERM when the members are ending."
     },
@@ -304,10 +658,28 @@
       "class": "lifecycle",
       "level": "warn",
       "fields": {
-        "buffer": "string",
-        "count": "number",
-        "bytes": "number",
-        "reason": "string"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "buffer": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          },
+          "bytes": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "buffer",
+          "count",
+          "bytes",
+          "reason"
+        ]
       },
       "description": "A buffer of a session refused or removed data. buffer is output ring (the oldest chunk left the ring that serves a client that attaches later) or broadcast (an attachment whose receiver was closed was removed)."
     },
@@ -316,9 +688,24 @@
       "class": "io",
       "level": "info",
       "fields": {
-        "sequence": "number",
-        "rows": "number",
-        "cols": "number"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "number"
+          },
+          "rows": {
+            "type": "number"
+          },
+          "cols": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "sequence",
+          "rows",
+          "cols"
+        ]
       },
       "description": "The engine of a session was resized to rows and cols. A replay input: sequence counts the inputs of the session from 1."
     },
@@ -327,10 +714,26 @@
       "class": "input",
       "level": "info",
       "fields": {
-        "sequence": "number",
-        "action": "string",
-        "edge?": "number",
-        "row?": "number"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "number"
+          },
+          "action": {
+            "type": "string"
+          },
+          "edge": {
+            "type": "number"
+          },
+          "row": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "sequence",
+          "action"
+        ]
       },
       "description": "The selection of a session changed. action is start, update, end or clear; edge (the cell boundary from 0 to the columns) and row (the row of the viewport) are present for start and update, as the service resolved them from the pointer. Only a call that took effect is stored. A replay input (core docs/spec/replay.md#view-state)."
     },
@@ -339,9 +742,22 @@
       "class": "input",
       "level": "info",
       "fields": {
-        "sequence": "number",
-        "lines?": "number",
-        "newest?": "boolean"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "number"
+          },
+          "lines": {
+            "type": "number"
+          },
+          "newest": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sequence"
+        ]
       },
       "description": "The viewport of a session moved. lines is the change of the offset into the scrollback after the engine limited it to the retained lines, positive toward older lines; newest is true for a move to the newest output. A move that changed nothing is not stored. A replay input (core docs/spec/replay.md#view-state)."
     },
@@ -350,8 +766,20 @@
       "class": "input",
       "level": "info",
       "fields": {
-        "sequence": "number",
-        "colors": "object"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "number"
+          },
+          "colors": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "sequence",
+          "colors"
+        ]
       },
       "description": "The theme of the engine of a session was put in force; the first input of every session is the theme in force. colors is the complete set of colors that the service resolves through the theme: foreground, background, cursor, selection and ansi0 to ansi255, each as #rrggbb in lowercase. A replay input (core docs/spec/replay.md#view-state)."
     }

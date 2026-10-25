@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- F239-77-vt-sidecar: Convert the VT 0.0.17 package catalog to schema 3 JSON
+  Schema while preserving its event and chain declarations. Red: the current
+  core reader reported schema-2 and compact-field findings. Green: the focused
+  catalog test and current-core catalog check pass. Runtime acceptance requires
+  a fresh install with current schema-3 plugin catalogs; the candidate keeps the
+  P47 executable and replay bytes unchanged.
+
+
 - S74: The VT sidecar embeds `sidecar.json.displayName` at build time and registers it without reading a host environment variable. Red: the unchanged service reported the missing environment value and did not publish a ready endpoint. Green: its live LaunchServices identity matches the embedded manifest with the variable absent or conflicting; 10 service-cleanup tests and 6 log-dir tests pass, as do formatting and the macOS arm64 build. No release was published.
 - S73: The VT service requires its declared process display identity, registers it with LaunchServices before runtime initialization, and keeps its executable filename and first start record. Red: the unchanged service had no LaunchServices entry and did not report a missing identity. Green: all 8 service cleanup tests, scoped event/records checks, formatting, and the local version 0.0.12 build pass on macOS arm64.
 
