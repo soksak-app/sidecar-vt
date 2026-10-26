@@ -8,6 +8,8 @@
 
 ## 미배포
 
+- S93: json!을 통해 cell tree를 복제하지 않고 소유한 정규화 screen body를 surface envelope로 옮겨 serde_json으로 직렬화한다. Raster와 plain sender가 문서화한 encoder를 사용한다. 8,192-cell 회귀 검사는 수정 전 allocation 57,372회로 실패하고 수정 후 64회 상한을 통과하며 모든 값과 escape byte를 보존한다. 영향받는 owner 네 개가 모두 통과한다. Trace 없는 양 host benchmark는 전체 report를 보존하며 여전히 성능 목표에 실패한다. Diagnostic 설치를 복원하고 성능 acceptance는 열어 둔다.
+
 - S92: 기존 event에서 image-response channel/actor queue 시간을 전체 consumed 대기와 구분한다. 처리 timestamp 하나를 사용하고 frame debug logging이 켜진 경우에만 ingress clock을 측정하며 수집하지 않은 ingress timestamp는 null로 유지한다. Field 누락 owner가 수정 전 실패하고 수정 후 통과하며 catalog owner와 양 host 로컬 geometry 사례도 통과한다. 현재 응답 160건 모두에 queue timing이 있다. Scheduling과 frame 소유권을 유지하고 양 검사 설치를 복원하며 성능 acceptance는 열어 둔다.
 
 - S73-2: 공개 package resolution과 build file로 설치된 Darwin native process-identity package를 검증한다. 소유 consumer 검사와 macOS arm64의 표준 sidecar build가 통과한다. 로컬 override를 누락한 remote-install fixture를 대체하며 로컬 workspace/lock override는 commit하지 않고 외부 Git-ref 설치 acceptance는 S73-1에 유지한다.

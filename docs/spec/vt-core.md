@@ -30,6 +30,9 @@ For an exact configured name and generation, the sidecar removes that generation
 
 The acknowledgement means the render attachment, pending configuration, and requested image have been detached. An already-sent image transfer remains immutable and retained under its existing lifetime rule until its exact `consumed` or error response, or connection end; detach does not free or move that lease. Image responses match the full name, generation, raster, and sequence identity, so a late response for a detached image cannot release a newer generation's pending draw. `open` without `image` is allowed after the acknowledgement and reuses the existing session. A later image-bearing `open` and `configure` may attach a new generation to that session. `close` continues to close the PTY and is not an image-detach operation. The message envelope remains protocol 1; no persisted format changes.
 
+The Rust interface `protocol::screen_line(surface, body)` consumes an owned, normalized screen body and returns its compact JSON surface envelope. Raster and headless screen senders use this same encoder. Screen validation and normalization occur before encoding; the encoder preserves every body value and returns serialization errors to the existing screen-error path without creating another cell tree.
+
+
 ## Event writer
 
 The service follows the shared event-log contract. Its 100 ms batch interval bounds the age of a pending batch from the preceding flush; receiving another event does not restart that deadline. Errors and explicit flush requests write pending records immediately.

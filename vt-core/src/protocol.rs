@@ -1704,7 +1704,7 @@ fn screen_event(
     image: Option<&ImageState>,
     screen: &Screen,
     layout: &crate::platform::darwin::frame::RenderLayout,
-) -> Result<Value, String> {
+) -> Result<String, String> {
     let frame = shown_frame(image);
     let render = image
         .and_then(|state| state.render.as_ref())
@@ -1713,10 +1713,18 @@ fn screen_event(
         // default: a frame without matching diagnostic metadata reports no render metadata.
         .unwrap_or(Value::Null);
     let frame_accepted = image.is_some_and(|state| !state.dirty && state.sequence > 0);
-    Ok(json!({
-        "surface": surface_id,
-        "body": screen_message_with_layout(log.boot(), sequence, frame, render, screen, layout, frame_accepted)?
-    }))
+    screen_line(
+        surface_id,
+        screen_message_with_layout(
+            log.boot(),
+            sequence,
+            frame,
+            render,
+            screen,
+            layout,
+            frame_accepted,
+        )?,
+    )
 }
 
 fn collect_render_metadata(trace_dir: Option<&std::path::Path>) -> bool {
@@ -1806,7 +1814,7 @@ async fn send_plain_screen(
         }
     };
     record_frame(log, surface_id, session, screen, "screen", sequence, None);
-    output_tx.send(line.to_string()).await.is_ok()
+    output_tx.send(line).await.is_ok()
 }
 
 /// The state of the view that decorates the screen of the engine.
@@ -1992,7 +2000,7 @@ async fn present_screen(
             &layout,
             true,
         )?;
-        Ok(json!({"surface": surface, "body": body}).to_string())
+        screen_line(&surface, body)
     })
     .await
     {
@@ -5633,6 +5641,15 @@ fn base64_encode(data: &[u8]) -> String {
 #[cfg(test)]
 #[path = "../tests/support/protocol_test.rs"]
 mod tests;
+
+/// Encodes an owned normalized screen body without rebuilding its cell tree.
+pub fn screen_line(surface: &str, body: Value) -> Result<String, String> {
+    let envelope = Value::Object(serde_json::Map::from_iter([
+        ("surface".to_string(), Value::String(surface.to_string())),
+        ("body".to_string(), body),
+    ]));
+    serde_json::to_string(&envelope).map_err(|error| format!("screen encoding failed: {error}"))
+}
 
 /// Prepares one complete screen line before its actor submits subsequent events.
 async fn prepare_screen_line(
