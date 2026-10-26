@@ -8,6 +8,8 @@
 
 ## Unreleased
 
+- S92: Separate image-response channel/actor queue time from total consumed wait in the existing event. Use one handling timestamp and sample the ingress clock only while frame debug logging is enabled; a missing ingress timestamp remains null. The missing-field owner fails before correction and passes afterward; catalog owners and both local geometry cases pass. All 160 current answers have queue timing. Preserve scheduling and frame ownership, restore both test installations, and keep performance acceptance open.
+
 - S73-2: Verify the installed Darwin native process-identity package through public package resolution and its build files. The owning consumer passes and the standard sidecar build succeeds on macOS arm64. Replace the remote-install fixture that omitted local overrides; keep local workspace/lock overrides uncommitted and external Git-ref installation acceptance open under S73-1.
 
 - F239-77-vt-sidecar: Complete local schema-3 catalog acceptance with the matching installed diagnostic cohort. The current SDK checks 34 sources with zero pending rules and 32 events; both host installations contain the exact source catalog and pass application log audits. Public publication remains separate.

@@ -2,7 +2,6 @@
 
 [한국어](vt-core.ko.md)
 
-
 The terminal sidecar (`@soksak/sidecar-vt-core`) is the client module for the persistent terminal service defined by [persistent services](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.md). The service is one process per application configuration directory and owns the independent PTYs, shell processes, VT state, scrollback, and IOSurface-backed rendering. The sidecar accepts requests to control a terminal session and supplies screen images to a region.
 
 The `sidecar.json` declaration gives the service the process display identity `soksak://sidecar/vt`. The build reads and embeds that declaration in the executable; a missing or invalid `displayName` fails the build and names `sidecar.json`. The service does not depend on a host environment variable. The process writes its first start record, then registers the embedded value with LaunchServices before runtime initialization. Registration failure is reported on standard error and prevents the service from starting. The executable path and basename remain `build/soksak-vt-alacritty` and `soksak-vt-alacritty`.
@@ -144,7 +143,7 @@ Each explicit flush acknowledges its own FIFO marker after writing preceding rec
 
 The packaged diagnostic owner accepts a release through `SOKSAK_DIAGNOSTIC_PACKAGE_RELEASE` or an installed package directory through `SOKSAK_DIAGNOSTIC_PACKAGE_DIRECTORY`. It exercises continuous ASCII input without application activation, checks that supplier records reach disk before shutdown, and checks all accepted records after shutdown. Failed runs retain their diagnostic artifacts.
 
-The existing debug event `sidecar.vt.consumed_wait` records the completed in-flight image identity as `name`, `generation`, `raster` and `sequence`, together with `answer` and `wait_us`. The interval starts before image output submission and ends when the surface actor handles its exact matching answer; it includes supplier actor work and transport delay, not only host presentation. Default logging gates remain unchanged.
+The debug event `sidecar.vt.consumed_wait` records the exact in-flight image identity (`name`, `generation`, `raster`, `sequence`) and `answer`. Its `wait_us` starts before image output submission and ends when the surface actor handles the matching answer, including supplier work and transport delay. Its nullable `queue_us` measures dispatch of the parsed answer into the surface command channel through handling at the same end time, including channel-capacity waits and actor queueing. The ingress clock is sampled only when frame debug events are enabled; `queue_us` is null when no ingress timestamp was collected. Default gates are unchanged, and these measurements do not establish performance acceptance.
 
 Raster-associated screen JSON construction and serialization run on the runtime blocking pool, while the surface actor awaits their result before queuing the screen and presentation events. The image remains ahead of its screen in the same FIFO output channel. Preparation failure is reported as a screen error; task failure includes the preparation context. Each surface retains at most its one active preparation, and no background history or detached work is introduced.
 

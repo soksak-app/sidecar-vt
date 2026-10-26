@@ -1,6 +1,7 @@
 use crate::encoding::{self, Key};
 use crate::events::{Events, Level, Subject};
 use crate::inline_image::{Dimension, InlineImageCommand};
+use crate::policy::Class;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1098,6 +1099,7 @@ enum SurfaceCommand {
     SessionDetach,
     ImageResponse {
         body: Value,
+        dispatched_at: Option<std::time::Instant>,
     },
     ClipboardResolve {
         request_id: u64,
@@ -3984,7 +3986,7 @@ async fn surface_task(
                             }
                         break;
                     }
-                    SurfaceCommand::ImageResponse { body } => {
+                    SurfaceCommand::ImageResponse { body, dispatched_at } => {
                         let image_obj = body.get("image").and_then(|v| v.as_object());
                         let consumed = image_obj.and_then(|o| o.get("consumed")).and_then(|v| v.as_object());
                         let is_error = image_obj.is_some_and(|o| o.get("error").is_some());
@@ -4004,12 +4006,14 @@ async fn surface_task(
                             // 전송 완료 대기의 계기(V5-104): 보낸 순간부터 consumed/오류 응답까지.
                             let state = image_state.as_mut().unwrap();
                             if let Some(sent) = state.sent_at.take() {
+                                let handled_at = std::time::Instant::now();
                                 log.emit_for(Level::Debug, "sidecar.vt.consumed_wait", Subject::surface(&surface_id), &serde_json::json!({
                                     "name": state.name,
                                     "generation": state.generation,
                                     "raster": state.raster,
                                     "sequence": state.sequence,
-                                    "wait_us": sent.elapsed().as_micros() as u64,
+                                    "wait_us": handled_at.duration_since(sent).as_micros() as u64,
+                                    "queue_us": dispatched_at.map(|at| handled_at.duration_since(at).as_micros() as u64),
                                     "answer": if consumed.is_some() { "consumed" } else { "error" },
                                 }));
                             }
@@ -5205,7 +5209,12 @@ where
                                 }
                             }
                         } else if tx
-                            .send(SurfaceCommand::ImageResponse { body: body.clone() })
+                            .send(SurfaceCommand::ImageResponse {
+                                body: body.clone(),
+                                dispatched_at: log
+                                    .enabled(Class::Frame, Level::Debug)
+                                    .then(std::time::Instant::now),
+                            })
                             .await
                             .is_err()
                         {

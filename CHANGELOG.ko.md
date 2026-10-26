@@ -8,6 +8,8 @@
 
 ## 미배포
 
+- S92: 기존 event에서 image-response channel/actor queue 시간을 전체 consumed 대기와 구분한다. 처리 timestamp 하나를 사용하고 frame debug logging이 켜진 경우에만 ingress clock을 측정하며 수집하지 않은 ingress timestamp는 null로 유지한다. Field 누락 owner가 수정 전 실패하고 수정 후 통과하며 catalog owner와 양 host 로컬 geometry 사례도 통과한다. 현재 응답 160건 모두에 queue timing이 있다. Scheduling과 frame 소유권을 유지하고 양 검사 설치를 복원하며 성능 acceptance는 열어 둔다.
+
 - S73-2: 공개 package resolution과 build file로 설치된 Darwin native process-identity package를 검증한다. 소유 consumer 검사와 macOS arm64의 표준 sidecar build가 통과한다. 로컬 override를 누락한 remote-install fixture를 대체하며 로컬 workspace/lock override는 commit하지 않고 외부 Git-ref 설치 acceptance는 S73-1에 유지한다.
 
 - F239-77-vt-sidecar: 일치하는 설치 diagnostic cohort로 로컬 schema-3 catalog acceptance를 완료한다. 현재 SDK가 source 34개와 pending rule 0개, event 32개를 검사하며 양쪽 host 설치본의 catalog가 source와 정확히 일치하고 application log audit을 통과한다. Public publication은 별도다.

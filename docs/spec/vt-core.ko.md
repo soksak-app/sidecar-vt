@@ -2,7 +2,6 @@
 
 [English](vt-core.md)
 
-
 터미널 사이드카(`@soksak/sidecar-vt-core`)는 [영속 서비스](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.ko.md)이 정의한 영속 서비스의 클라이언트 모듈이다. 서비스는 애플리케이션 설정 디렉터리마다 하나의 프로세스로 실행되며 독립 PTY·셸 프로세스·VT 상태·스크롤백·IOSurface 렌더링을 소유한다. 사이드카는 터미널 세션 제어 요청을 받고 영역에 화면 그림을 공급한다.
 
 `sidecar.json` 선언은 서비스의 process display identity를 `soksak://sidecar/vt`로 지정한다. Build는 이 선언을 읽어 executable에 embed하며, `displayName`이 없거나 유효하지 않으면 `sidecar.json`을 명시해 build를 실패한다. Service는 host 환경 변수에 의존하지 않는다. Process는 첫 start record를 쓴 뒤 runtime 초기화 전에 embedded 값을 LaunchServices에 등록한다. 등록 실패는 standard error에 보고하고 서비스 시작을 막는다. Executable path와 basename은 `build/soksak-vt-alacritty`, `soksak-vt-alacritty`로 유지한다.
@@ -146,7 +145,7 @@ Native IME는 marked text를 소유한다. 각 native input report는 순서 있
 
 Packaged diagnostic owner는 `SOKSAK_DIAGNOSTIC_PACKAGE_RELEASE`의 release 또는 `SOKSAK_DIAGNOSTIC_PACKAGE_DIRECTORY`의 설치된 package directory를 검사한다. Application 활성화 없이 연속 ASCII 입력을 수행하여 종료 전 supplier 기록이 disk에 도달하는지 확인하고 종료 후 승인된 모든 기록을 확인한다. 실패한 실행은 diagnostic artifact를 보존한다.
 
-기존 debug event `sidecar.vt.consumed_wait`는 완료된 in-flight image identity를 `name`, `generation`, `raster`, `sequence`로 기록하며 `answer`, `wait_us`를 함께 기록한다. 구간은 image output 제출 전 시작하고 surface actor가 정확히 일치하는 응답을 처리할 때 끝난다. host presentation뿐 아니라 supplier actor 작업과 transport 지연을 포함한다. 기본 logging gate는 유지한다.
+Debug event `sidecar.vt.consumed_wait`는 정확한 in-flight image identity(`name`, `generation`, `raster`, `sequence`)와 `answer`를 기록한다. `wait_us`는 image output 제출 전 시작하고 surface actor가 일치하는 응답을 처리할 때 끝나며 supplier 작업과 transport 지연을 포함한다. Nullable `queue_us`는 parsing된 응답을 surface command channel로 dispatch할 때부터 같은 처리 종료 시점까지를 측정하며 channel capacity 대기와 actor queue 대기를 포함한다. Ingress clock은 frame debug event가 켜져 있을 때만 측정하며 ingress timestamp를 수집하지 않았으면 `queue_us`는 null이다. 기본 gate는 그대로 유지하며 이 측정값으로 성능 acceptance를 입증하지 않는다.
 
 Raster 관련 screen JSON 구성과 직렬화는 runtime blocking pool에서 실행한다. surface actor는 결과를 기다린 뒤 screen과 presentation event를 큐에 넣는다. image는 같은 FIFO output channel에서 해당 screen보다 앞선다. preparation 실패는 screen 오류로 보고하며 task 실패는 preparation context를 포함한다. surface마다 진행 중 preparation 하나만 유지하고 background history나 detached 작업은 추가하지 않는다.
 

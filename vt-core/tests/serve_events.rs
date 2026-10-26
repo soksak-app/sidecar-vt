@@ -295,6 +295,11 @@ async fn the_answer_of_the_host_to_a_frame_is_the_event_consumed_wait() {
     assert_eq!(waits[0]["fields"]["raster"], 1);
     assert_eq!(waits[0]["fields"]["sequence"], 1);
     assert!(waits[0]["fields"]["wait_us"].is_u64(), "{}", waits[0]);
+    assert!(
+        waits[0]["fields"]["queue_us"].is_u64(),
+        "queue timing is missing: {}",
+        waits[0]
+    );
 }
 
 /// Serves a connection whose output pipe holds `output_capacity` bytes. The sender writes `line` after `before_line`. The client

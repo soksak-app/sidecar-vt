@@ -332,6 +332,12 @@
           },
           "sequence": {
             "type": "number"
+          },
+          "queue_us": {
+            "type": [
+              "number",
+              "null"
+            ]
           }
         },
         "required": [
@@ -340,10 +346,11 @@
           "name",
           "generation",
           "raster",
-          "sequence"
+          "sequence",
+          "queue_us"
         ]
       },
-      "description": "The interval from image submission to handling its matching host answer, with the complete frame identity."
+      "description": "The interval from image submission to handling its matching host answer, with complete frame identity and the dispatch-to-handler queue interval. queue_us is null when frame debug timing was disabled at ingress."
     },
     "sidecar.vt.runtime_stall": {
       "layer": "sidecar",
