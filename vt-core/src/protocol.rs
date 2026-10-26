@@ -1687,19 +1687,20 @@ fn screen_message_with_layout(
     } else {
         Value::Null
     };
-    Ok(json!({
-        "event": "screen",
-        "sequence": sequence,
-        "segment": segment,
-        "frame": frame,
-        "render": render,
-        "rows": screen.rows,
-        "cols": screen.cols,
-        "cursor": cursor,
-        "cells": cells,
-        "scrollback": screen.scrollback,
-        "background": screen.background,
-    }))
+    let mut body = serde_json::Map::from_iter([
+        ("event".to_string(), Value::String("screen".to_string())),
+        ("sequence".to_string(), json!(sequence)),
+        ("segment".to_string(), json!(segment)),
+        ("rows".to_string(), json!(screen.rows)),
+        ("cols".to_string(), json!(screen.cols)),
+        ("scrollback".to_string(), json!(screen.scrollback)),
+        ("background".to_string(), json!(screen.background)),
+    ]);
+    body.insert("frame".to_string(), frame);
+    body.insert("render".to_string(), render);
+    body.insert("cursor".to_string(), cursor);
+    body.insert("cells".to_string(), Value::Array(cells));
+    Ok(Value::Object(body))
 }
 
 /// The line of the `screen` message of a surface.
