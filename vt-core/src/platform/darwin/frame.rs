@@ -912,7 +912,7 @@ fn apply_preedit(
         .fold(caret_row, usize::max);
     let mut logical_lines = screen.lines.clone();
     if logical_lines.len() < max_logical_row + 1 {
-        logical_lines.resize_with(max_logical_row + 1, || Vec::new());
+        logical_lines.resize_with(max_logical_row + 1, Vec::new);
     }
     for (row, line) in logical_lines.iter_mut().enumerate() {
         if line.len() > cols {
@@ -970,8 +970,8 @@ fn apply_preedit(
         .map_err(|_| "preedit caret row exceeds terminal grid".to_string())?;
     screen.cursor.col = u16::try_from(caret_col)
         .map_err(|_| "preedit caret column exceeds terminal grid".to_string())?;
-    Ok(u32::try_from(logical_row_origin)
-        .map_err(|_| "preedit viewport row origin exceeds render metadata".to_string())?)
+    u32::try_from(logical_row_origin)
+        .map_err(|_| "preedit viewport row origin exceeds render metadata".to_string())
 }
 
 impl Drop for Frame {

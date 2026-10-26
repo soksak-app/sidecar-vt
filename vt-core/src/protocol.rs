@@ -151,8 +151,14 @@ struct RequestSender {
 }
 
 impl RequestSender {
-    async fn send(&self, command: SurfaceCommand) -> Result<(), mpsc::error::SendError<Dispatch>> {
-        self.tx.send(Dispatch::of(command, &self.request)).await
+    async fn send(
+        &self,
+        command: SurfaceCommand,
+    ) -> Result<(), Box<mpsc::error::SendError<Dispatch>>> {
+        self.tx
+            .send(Dispatch::of(command, &self.request))
+            .await
+            .map_err(Box::new)
     }
 }
 
@@ -2024,15 +2030,8 @@ fn screen_message_work(
     layout: crate::platform::darwin::frame::RenderLayout,
 ) -> impl FnOnce() -> Result<String, String> + Send + 'static {
     move || {
-        let body = screen_message_with_layout(
-            &segment,
-            sequence,
-            frame,
-            render,
-            &screen,
-            &layout,
-            true,
-        )?;
+        let body =
+            screen_message_with_layout(&segment, sequence, frame, render, &screen, &layout, true)?;
         screen_line(&surface, body)
     }
 }
@@ -3467,9 +3466,8 @@ async fn surface_task(
                                 DaemonEvent::Exit { session_id: ref received }
                                     if session_id.as_deref() == Some(received) => exited = true,
                                 DaemonEvent::Error { session_id: ref received, error }
-                                    if session_id.as_deref() == Some(received) => {
-                                        if output_tx.send(json!({"surface": surface_id, "body": {"event": "error", "reason": error}}).to_string()).await.is_err() { return; }
-                                    }
+                                    if session_id.as_deref() == Some(received)
+                                        && output_tx.send(json!({"surface": surface_id, "body": {"event": "error", "reason": error}}).to_string()).await.is_err() => return,
                                 _ => {}
                             }
                         }

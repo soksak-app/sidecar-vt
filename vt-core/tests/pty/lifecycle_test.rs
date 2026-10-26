@@ -23,10 +23,7 @@ async fn next_output(rx: &mut UnboundedReceiver<DaemonEvent>) -> Vec<u8> {
 }
 
 /// The events of `name` in the file of `events`.
-fn named(
-    events: &crate::events::test_support::TestEvents,
-    name: &str,
-) -> Vec<serde_json::Value> {
+fn named(events: &crate::events::test_support::TestEvents, name: &str) -> Vec<serde_json::Value> {
     events
         .lines()
         .into_iter()
@@ -161,9 +158,7 @@ async fn a_shell_without_integration_is_recorded_when_its_session_starts() {
         .iter()
         .find(|record| record["fields"]["where"] == "shell integration")
         // silent: a test; the closure panics with the stored events, which fails the test.
-        .unwrap_or_else(|| {
-            panic!("the shell without integration is not recorded: {records:?}")
-        });
+        .unwrap_or_else(|| panic!("the shell without integration is not recorded: {records:?}"));
     assert_eq!(
         record["fields"]["text"],
         "sh has no shell integration; the session starts without it"
