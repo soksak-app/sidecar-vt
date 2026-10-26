@@ -8,6 +8,8 @@
 
 ## Unreleased
 
+- S73-2: Verify the installed Darwin native process-identity package through public package resolution and its build files. The owning consumer passes and the standard sidecar build succeeds on macOS arm64. Replace the remote-install fixture that omitted local overrides; keep local workspace/lock overrides uncommitted and external Git-ref installation acceptance open under S73-1.
+
 - F239-77-vt-sidecar: Complete local schema-3 catalog acceptance with the matching installed diagnostic cohort. The current SDK checks 34 sources with zero pending rules and 32 events; both host installations contain the exact source catalog and pass application log audits. Public publication remains separate.
 
 - S88-2-1: Deliver the verified recovery corrections in a locally installed Darwin diagnostic package. The package owner passes with metadata, engine trace and continuous logging; both application hosts preserve the shared service and reap all terminal children after completed retention. Source fixtures prove injected poison recovery. No public release or IME acceptance is included.

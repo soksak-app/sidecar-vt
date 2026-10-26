@@ -8,6 +8,8 @@
 
 ## 미배포
 
+- S73-2: 공개 package resolution과 build file로 설치된 Darwin native process-identity package를 검증한다. 소유 consumer 검사와 macOS arm64의 표준 sidecar build가 통과한다. 로컬 override를 누락한 remote-install fixture를 대체하며 로컬 workspace/lock override는 commit하지 않고 외부 Git-ref 설치 acceptance는 S73-1에 유지한다.
+
 - F239-77-vt-sidecar: 일치하는 설치 diagnostic cohort로 로컬 schema-3 catalog acceptance를 완료한다. 현재 SDK가 source 34개와 pending rule 0개, event 32개를 검사하며 양쪽 host 설치본의 catalog가 source와 정확히 일치하고 application log audit을 통과한다. Public publication은 별도다.
 
 - S88-2-1: 검증된 recovery 수정을 로컬 설치 Darwin diagnostic package에 전달한다. Package owner가 metadata, engine trace와 연속 logging으로 통과하며 양쪽 application host는 retention 완료 후 shared service를 유지하고 모든 terminal child를 회수한다. 주입된 poison recovery는 source fixture가 입증한다. Public release나 IME acceptance는 포함하지 않는다.
