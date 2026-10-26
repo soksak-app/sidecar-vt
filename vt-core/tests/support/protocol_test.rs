@@ -164,9 +164,11 @@ fn native_edit_commands_encode_and_unknown_commands_fail() {
         encode_keys(&[delete], &Modes::default()).unwrap(),
         b"\x1b[3~"
     );
+    let cancel = key_for_native_command("cancelOperation:").expect("cancel command");
+    assert_eq!(encode_keys(&[cancel], &Modes::default()).unwrap(), b"\x1b");
     assert_eq!(
-        key_for_native_command("cancelOperation:").unwrap_err(),
-        "unsupported native command selector: cancelOperation:"
+        key_for_native_command("unsupportedNative:").unwrap_err(),
+        "unsupported native command selector: unsupportedNative:"
     );
 }
 

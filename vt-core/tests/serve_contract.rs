@@ -1199,6 +1199,85 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
 }
 
 #[tokio::test]
+async fn appkit_cancel_operation_is_one_ordered_escape_and_unknown_selectors_are_atomic() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port_calls = calls.clone();
+    let session_port_factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "escape-transaction".to_string(),
+            port_calls.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+    let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
+{"surface":"s1","cids":["initial-preedit"],"body":{"operation":"input","actions":[],"preedit":{"text":"ㅎ","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":false}}}
+{"surface":"s1","cids":["commit-escape"],"body":{"operation":"input","actions":[{"type":"insert","text":"한","replacementRange":null,"attributed":false},{"type":"command","selector":"cancelOperation:"}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+{"surface":"s1","cids":["cancel-only"],"body":{"operation":"input","actions":[{"type":"command","selector":"cancelOperation:"}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+{"surface":"s1","cids":["key-escape"],"body":{"operation":"input","actions":[{"type":"key","key":"Escape","shift":false,"alt":false,"ctrl":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+{"surface":"s1","cids":["unknown-selector"],"body":{"operation":"input","actions":[{"type":"insert","text":"x","replacementRange":null,"attributed":false},{"type":"command","selector":"unsupportedNative:"}],"preedit":{"text":"changed","markedRange":{"location":0,"length":7},"selectedRange":{"location":7,"length":0},"replacementRange":null,"attributed":false}}}
+"#;
+    let mut writer = Vec::new();
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        serve(
+            engine_factory,
+            std::io::Cursor::new(input.as_bytes()),
+            &mut writer,
+            session_port_factory,
+        ),
+    )
+    .await
+    .expect("Escape input transactions complete within 2 s")
+    .unwrap();
+
+    let messages = String::from_utf8(writer)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let reply = |cid: &str| {
+        messages
+            .iter()
+            .find(|message| message["cids"] == serde_json::json!([cid]))
+            .unwrap_or_else(|| panic!("missing reply for {cid}: {messages:?}"))
+    };
+    assert_eq!(reply("initial-preedit")["body"]["ack"], true);
+    assert_eq!(reply("commit-escape")["body"]["ack"], true);
+    assert_eq!(reply("cancel-only")["body"]["ack"], true);
+    assert_eq!(reply("key-escape")["body"]["ack"], true);
+    assert_eq!(reply("unknown-selector")["body"]["error"], "invalidParams");
+    assert!(
+        reply("unknown-selector")["body"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("unsupported native command selector: unsupportedNative:")
+    );
+    assert_eq!(
+        calls.lock().unwrap().writes,
+        [
+            (
+                "escape-transaction".to_string(),
+                "한\x1b".as_bytes().to_vec()
+            ),
+            ("escape-transaction".to_string(), b"\x1b".to_vec()),
+            ("escape-transaction".to_string(), b"\x1b".to_vec()),
+        ],
+        "each accepted input transaction writes its ordered bytes exactly once"
+    );
+    let screens = messages
+        .iter()
+        .filter(|message| message["body"]["event"] == "screen")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        screens.len(),
+        2,
+        "only the seed and cleared preedit submit frames: {screens:?}"
+    );
+    assert_eq!(screens[0]["body"]["cursor"]["preedit"]["text"], "ㅎ");
+    assert_eq!(screens[1]["body"]["cursor"]["preedit"]["text"], "");
+}
+
+#[tokio::test]
 async fn one_ordered_input_transaction_writes_actions_once_and_applies_final_preedit() {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let port_calls = calls.clone();

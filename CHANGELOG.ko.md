@@ -8,6 +8,8 @@
 
 ## 미배포
 
+- S97: AppKit `cancelOperation:`을 terminal Escape로 매핑해 확정된 Hangul과 Escape를 순서가 유지된 한 번의 write로 PTY에 보낸다. Owning service test는 결합 transaction, cancel 단독, 일반 Escape, 최종 preedit 제거, 알 수 없는 selector의 원자적 거부를 확인한다. Selector mapping owner도 통과한다. Application, activation, full suite 또는 공개 release는 포함하지 않는다.
+
 - S93: json!을 통해 cell tree를 복제하지 않고 소유한 정규화 screen body를 surface envelope로 옮겨 serde_json으로 직렬화한다. Raster와 plain sender가 문서화한 encoder를 사용한다. 8,192-cell 회귀 검사는 수정 전 allocation 57,372회로 실패하고 수정 후 64회 상한을 통과하며 모든 값과 escape byte를 보존한다. 영향받는 owner 네 개가 모두 통과한다. Trace 없는 양 host benchmark는 전체 report를 보존하며 여전히 성능 목표에 실패한다. Diagnostic 설치를 복원하고 성능 acceptance는 열어 둔다.
 - S94: Raster draw 뒤 원본 screen을 blocking message preparation으로 옮겨 task closure의 deep copy를 제거하고 render-layout copy와 screen message 내용은 유지한다. Red: owning 8,192-cell preparation case가 64회 transfer 상한에 8,260회 allocation으로 실패한다. Green: 같은 case가 2회 allocation으로 통과하며 surface, frame, dimensions와 8,192개 cell 전체를 검증한다. Preparation owner 세 개, screen-message owner 10개, frame-record coherence, image-envelope output, page screen-wire, inline-image raster owner가 통과한다. Workspace 전체 format check는 변경하지 않은 `vt-core/tests/pty/lifecycle_test.rs` formatting 차이로 실패하며 변경한 test file은 format했다. End-to-end 성능 acceptance는 미완료다.
 - S95: Diagnostics library clippy 지적 네 건과 지정 lifecycle test file의 formatting을 해결한다. Checked viewport conversion을 직접 반환하고 row 초기화에 `Vec::new`를 사용하며 dispatch payload를 버리지 않고 `SendError<Dispatch>`를 boxing하고 session에 맞는 daemon error 전송을 match guard로 합친다. Diagnostics library clippy가 통과하고 closed-surface owner는 0.142초에 통과하며 변경 Rust 파일의 rustfmt도 통과한다. Full suite와 runtime 검사는 포함하지 않는다.

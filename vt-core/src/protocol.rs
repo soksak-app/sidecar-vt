@@ -1388,6 +1388,7 @@ fn key_for_native_command(selector: &str) -> Result<InputKey, String> {
         "insertNewline:" => "Enter",
         "deleteBackward:" => "Backspace",
         "deleteForward:" => "Delete",
+        "cancelOperation:" => "Escape",
         _ => return Err(format!("unsupported native command selector: {selector}")),
     };
     Ok(InputKey {
