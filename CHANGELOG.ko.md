@@ -8,6 +8,8 @@
 
 ## 미배포
 
+- S98: plugin SDK, Darwin process-identity dependency와 release build checkout을 0.0.21을 선언한 공개 core commit으로 맞춘다. Clean pnpm 11.24.0 lock-only resolution은 두 package를 0.0.21로 기록하며, 기존 developer link 환경에서 installed-package consumer가 통과한다. Clean frozen install은 exit 0이지만 optional native package를 resolve하지 못해 (`MODULE_NOT_FOUND`) S73-1은 열린 상태로 둔다. Release는 포함하지 않는다.
+
 - S97: AppKit `cancelOperation:`을 terminal Escape로 매핑해 확정된 Hangul과 Escape를 순서가 유지된 한 번의 write로 PTY에 보낸다. Owning service test는 결합 transaction, cancel 단독, 일반 Escape, 최종 preedit 제거, 알 수 없는 selector의 원자적 거부를 확인한다. Selector mapping owner도 통과한다. Application, activation, full suite 또는 공개 release는 포함하지 않는다.
 
 - S93: json!을 통해 cell tree를 복제하지 않고 소유한 정규화 screen body를 surface envelope로 옮겨 serde_json으로 직렬화한다. Raster와 plain sender가 문서화한 encoder를 사용한다. 8,192-cell 회귀 검사는 수정 전 allocation 57,372회로 실패하고 수정 후 64회 상한을 통과하며 모든 값과 escape byte를 보존한다. 영향받는 owner 네 개가 모두 통과한다. Trace 없는 양 host benchmark는 전체 report를 보존하며 여전히 성능 목표에 실패한다. Diagnostic 설치를 복원하고 성능 acceptance는 열어 둔다.

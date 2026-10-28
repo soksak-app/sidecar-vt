@@ -11,7 +11,7 @@ permissions:
 
 # sok sidecar release 를 build 하는 core release. 이 저장소가 릴리스하는 version 과 관계가 없다.
 env:
-  CORE_RELEASE: v0.0.11
+  CORE_COMMIT: 4f82fb9c3307e3f4e6e834c3d336629275e45cac
 
 jobs:
   release:
@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: soksak-app/core
-          ref: ${{ env.CORE_RELEASE }}
+          ref: ${{ env.CORE_COMMIT }}
           path: core
       - uses: actions/setup-go@v5
         with:
