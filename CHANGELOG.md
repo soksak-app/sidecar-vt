@@ -8,6 +8,8 @@
 
 ## Unreleased
 
+- S99: Allow the pinned Darwin process-identity Git dependency to run its pnpm 11.24.0 `prepare` script by exact repository identity. The clean-consumer owner fails without approval despite exit 0, then passes with a fresh isolated store and confirms the manifest, header, static library and pkg-config file after `prepare: make`. No core package or release change is included.
+
 - S98: Align the plugin SDK, Darwin process-identity dependency and release build checkout to the public core commit that declares 0.0.21. A clean pnpm 11.24.0 lock-only resolution records both packages at 0.0.21, and the installed-package consumer passes with the existing developer link. A clean frozen install exits 0 but leaves the optional native package unresolved (`MODULE_NOT_FOUND`); S73-1 remains open. No release is included.
 
 - S97: Map AppKit `cancelOperation:` to terminal Escape so committed Hangul and Escape reach the PTY in one ordered write. The owning service test passes for the combined transaction, cancel alone, ordinary Escape, final preedit clearing, and atomic rejection of unknown selectors. The selector-mapping owner passes. No application, activation, full suite, or public release is included.

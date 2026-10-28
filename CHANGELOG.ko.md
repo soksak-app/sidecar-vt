@@ -8,6 +8,8 @@
 
 ## 미배포
 
+- S99: 정확한 repository identity로 pinned Darwin process-identity Git dependency의 pnpm 11.24.0 `prepare` script 실행을 허용한다. Clean-consumer owner는 approval 없이 exit 0 후 package 누락으로 실패하고, 새 isolated store에서 approval 적용 후 통과해 `prepare: make` 뒤 manifest, header, static library, pkg-config file을 확인한다. Core package 또는 release 변경은 포함하지 않는다.
+
 - S98: plugin SDK, Darwin process-identity dependency와 release build checkout을 0.0.21을 선언한 공개 core commit으로 맞춘다. Clean pnpm 11.24.0 lock-only resolution은 두 package를 0.0.21로 기록하며, 기존 developer link 환경에서 installed-package consumer가 통과한다. Clean frozen install은 exit 0이지만 optional native package를 resolve하지 못해 (`MODULE_NOT_FOUND`) S73-1은 열린 상태로 둔다. Release는 포함하지 않는다.
 
 - S97: AppKit `cancelOperation:`을 terminal Escape로 매핑해 확정된 Hangul과 Escape를 순서가 유지된 한 번의 write로 PTY에 보낸다. Owning service test는 결합 transaction, cancel 단독, 일반 Escape, 최종 preedit 제거, 알 수 없는 selector의 원자적 거부를 확인한다. Selector mapping owner도 통과한다. Application, activation, full suite 또는 공개 release는 포함하지 않는다.
