@@ -1,5 +1,6 @@
 # Changelog
 
+- F274-1-vt-sidecar: The make target test prints a recipe without the directory lines of a nested make.
 - S104: The recovery verifier sends the input transaction of `actions` and `preedit`.
 - S103: The core SDK, the process identity package and `CORE_COMMIT` are pinned to the core commit whose census accepts a reporting lock recovery.
 - S102: Each poisoned-lock recovery of `vt-core/src/pty.rs` takes the guard with `into_inner` at its call site, so the core census accepts it.
