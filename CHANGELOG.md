@@ -1,5 +1,7 @@
 # Changelog
 
+- S100: The replay tests send the input transaction and answer each drawn image with its generation and raster, so the service draws the frames that the tests wait for; the repeat target passes 2 of 2.
+
 - S86-2: Verify the bounded event writer in a locally installed diagnostic package with terminal 0.0.21. Continuous ASCII input exposes the original package failure and passes in the corrected package; all 50 accepted records remain ordered after shutdown. Failed package checks retain diagnostic evidence. No public release is included.
 
 - S87: A queued flush now acknowledges its own FIFO boundary without consuming the next request. A controlled owner fails on the discarded second acknowledgement before correction and passes afterward; all 14 event-contract cases pass. Application delivery remains pending.

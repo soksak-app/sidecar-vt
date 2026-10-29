@@ -46,19 +46,32 @@ async fn served_session() -> Vec<Value> {
         .write_all(
             br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/cat","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","body":{"image":{"consumed":{"name":"view","sequence":1}}}}
-{"surface":"s1","body":{"operation":"input","bytes":"7ZWcYQo="}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"\ud55ca\n","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#,
         )
         .await
         .unwrap();
     // The surface task takes the output when it chooses and nothing tells the test; it asks the file until a frame includes the
-    // echo of the line.
+    // echo of the line, and answers each new image as the host does, so the next draw is released.
+    let mut answered = 0u64;
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             log.flush(Duration::from_secs(10))
                 .expect("flush the writer");
             let lines = read_run_lines(log.path()).expect("read the events");
+            let image = lines
+                .iter()
+                .filter(|line| line["event"] == "sidecar.vt.frame")
+                .filter_map(|line| line["fields"]["image"].as_u64())
+                .max()
+                .unwrap_or(0);
+            if image > answered {
+                answered = image;
+                to_serve
+                    .write_all(consumed(image).as_bytes())
+                    .await
+                    .unwrap();
+            }
             let echo = lines.iter().find_map(|line| {
                 (line["event"] == "sidecar.vt.pty_read"
                     && line["fields"]["hex"]
@@ -195,8 +208,16 @@ async fn a_gap_in_the_sequences_of_the_inputs_is_an_error() {
     assert!(error.contains("no sequence 2"), "{error}");
 }
 
+/// The answer of the host that it presented image `image` of the view, which the configure of the session declares with
+/// generation 1 and raster 1; the service releases its next draw only for an answer that names all four fields.
+fn consumed(image: u64) -> String {
+    format!(
+        "{{\"surface\":\"s1\",\"body\":{{\"image\":{{\"consumed\":{{\"name\":\"view\",\"generation\":1,\"raster\":1,\"sequence\":{image}}}}}}}}}\n"
+    )
+}
+
 /// The input line of the service that writes "한a" and a newline to the program.
-const WRITE_LINE: &str = r#"{"surface":"s1","body":{"operation":"input","bytes":"7ZWcYQo="}}"#;
+const WRITE_LINE: &str = r#"{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"\ud55ca\n","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}"#;
 
 /// The highest sequence among the events of the session that are replay inputs.
 fn last_input(lines: &[Value]) -> u64 {
@@ -246,7 +267,8 @@ async fn viewed_session() -> Vec<Value> {
         to_serve.write_all(send.as_bytes()).await.unwrap();
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
-                log.flush(Duration::from_secs(10)).expect("flush the writer");
+                log.flush(Duration::from_secs(10))
+                    .expect("flush the writer");
                 let lines = read_run_lines(log.path()).expect("read the events");
                 let image = lines
                     .iter()
@@ -256,10 +278,10 @@ async fn viewed_session() -> Vec<Value> {
                     .unwrap_or(0);
                 if image > *answered {
                     *answered = image;
-                    let answer = format!(
-                        "{{\"surface\":\"s1\",\"body\":{{\"image\":{{\"consumed\":{{\"name\":\"view\",\"sequence\":{image}}}}}}}}}\n"
-                    );
-                    to_serve.write_all(answer.as_bytes()).await.unwrap();
+                    to_serve
+                        .write_all(consumed(image).as_bytes())
+                        .await
+                        .unwrap();
                 }
                 let included = lines.iter().any(|line| {
                     line["event"] == "sidecar.vt.frame"
