@@ -6,9 +6,9 @@
   "type": "module",
   "packageManager": "pnpm@11.24.0",
   "devDependencies": {
-    "@soksak/plugin-api": "git+https://github.com/soksak-app/core.git#4f82fb9c3307e3f4e6e834c3d336629275e45cac&path:/packages/plugin-api"
+    "@soksak/plugin-api": "git+https://github.com/soksak-app/core.git#22d7c2429556bb4af0f742e34fb1949a0c6ba265&path:/packages/plugin-api"
   },
   "optionalDependencies": {
-    "@soksak/native-process-identity-darwin": "git+https://github.com/soksak-app/core.git#4f82fb9c3307e3f4e6e834c3d336629275e45cac&path:/native/darwin/process-identity"
+    "@soksak/native-process-identity-darwin": "git+https://github.com/soksak-app/core.git#22d7c2429556bb4af0f742e34fb1949a0c6ba265&path:/native/darwin/process-identity"
   }
 }
