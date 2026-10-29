@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S104: recovery verifier가 `actions`와 `preedit`의 input transaction을 보낸다.
 - S103: core SDK, process identity package, `CORE_COMMIT`을 보고하는 lock 복구를 받아들이는 census의 core commit에 pin한다.
 - S102: `vt-core/src/pty.rs`의 poisoned lock 복구마다 호출 자리에서 `into_inner`로 guard를 꺼내므로 core census가 이를 받아들인다.
 - F274-vt-sidecar: pre-push hook은 push가 게시하는 commit message만 검사한다. 시험과 검사는 CI가 실행한다.

@@ -184,7 +184,8 @@ const worker = async () => {
       console.log(`WORKER_ORPHAN_SESSION_ID=${orphanSession}`);
       sendSurface(client, surface, project, {
         operation: "input",
-        bytes: Buffer.from("echo RECOVERY\n").toString("base64"),
+        actions: [{ type: "insert", text: "echo RECOVERY\n", replacementRange: null, attributed: false }],
+        preedit: { text: "", markedRange: null, selectedRange: null, replacementRange: null, attributed: false },
       });
       await waitFor(client, (value) => value.surface === surface && value.body?.event === "screen" && screenText(value).includes("RECOVERY"), "worker initial output");
       console.log(`WORKER_SESSION_ID=${sessionId}`);
