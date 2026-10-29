@@ -1,5 +1,7 @@
 # 변경 기록
 
+- S101: vt-core 시험은 input transaction을 보내고, 오류 문장을 `reason`에서 읽고, marked range를 preedit 안에 두며, JSON Schema catalog를 읽으므로 `make test`가 통과한다. Production 코드는 바꾸지 않았다.
+
 - S100: Replay 시험은 input transaction을 보내고 그려진 각 image에 generation과 raster를 담아 답하므로 service가 시험이 기다리는 frame을 그린다. 반복 target이 2회 중 2회 통과한다.
 
 - S86-2: Terminal 0.0.21과 함께 local 설치한 diagnostic package에서 bounded event writer를 검증했다. 연속 ASCII 입력은 기존 package에서 실패하고 수정 package에서 통과하며 종료 후 승인된 기록 50개 전체의 순서가 유지된다. 실패한 package 검사는 diagnostic 증거를 보존한다. 공개 release는 포함하지 않는다.

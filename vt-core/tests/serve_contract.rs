@@ -234,7 +234,7 @@ impl Engine for MockEngine {
         let contiguous_history = self.join_feed_chunks.then(|| self.feed_history.concat());
         let history = contiguous_history
             .as_ref()
-            .map(|bytes| std::slice::from_ref(bytes))
+            .map(std::slice::from_ref)
             .unwrap_or(&self.feed_history);
         for history_bytes in history {
             if let Ok(s) = std::str::from_utf8(history_bytes) {
@@ -1724,7 +1724,7 @@ async fn an_invalid_marked_range_is_rejected_before_preedit_changes_surface_stat
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 {"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
 {"surface":"s1","body":{"operation":"input","actions":[],"preedit":{"text":"한","markedRange":{"location":1,"length":1},"selectedRange":null,"replacementRange":null,"attributed":false}}}
-{"surface":"s1","body":{"operation":"input","actions":[{"type":"focus","focused":true}],"preedit":{"text":"한","markedRange":{"location":1,"length":1},"selectedRange":null,"replacementRange":null,"attributed":false}}}
+{"surface":"s1","body":{"operation":"input","actions":[{"type":"focus","focused":true}],"preedit":{"text":"한","markedRange":{"location":0,"length":1},"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#;
     let reader = std::io::Cursor::new(input.as_bytes());
     let mut writer = Vec::new();
@@ -1828,7 +1828,7 @@ async fn malformed_compose_with_bytes_rejects_without_writing_or_replying_twice(
         .iter()
         .filter(|message| message["body"]["event"] == "screen")
         .filter_map(|message| message["body"]["frame"]["sequence"].as_u64())
-        .last();
+        .next_back();
     let writes = calls.lock().unwrap().writes.clone();
     let mut violations = Vec::new();
     if replies.len() != 1 || replies[0]["body"]["error"] != "invalidParams" {
@@ -1903,7 +1903,7 @@ async fn malformed_bytes_with_compose_do_not_change_preedit_or_reply_twice() {
         .iter()
         .filter(|message| message["body"]["event"] == "screen")
         .filter_map(|message| message["body"]["frame"]["sequence"].as_u64())
-        .last();
+        .next_back();
     let writes = calls.lock().unwrap().writes.clone();
     let mut violations = Vec::new();
     if errors.len() != 1
@@ -3650,8 +3650,9 @@ async fn test_k4_unknown_key_returns_error() {
     let mut found_error = false;
     for line in lines {
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(line)
-            && let Some(error) = json.get("body").and_then(|b| b.get("error"))
-            && error.as_str().unwrap().contains("unknown key: Nope")
+            && json["body"]["error"] == "invalidParams"
+            && let Some(reason) = json["body"]["reason"].as_str()
+            && reason.contains("unknown key: Nope")
         {
             found_error = true;
             break;
@@ -6190,7 +6191,7 @@ async fn focus_changes_are_reported_to_a_program_that_enables_focus_reports() {
 
 #[tokio::test]
 async fn keypad_keys_follow_the_application_keypad_mode() {
-    let keys = "{\"surface\":\"s1\",\"body\":{\"operation\":\"input\",\"actions\":[{\"type\":\"key\",\"key\":\"Keypad5\",\"text\":\"\",\"shift\":false,\"alt\":false,\"ctrl\":false},{\"type\":\"key\",\"key\":\"KeypadEnter\",\"text\":\"\",\"shift\":false,\"alt\":false,\"ctrl\":false}],\"preedit\":{\"text\":\"\",\"markedRange\":null,\"selectedRange\":null,\"replacementRange\":null,\"attributed\":false}}}\n";
+    let keys = "{\"surface\":\"s1\",\"body\":{\"operation\":\"input\",\"actions\":[{\"type\":\"key\",\"key\":\"Keypad5\",\"shift\":false,\"alt\":false,\"ctrl\":false},{\"type\":\"key\",\"key\":\"KeypadEnter\",\"shift\":false,\"alt\":false,\"ctrl\":false}],\"preedit\":{\"text\":\"\",\"markedRange\":null,\"selectedRange\":null,\"replacementRange\":null,\"attributed\":false}}}\n";
     let (_, _, writes) = serve_scroll(
         Some(Modes {
             app_keypad: true,
@@ -6872,17 +6873,16 @@ async fn next_measured_frame_after(
         if let Some(image) = message["body"].get("image") {
             let sequence = image["sequence"].as_u64().unwrap_or(0);
             if sequence > after {
-                let calls = calls.lock().unwrap();
-                images.insert(
-                    sequence,
+                let counts = {
+                    let calls = calls.lock().unwrap();
                     (
                         *acknowledgements,
                         calls.writes.len(),
                         calls.writes_completed,
                         calls.echoes_enqueued,
-                    ),
-                );
-                drop(calls);
+                    )
+                };
+                images.insert(sequence, counts);
                 acknowledge_image(to_serve, &message).await;
             }
         }
@@ -6957,14 +6957,15 @@ fn rendered_glyph_count(message: &serde_json::Value) -> usize {
     for row in 0..rows {
         let mut col = 0;
         while col < cols {
-            if row == screen.cursor.row && col == screen.cursor.col {
-                if let Some(preedit) = screen.cursor.preedit.as_ref() {
-                    for _ in preedit.text.chars() {
-                        if has_ink(row, col, 2) {
-                            count += 1;
-                        }
-                        col = col.saturating_add(2);
+            if row == screen.cursor.row
+                && col == screen.cursor.col
+                && let Some(preedit) = screen.cursor.preedit.as_ref()
+            {
+                for _ in preedit.text.chars() {
+                    if has_ink(row, col, 2) {
+                        count += 1;
                     }
+                    col = col.saturating_add(2);
                 }
             }
             let cell = &screen.lines[usize::from(row)][usize::from(col.min(cols - 1))];
@@ -7192,7 +7193,7 @@ async fn a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it() {
     fault::fail_next_draw();
     let compose = serde_json::json!({
         "surface": "s1",
-        "body": {"operation": "input", "compose": {
+        "body": {"operation": "input", "actions": [], "preedit": {
             "text": "a",
             "markedRange": {"location": 0, "length": 1},
             "selectedRange": {"location": 1, "length": 0},
@@ -7227,7 +7228,7 @@ async fn a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it() {
     // The one-shot draw fault is consumed; a different valid composition draws the frame the screen named.
     let short = serde_json::json!({
         "surface": "s1",
-        "body": {"operation": "input", "compose": {
+        "body": {"operation": "input", "actions": [], "preedit": {
             "text": "b",
             "markedRange": {"location": 0, "length": 1},
             "selectedRange": {"location": 1, "length": 0},

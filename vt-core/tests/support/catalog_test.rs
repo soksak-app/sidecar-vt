@@ -46,22 +46,34 @@ pub fn findings(lines: &[Value]) -> Vec<String> {
                 line["level"], declared["level"]
             ));
         }
-        // A field name that ends with `?` is optional; a type such as `string|null` accepts each of its parts.
-        for (field, kind) in declared["fields"].as_object().expect("fields") {
-            let optional = field.ends_with('?');
-            let field = field.trim_end_matches('?');
+        // A property that `required` does not name is optional; a type list such as `["string", "null"]` accepts each of its parts.
+        let schema = &declared["fields"];
+        let required: Vec<&str> = schema["required"]
+            .as_array()
+            .expect("required fields")
+            .iter()
+            .map(|field| field.as_str().expect("a field name"))
+            .collect();
+        for (field, property) in schema["properties"].as_object().expect("properties") {
+            let optional = !required.contains(&field.as_str());
             let value = &line["fields"][field];
             if value.is_null() && optional && line["fields"].get(field).is_none() {
                 continue;
             }
             let found = type_name(value);
-            if !kind
-                .as_str()
-                .expect("a type name")
-                .split('|')
-                .any(|part| part == found)
-            {
-                findings.push(format!("{name}.{field} is {found}, declared {kind}"));
+            let allowed: Vec<&str> = match &property["type"] {
+                Value::String(kind) => vec![kind.as_str()],
+                Value::Array(kinds) => kinds
+                    .iter()
+                    .map(|kind| kind.as_str().expect("a type name"))
+                    .collect(),
+                _ => panic!("{name}.{field} declares no type"),
+            };
+            if !allowed.contains(&found) {
+                findings.push(format!(
+                    "{name}.{field} is {found}, declared {}",
+                    property["type"]
+                ));
             }
         }
         // An entrance of calls states its result in one form: `ok`, `micros`, and `error` only for a failure as

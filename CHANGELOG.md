@@ -1,5 +1,7 @@
 # Changelog
 
+- S101: The vt-core tests send the input transaction, read error text from `reason`, keep marked ranges within the preedit and read the JSON Schema catalog, so `make test` passes; no production code changed.
+
 - S100: The replay tests send the input transaction and answer each drawn image with its generation and raster, so the service draws the frames that the tests wait for; the repeat target passes 2 of 2.
 
 - S86-2: Verify the bounded event writer in a locally installed diagnostic package with terminal 0.0.21. Continuous ASCII input exposes the original package failure and passes in the corrected package; all 50 accepted records remain ordered after shutdown. Failed package checks retain diagnostic evidence. No public release is included.

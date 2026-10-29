@@ -261,9 +261,9 @@ not json at all
         .find(|request| request["fields"]["operation"] == "input")
         .expect("the input request is recorded");
     assert_eq!(compose["level"], "info");
-    assert_eq!(compose["fields"]["body"]["body"]["compose"]["text"], "한");
+    assert_eq!(compose["fields"]["body"]["body"]["preedit"]["text"], "한");
     assert_eq!(
-        compose["fields"]["body"]["body"]["compose"]["selectedRange"]["location"],
+        compose["fields"]["body"]["body"]["preedit"]["selectedRange"]["location"],
         1
     );
     let unparsed = requests
