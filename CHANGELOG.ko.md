@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S102: `vt-core/src/pty.rs`의 poisoned lock 복구마다 호출 자리에서 `into_inner`로 guard를 꺼내므로 core census가 이를 받아들인다.
 - F274-vt-sidecar: pre-push hook은 push가 게시하는 commit message만 검사한다. 시험과 검사는 CI가 실행한다.
 - S101: vt-core 시험은 input transaction을 보내고, 오류 문장을 `reason`에서 읽고, marked range를 preedit 안에 두며, JSON Schema catalog를 읽으므로 `make test`가 통과한다. Production 코드는 바꾸지 않았다.
 

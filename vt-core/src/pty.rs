@@ -96,10 +96,9 @@ impl Session {
     fn recovered<'a, T>(
         &self,
         field: &Mutex<T>,
-        error: std::sync::PoisonError<MutexGuard<'a, T>>,
+        value: MutexGuard<'a, T>,
         name: &str,
     ) -> MutexGuard<'a, T> {
-        let value = error.into_inner();
         self.log.emit_for(
             Level::Error,
             "sidecar.vt.record.error",
@@ -117,7 +116,7 @@ impl Session {
         field
             .lock()
             // default: recover the retained guard and report the field through the session writer.
-            .unwrap_or_else(|error| self.recovered(field, error, name))
+            .unwrap_or_else(|error| self.recovered(field, error.into_inner(), name))
     }
 
     fn wait_reaped<'a>(&self, child: MutexGuard<'a, SessionChild>) -> MutexGuard<'a, SessionChild> {
@@ -135,7 +134,7 @@ impl Session {
                 .wait_while(child, |child| child.reaped.is_none())
                 // default: recover the same child guard and recheck completion after poisoning.
                 .unwrap_or_else(|error| {
-                    let child = self.recovered(&self.child, error, "child");
+                    let child = self.recovered(&self.child, error.into_inner(), "child");
                     recovered();
                     child
                 });
