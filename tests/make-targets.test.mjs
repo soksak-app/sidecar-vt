@@ -19,10 +19,10 @@ function recipe(target, variables = []) {
   return result.stdout;
 }
 
-test("make push-check runs the Rust tests and the commit message check of the pushed range (S72)", { timeout: 30000 }, () => {
+// A published commit message is kept, so the push checks it; CI runs the tests on the pushed commits.
+test("make push-check runs only the commit message check of the pushed range (F274-vt-sidecar)", { timeout: 30000 }, () => {
   const commands = recipe("push-check");
-  assert.match(commands, /cargo test --workspace/);
-  assert.match(commands, /pnpm exec soksak-commits "origin\/main\.\.HEAD"/);
+  assert.deepEqual(commands.trim().split("\n"), ['pnpm exec soksak-commits "origin/main..HEAD"']);
 });
 
 test("make build and release pass an explicit diagnostics feature to Cargo (S78)", { timeout: 30000 }, () => {

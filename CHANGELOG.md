@@ -1,5 +1,6 @@
 # Changelog
 
+- F274-vt-sidecar: The pre-push hook checks only the commit messages that a push publishes; CI runs the tests and checks.
 - S101: The vt-core tests send the input transaction, read error text from `reason`, keep marked ranges within the preedit and read the JSON Schema catalog, so `make test` passes; no production code changed.
 
 - S100: The replay tests send the input transaction and answer each drawn image with its generation and raster, so the service draws the frames that the tests wait for; the repeat target passes 2 of 2.

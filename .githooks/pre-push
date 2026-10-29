@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs the checks of CI that a push needs before the push leaves this checkout. `make hooks` sets this folder as the git hook folder.
+# Checks the commit messages that a push publishes before the push leaves this checkout; CI runs every other check. `make hooks` sets this folder as the git hook folder.
 # git passes one line per pushed ref on stdin: `<local ref> <local sha> <remote ref> <remote sha>`; a new remote ref has the zero sha.
 root=$(git rev-parse --show-toplevel) || exit 1
 zero=0000000000000000000000000000000000000000

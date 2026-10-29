@@ -1,5 +1,6 @@
 # 변경 기록
 
+- F274-vt-sidecar: pre-push hook은 push가 게시하는 commit message만 검사한다. 시험과 검사는 CI가 실행한다.
 - S101: vt-core 시험은 input transaction을 보내고, 오류 문장을 `reason`에서 읽고, marked range를 preedit 안에 두며, JSON Schema catalog를 읽으므로 `make test`가 통과한다. Production 코드는 바꾸지 않았다.
 
 - S100: Replay 시험은 input transaction을 보내고 그려진 각 image에 generation과 raster를 담아 답하므로 service가 시험이 기다리는 frame을 그린다. 반복 target이 2회 중 2회 통과한다.
