@@ -1,6 +1,6 @@
-// 실제 셸의 입력 행을 크기 변경했을 때 엔진 화면에 이전 폭의 행이 남지 않는지 검사한다.
-// 서비스처럼 엔진 크기를 먼저 바꾸고 PTY 크기를 바꾼 뒤, 셸이 다시 그린 출력을 엔진에 넣는다.
-// 엔진 파일의 선택자 목록은 engine_test 가 쓴다.
+// Checks that resizing a real shell input line leaves no rows of the previous width on the engine
+// screen. As the service does, the engine is resized first, then the PTY, and the output the shell
+// redraws is fed to the engine. The selector list of the engine file is used by engine_test.
 #[allow(dead_code)]
 #[path = "../src/engine.rs"]
 mod engine;
@@ -16,7 +16,8 @@ use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{Duration, timeout};
 
-// 같은 워크스페이스의 PTY 검사들과 한 번에 하나씩 실행한다. 셸 환경은 프로세스 환경에서 온다.
+// Runs one at a time with the PTY checks of the same workspace. The shell environment comes from
+// the process environment.
 fn native_pty_test_lock() -> std::fs::File {
     static LOCAL: OnceLock<Mutex<()>> = OnceLock::new();
     let _local = LOCAL.get_or_init(|| Mutex::new(())).lock().unwrap();
@@ -33,7 +34,8 @@ fn native_pty_test_lock() -> std::fs::File {
     file
 }
 
-/// 행을 열 수까지 채워 이어 붙인다. 자동 줄바꿈 행은 하나의 문자열로 이어진다.
+/// Pads each row to the column count and joins them. Rows wrapped automatically join into one
+/// string.
 fn screen_text(screen: &Screen, cols: usize) -> String {
     screen
         .lines
@@ -65,7 +67,8 @@ struct Session {
 }
 
 impl Session {
-    /// 출력을 엔진에 넣으며 화면이 조건을 만족할 때까지 기다린다. 만족하지 않으면 화면 글자를 돌려준다.
+    /// Feeds the output to the engine and waits until the screen satisfies the predicate. Returns
+    /// the screen text if it is not satisfied.
     async fn until(
         &mut self,
         predicate: impl Fn(&str, &AlacrittyEngine) -> bool,
@@ -106,7 +109,8 @@ impl Session {
 }
 
 fn open(shell: &str, variable: &str, directory: &Path) -> Session {
-    // The writer of the events has a folder of its own; the folder goes away with the test directory of the system.
+    // The writer of the events has a folder of its own; the folder goes away with the test
+    // directory of the system.
     let logs = tempfile::tempdir().expect("create the folder of the events");
     let events = std::sync::Arc::new(
         EventLog::start(Options::service(
@@ -144,7 +148,8 @@ fn startup_directory(name: &str, files: &[(&str, &str)]) -> PathBuf {
     directory
 }
 
-/// 두 행에 걸친 입력 행을 좁혔다가 넓힌다. 각 단계에서 프롬프트와 입력이 한 번만 이어져 있고 커서가 입력 끝에 있어야 한다.
+/// Narrows and then widens an input line that spans two rows. At each step the prompt and the input
+/// must appear joined once, and the cursor must be at the end of the input.
 async fn resize_wrapped_input(mut session: Session) -> Result<(), String> {
     let input = format!("true START-{}-END", "x".repeat(50));
     let line = format!("P> {input}");
@@ -152,7 +157,7 @@ async fn resize_wrapped_input(mut session: Session) -> Result<(), String> {
         .until(|text, _| text.contains("P> "))
         .await
         .map_err(|screen| format!("no prompt: {screen:?}"))?;
-    // 프롬프트 바로 위의 출력 행도 크기 변경 뒤 그대로 있어야 한다.
+    // The output row directly above the prompt must also remain unchanged after the resize.
     session
         .service
         .write(&session.id, b"printf 'ABOVE\\n'\n")
@@ -165,7 +170,8 @@ async fn resize_wrapped_input(mut session: Session) -> Result<(), String> {
         .service
         .write(&session.id, input.as_bytes())
         .unwrap();
-    // 각 단계는 크기를 한 번 바꾼다. 셸이 다시 그리기 전에 크기가 다시 바뀌면 readline 이 지난 폭으로 그린다.
+    // Each step changes the size once. If the size changes again before the shell redraws, readline
+    // redraws at the previous width.
     for (step, cols) in [("before", 60u16), ("narrow", 30), ("wide", 60)] {
         if session.cols != cols {
             session.resize(cols);

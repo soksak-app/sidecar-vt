@@ -1,4 +1,5 @@
-// 터미널 세션이 여는 셸: 설정 값 login 은 계정의 로그인 셸이고, 셸은 로그인 셸로 시작한다.
+// The shell that a terminal session opens: the setting value login is the login shell of the
+// account, and the shell starts as a login shell.
 #[path = "support/events_test.rs"]
 mod events_test;
 
@@ -11,7 +12,7 @@ use soksak_sidecar_vt_core::DaemonEvent;
 use soksak_sidecar_vt_core::pty::{PtyService, resolve_directory, resolve_shell};
 use tokio::time::{Duration, timeout};
 
-// 같은 워크스페이스의 PTY 검사들과 한 번에 하나씩 실행한다.
+// Runs one at a time with the other PTY checks of the same workspace.
 fn native_pty_test_lock() -> std::fs::File {
     static LOCAL: OnceLock<Mutex<()>> = OnceLock::new();
     let _local = LOCAL.get_or_init(|| Mutex::new(())).lock().unwrap();
@@ -83,7 +84,8 @@ async fn a_session_shell_starts_as_a_login_shell() {
     assert!(found, "the shell did not report argv0 -sh: {output:?}");
 }
 
-/// 출력이 predicate 를 만족할 때까지 모은다. 시간 안에 만족하지 않으면 그때까지의 출력과 함께 false 를 돌려준다.
+/// Collects output until it satisfies the predicate. If it is not satisfied in time, returns false
+/// with the output collected so far.
 async fn collect_until(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<DaemonEvent>,
     output: &mut String,
@@ -107,7 +109,7 @@ async fn collect_until(
     .unwrap_or(false)
 }
 
-/// needle 들이 output 에서 이 순서로 나타나는지 본다.
+/// Checks whether the needles appear in the output in this order.
 fn in_order(output: &str, needles: &[&str]) -> bool {
     let mut rest = output;
     for needle in needles {
@@ -141,7 +143,7 @@ async fn a_zsh_session_reads_the_user_startup_files_and_reports_prompt_and_comma
             (".zlogin", "ZLOGIN_READ=1\n"),
         ],
     );
-    // 세션 환경의 ZDOTDIR 은 이 검사가 정한다.
+    // This check sets ZDOTDIR in the session environment.
     let service =
         PtyService::new(events_test::TestEvents::new().handle()).with_environment(vec![(
             "ZDOTDIR".to_string(),
@@ -193,7 +195,7 @@ async fn a_zsh_session_reads_the_user_startup_files_and_reports_prompt_and_comma
 #[tokio::test]
 async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_reports_marks() {
     let _lock = native_pty_test_lock();
-    // macOS 가 권하는 방식처럼 사용자의 PROMPT_COMMAND 를 뒤에 붙인다.
+    // Appends the user's PROMPT_COMMAND, as macOS recommends.
     let home = startup_directory(
         "soksak-bash-integration-test",
         &[(
@@ -215,7 +217,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
     })
     .await;
     assert!(prompted, "bash did not report a prompt start: {output:?}");
-    // 첫 프롬프트의 사용자 PROMPT_COMMAND 항목은 명령이 아니다.
+    // The user PROMPT_COMMAND entry at the first prompt is not a command.
     assert!(
         !output.contains("\x1b]133;C\x07"),
         "the first prompt reported a command start: {output:?}"
@@ -256,7 +258,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
         "bash did not report the failed command status: {output:?}"
     );
     output.clear();
-    // 트랩은 앞 명령의 마지막 인수($_)를 바꾸지 않는다.
+    // The trap does not change the last argument ($_) of the previous command.
     service.write(&session, b"true last-argument\n").unwrap();
     service
         .write(&session, b"printf 'LAST=%s\\n' \"$_\"\n")
@@ -270,7 +272,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
     .await;
     assert!(kept, "the trap changed $_: {output:?}");
     output.clear();
-    // 빈 입력 행은 명령이 아니다.
+    // An empty input line is not a command.
     service.write(&session, b"\n").unwrap();
     let empty = collect_until(&mut rx, &mut output, |text| {
         text.contains("\x1b]133;A;redraw=last\x07")
@@ -335,7 +337,8 @@ async fn a_resize_during_bash_startup_does_not_report_a_command_at_the_first_pro
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", "/bin/bash", None, 80, 24, tx);
     let (session, _) = opened.expect("open a bash session");
-    // 앱은 세션을 연 직후 표면 크기를 보낸다. 셸이 시작 파일을 읽는 동안 SIGWINCH 가 온다.
+    // The app sends the surface size right after it opens the session. SIGWINCH arrives while the
+    // shell reads its startup files.
     service.resize(&session, 79, 24).unwrap();
     service.resize(&session, 80, 24).unwrap();
     let mut output = String::new();
@@ -389,7 +392,8 @@ async fn a_session_starts_in_the_requested_directory() {
     );
 }
 
-/// 셸이 알릴 디렉터리 URI: 예약되지 않은 문자와 `/` 밖의 바이트를 퍼센트 인코딩한다.
+/// The directory URI that the shell reports: percent-encodes each byte that is not an unreserved
+/// character or `/`.
 fn directory_uri(path: &std::path::Path) -> String {
     let host = soksak_sidecar_vt_core::directory_uri::host_name().unwrap();
     let mut encoded = String::new();
@@ -420,7 +424,7 @@ async fn reports_its_directory(shell: &str, variable: &str, files: &[(&str, &str
     let expected = directory_uri(&start);
     let mut output = String::new();
     let first = collect_until(&mut rx, &mut output, |text| text.contains(&expected)).await;
-    // 디렉터리를 바꾸면 다음 프롬프트 전에 새 디렉터리를 알린다.
+    // After a directory change, the shell reports the new directory before the next prompt.
     service.write(&session, b"cd /\n").unwrap();
     let changed = collect_until(&mut rx, &mut output, |text| {
         in_order(

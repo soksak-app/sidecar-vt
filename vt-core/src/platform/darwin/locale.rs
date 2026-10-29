@@ -1,11 +1,12 @@
-//! 현재 macOS locale 의 언어 코드와 지역 코드를 읽고, C library 가 locale 이름을 아는지 확인한다.
+//! Reads the language and region codes of the current macOS locale, and checks whether the C
+//! library recognizes a locale name.
 
 use std::ffi::{CStr, CString, c_char, c_void};
 
 type CFTypeRef = *const c_void;
 type CFIndex = isize;
 
-// CFString.h 의 kCFStringEncodingUTF8.
+// kCFStringEncodingUTF8 from CFString.h.
 const CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -25,7 +26,8 @@ unsafe extern "C" {
     fn CFRelease(value: CFTypeRef);
 }
 
-/// locale 값이 CFString 이면 그 UTF-8 문자열. 언어 코드와 지역 코드는 짧은 ASCII 이다.
+/// The UTF-8 string of the locale value when the value is a CFString. Language and region codes are
+/// short ASCII strings.
 fn text(value: CFTypeRef) -> Option<String> {
     if value.is_null() || unsafe { CFGetTypeID(value) != CFStringGetTypeID() } {
         return None;
@@ -46,7 +48,8 @@ fn text(value: CFTypeRef) -> Option<String> {
     Some(value.to_string_lossy().into_owned())
 }
 
-/// 현재 macOS locale 의 언어 코드(`ko`)와 지역 코드(`KR`). locale 에 없는 코드는 `None` 이다.
+/// Language code (`ko`) and region code (`KR`) of the current macOS locale. A code that the locale
+/// does not have is `None`.
 pub fn codes() -> (Option<String>, Option<String>) {
     unsafe {
         let locale = CFLocaleCopyCurrent();
@@ -60,7 +63,8 @@ pub fn codes() -> (Option<String>, Option<String>) {
     }
 }
 
-/// C library 가 `name` 의 LC_CTYPE 을 만들 수 있으면 참이다. `newlocale` 은 process locale 을 바꾸지 않는다.
+/// True when the C library can create the LC_CTYPE for `name`. `newlocale` does not change the
+/// process locale.
 pub fn installed(name: &str) -> bool {
     let Ok(name) = CString::new(name) else {
         return false;

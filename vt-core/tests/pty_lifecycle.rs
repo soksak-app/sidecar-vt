@@ -9,7 +9,8 @@ use soksak_sidecar_vt_core::pty::PtyService;
 use soksak_sidecar_vt_core::{DaemonEvent, LocalSessionPort, SessionPort, ShellRequest};
 use tokio::time::{Duration, timeout};
 
-/// 실제 PTY 를 쓰는 test 를 하나씩 실행한다. test 마다 runtime 이 다르므로 await 를 넘어 잡는 async 잠금이다.
+/// Runs the tests that use a real PTY one at a time. Each test has its own runtime, so this is an
+/// async lock held across await.
 static LIFECYCLE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn lifecycle_test_lock() -> tokio::sync::MutexGuard<'static, ()> {
@@ -172,9 +173,10 @@ async fn three_real_sessions_reconnect_with_same_pid_and_retained_output() {
     }
 }
 
-// 마스터가 쓴 바이트 중 자식이 아직 읽지 않은 양의 계약. 읽지 않는 자식에서는 쓴 만큼 남는다.
-// 마우스 보고를 쓰는 전체 화면 프로그램처럼 자식이 raw 모드를 켠 뒤에 쓴다. canonical 모드에서는 줄이
-// 완성되기 전 바이트가 줄 조립 버퍼에 남아 큐에 반영되지 않는다.
+// The contract for the bytes that the master wrote and the child has not read yet. A child that
+// does not read leaves every written byte pending. Writes happen after the child enables raw mode,
+// as a full-screen program that writes mouse reports does. In canonical mode, bytes before their
+// line is complete stay in the line assembly buffer and are not reflected in the queue.
 #[tokio::test]
 async fn pty_measurement_counts_master_written_bytes_a_non_reading_child_has_not_read() {
     let _test_lock = lifecycle_test_lock().await;
@@ -234,7 +236,8 @@ async fn pty_measurement_counts_master_written_bytes_a_non_reading_child_has_not
     service.close(&session).expect("close failed");
 }
 
-// 읽는 자식은 큐를 비운다. 유한 시간 안에 0 이 되지 않으면 실패한다.
+// A child that reads empties the queue. The test fails if the count does not reach 0 within a
+// finite time.
 #[tokio::test]
 async fn pty_measurement_drains_to_zero_as_the_child_reads() {
     let _test_lock = lifecycle_test_lock().await;
@@ -291,7 +294,8 @@ async fn pty_measurement_drains_to_zero_as_the_child_reads() {
     service.close(&session).expect("close failed");
 }
 
-// 없는 세션과 닫은 세션의 측정은 오류이다. 0 이 아니라 명시적 실패로 구분한다.
+// A measurement of a missing session or a closed session is an error. It is reported as an explicit
+// failure, not as 0.
 #[tokio::test]
 async fn pty_measurement_rejects_unknown_and_closed_sessions() {
     let _test_lock = lifecycle_test_lock().await;
@@ -319,9 +323,10 @@ async fn pty_measurement_rejects_unknown_and_closed_sessions() {
     );
 }
 
-// reader 가 읽은 자식 출력의 누적 바이트 계약. 정확히 알려진 바이트만 출력하고 조용히 있는 자식에서
-// 카운터는 그 수에 정확히 도달한다. mouse-up 뒤 자식 출력이 있었는지 묻는 진단 질문의 소유 검증이다.
-// stty -opost 로 출력 후처리를 끊어 reader 가 읽은 바이트가 자식이 쓴 바이트와 정확히 일치한다.
+// The contract for the cumulative bytes of child output that the reader has read. A silent child
+// that prints only known bytes makes the counter reach exactly that number. This verifies the
+// diagnostic question of whether child output followed a mouse-up. stty -opost disables output
+// post-processing, so the bytes that the reader reads match the bytes that the child wrote exactly.
 #[tokio::test]
 async fn written_output_counts_exact_child_output_bytes() {
     let _test_lock = lifecycle_test_lock().await;
@@ -381,9 +386,10 @@ async fn written_output_counts_exact_child_output_bytes() {
     service.close(&session).expect("close failed");
 }
 
-// 생산 write 경로로 쓴 정확한 바이트를 자식이 읽어 되돌리는 수신 fixture. READY 뒤에만 쓰므로
-// stty -echo 가 이미 적용됐고, stty -opost 로 출력 후처리(\n 을 \r\n 으로 바꾸는 등)를 끊어
-// 돌아온 바이트는 echo 나 가공이 아니라 cat 이 읽은 그대로다.
+// A receiving fixture: the child reads back the exact bytes written through the production write
+// path. It writes only after READY, so stty -echo is already applied, and stty -opost disables
+// output post-processing (such as converting \n to \r\n), so the returned bytes are exactly what
+// cat read, with no echo or conversion.
 #[tokio::test]
 async fn child_reads_exact_bytes_written_through_the_production_path() {
     let _test_lock = lifecycle_test_lock().await;
@@ -416,7 +422,8 @@ async fn child_reads_exact_bytes_written_through_the_production_path() {
         ready.is_ok(),
         "the receiving child never reported READY; output so far: {seen:?}"
     );
-    // ?1003 프로그램이 받는 드래그 보고와 같은 SGR 바이트 형태를 쓴다. 행 끝 newline 이 cat 의 읽기를 끝낸다.
+    // Writes the same SGR byte form as the drag reports that a ?1003 program receives. The newline
+    // at the end of the line ends the read of cat.
     let bytes = b"\x1b[<0;5;2M\x1b[<32;6;2m\x1b[<35;7;2m\x1b[<0;7;2m\n";
     service
         .write(&session, bytes)
@@ -442,8 +449,8 @@ async fn child_reads_exact_bytes_written_through_the_production_path() {
     service.close(&session).expect("close failed");
 }
 
-/// macOS는 member가 모두 zombie인 process group에 대한 signal에 EPERM으로 응답한다.
-/// 그런 group에는 종료할 대상이 남아 있지 않으므로 close는 성공한다.
+/// macOS answers a signal to a process group whose members are all zombies with EPERM. No target
+/// remains in such a group to terminate, so close succeeds.
 #[test]
 fn a_process_group_of_only_zombies_is_already_terminated() {
     use std::os::unix::process::CommandExt;
@@ -455,7 +462,7 @@ fn a_process_group_of_only_zombies_is_already_terminated() {
         .spawn()
         .expect("the shell must start");
     let group = child.id() as i32;
-    // 종료를 기다리되 회수하지 않아 그룹에 좀비 하나만 남긴다.
+    // Waits for the exit without reaping, so that one zombie remains in the group.
     let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
     let waited = unsafe {
         libc::waitid(
@@ -508,7 +515,7 @@ fn process_group_members_report_running_and_ended_processes() {
         }])
     );
     child.kill().expect("sleep must end");
-    // 종료를 기다리되 회수하지 않는다. 끝난 프로세스는 좀비로 보고된다.
+    // Waits for the exit without reaping. The ended process is reported as a zombie.
     let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
     let waited = unsafe {
         libc::waitid(
@@ -533,8 +540,9 @@ fn process_group_members_report_running_and_ended_processes() {
     assert_eq!(members(group), Ok(vec![]));
 }
 
-/// 셸이 읽히지 않은 PTY 출력을 남기고 끝나면 커널은 슬레이브를 닫으며 출력이 비워지기를 기다린다.
-/// 그동안 셸은 좀비가 아니라 종료 중이고, macOS 는 그 그룹의 신호에 EPERM 으로 답한다.
+/// When a shell ends with unread PTY output, the kernel closes the slave and waits for the output
+/// to drain. Meanwhile the shell is exiting, not a zombie, and macOS answers signals to its group
+/// with EPERM.
 #[test]
 fn a_process_group_whose_members_are_exiting_is_already_terminated() {
     use soksak_sidecar_vt_core::platform::darwin::process_group::members;
@@ -559,7 +567,7 @@ fn a_process_group_whose_members_are_exiting_is_already_terminated() {
         std::io::Error::last_os_error()
     );
     let master = unsafe { std::os::fd::OwnedFd::from_raw_fd(master) };
-    // 슬레이브는 자식에게만 남기고 이 프로세스에서는 닫는다.
+    // Keeps the slave only in the child and closes it in this process.
     let mut child = std::process::Command::new("/bin/sh")
         .args(["-c", "printf unread-output"])
         .stdout(unsafe { std::process::Stdio::from_raw_fd(slave) })
@@ -589,8 +597,8 @@ fn a_process_group_whose_members_are_exiting_is_already_terminated() {
     );
 }
 
-/// A session whose shell is a script that sleeps and never reads its input. The write of 1 MiB fills the
-/// terminal buffer and waits for the child, which ends after three seconds.
+/// A session whose shell is a script that sleeps and never reads its input. The write of 1 MiB
+/// fills the terminal buffer and waits for the child, which ends after three seconds.
 #[tokio::test(flavor = "current_thread")]
 async fn a_write_waiting_for_the_child_does_not_block_the_runtime() {
     let _test_lock = lifecycle_test_lock().await;
@@ -619,8 +627,8 @@ async fn a_write_waiting_for_the_child_does_not_block_the_runtime() {
     let writer = {
         let port = Arc::clone(&port);
         let session = session.clone();
-        // Complete lines fill the canonical queue of the line discipline, which blocks the master write
-        // once the child does not read it.
+        // Complete lines fill the canonical queue of the line discipline, which blocks the master
+        // write once the child does not read it.
         let data = b"x\n".repeat(1 << 19);
         tokio::spawn(async move { port.write(&session, &data).await })
     };
@@ -659,8 +667,9 @@ async fn a_write_waiting_for_the_child_does_not_block_the_runtime() {
     );
 }
 
-/// The close of a session ends its child first, so a write that waits for a child that never reads ends with the child
-/// and does not hold the close. The child sleeps 30 s, far longer than the close may take.
+/// The close of a session ends its child first, so a write that waits for a child that never reads
+/// ends with the child and does not hold the close. The child sleeps 30 s, far longer than the
+/// close may take.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_close_ends_a_write_that_waits_for_the_child() {
     let _test_lock = lifecycle_test_lock().await;
@@ -692,7 +701,8 @@ async fn a_close_ends_a_write_that_waits_for_the_child() {
         let data = b"x\n".repeat(1 << 19);
         tokio::spawn(async move { port.write(&session, &data).await })
     };
-    // The write fills the canonical queue of the line discipline within this time and then waits for the child.
+    // The write fills the canonical queue of the line discipline within this time and then waits
+    // for the child.
     tokio::time::sleep(Duration::from_millis(300)).await;
     let started = std::time::Instant::now();
     let closed = timeout(Duration::from_secs(40), port.close(&session))

@@ -13,9 +13,9 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant, MissedTickBehavior};
 use unicode_segmentation::UnicodeSegmentation;
 
-/// A request of a client while the service handles it: what a reply and the request event need. The replies of the request
-/// carry its `cids` beside `surface` and `body`, and each reply is the event `sidecar.vt.reply` in the result form of core
-/// (docs/spec/logging.md#result-form).
+/// A request of a client while the service handles it: what a reply and the request event need. The
+/// replies of the request carry its `cids` beside `surface` and `body`, and each reply is the event
+/// `sidecar.vt.reply` in the result form of core (docs/spec/logging.md#result-form).
 pub(crate) struct Request {
     cids: Vec<String>,
     operation: String,
@@ -24,9 +24,10 @@ pub(crate) struct Request {
     log: Events,
 }
 
-/// The error of a reply line, as `<code>: <text>`, or None for an answer. `-32603` is the internal code of the entrance
-/// (docs/spec/logging.md#result-form). The text is the member `error` of the body, or of the line when it has no body, with
-/// the member `reason` after it; it is cut to 1,024 bytes.
+/// The error of a reply line, as `<code>: <text>`, or None for an answer. `-32603` is the internal
+/// code of the entrance (docs/spec/logging.md#result-form). The text is the member `error` of the
+/// body, or of the line when it has no body, with the member `reason` after it; it is cut to 1,024
+/// bytes.
 fn reply_error(line: &Value) -> Option<String> {
     let holder = match line.get("body") {
         Some(body) if body.is_object() => body,
@@ -79,7 +80,8 @@ impl Request {
     }
 }
 
-/// A command for a surface task with the request that caused it; the commands that the service sends on its own carry none.
+/// A command for a surface task with the request that caused it; the commands that the service
+/// sends on its own carry none.
 struct Dispatch {
     command: SurfaceCommand,
     request: Option<Arc<Request>>,
@@ -162,7 +164,8 @@ impl RequestSender {
     }
 }
 
-/// 연결 하나의 출력 송신기와, 그 연결이 나른 전송 이미지 가운데 호스트의 답을 기다리며 남은 것.
+/// The output sender of one connection, and what remains of the transfer images that the connection
+/// carried while waiting for the host's reply.
 #[derive(Clone)]
 struct Connection {
     sender: mpsc::Sender<String>,
@@ -178,11 +181,13 @@ impl Connection {
     }
 }
 
-/// 연결 하나가 나른 전송 이미지 가운데, 그 이미지를 그린 표면이 놓은 뒤에도 호스트의 답을 기다리는 것.
-/// 공급자는 답을 받기 전에 전송 이미지를 고치거나 다시 쓰지 않는다(core 의 docs/spec/native-surfaces.md#image-regions).
-/// 답 전에 놓으면 호스트가 그 IOSurface 를 찾지 못한다. 답이 오거나, 연결이 끝나 더 올 답이 없으면 놓는다.
+/// A transfer image carried by one connection that still awaits the host's reply after the surface
+/// that drew the image released it. The provider does not modify or rewrite the transfer image
+/// before the reply (core docs/spec/native-surfaces.md#image-regions). If the image is released
+/// before the reply, the host cannot find that IOSurface. It is released when the reply arrives, or
+/// when the connection ends and no reply can come.
 pub struct TransferStore {
-    /// None 은 끝난 연결이다.
+    /// None means the connection has ended.
     images: std::sync::Mutex<Option<Vec<RetainedTransfer>>>,
     log: Events,
 }
@@ -190,11 +195,12 @@ pub struct TransferStore {
 struct RetainedTransfer {
     surface: String,
     name: String,
-    // 한 표면의 다음 래스터는 같은 이름과 순번을 다시 쓰므로, 답은 generation 과 raster 까지 맞아야 그 전송 이미지의 답이다.
+    // The next raster of a surface rewrites the same name and sequence, so a reply belongs to this
+    // transfer image only when generation and raster also match.
     generation: u64,
     raster: u64,
     sequence: u32,
-    // 놓을 때까지 IOSurface 를 붙든다.
+    // Holds the IOSurface until it is released.
     _frame: crate::platform::Frame,
 }
 
@@ -218,15 +224,17 @@ impl TransferStore {
         })
     }
 
-    /// 끝난 연결이면 답이 올 수 없으므로 바로 놓는다.
+    /// If the connection has ended, no reply can come, so the transfer image is released at once.
     fn retain(&self, transfer: RetainedTransfer) {
         if let Some(images) = self.images().as_mut() {
             images.push(transfer);
         }
     }
 
-    /// 답에 맞는 전송 이미지를 놓고, 그런 이미지가 있었는지 돌려준다. 호스트는 표시 요청을 받은 순서로 답하므로,
-    /// 같은 표면, 이름, 순번의 이미지가 여럿이면 먼저 보낸 것이 그 답의 이미지이다.
+    /// Releases the transfer image that matches the reply, and returns whether such an image
+    /// existed. The host answers in the order it received the display requests, so when several
+    /// images have the same surface, name, and sequence, the image sent first is the image of that
+    /// reply.
     fn answer(&self, surface: &str, answer: ImageAnswer<'_>) -> bool {
         let mut images = self.images();
         let Some(images) = images.as_mut() else {
@@ -245,7 +253,8 @@ impl TransferStore {
         true
     }
 
-    /// 연결의 입력이 끝났다. 더 올 답이 없으므로 남은 전송 이미지를 모두 놓는다.
+    /// The input of the connection has ended. No reply can come, so all remaining transfer images
+    /// are released.
     fn end(&self) {
         self.images().take();
     }
@@ -254,7 +263,8 @@ impl TransferStore {
 #[derive(Clone)]
 struct OutputSink {
     connection: Arc<tokio::sync::Mutex<Option<Connection>>>,
-    /// 영속 서비스의 연결이다. 클라이언트의 출력이 닫히면 오류 대신 분리한다.
+    /// The connection of the persistent service. When the client's output closes, it is detached
+    /// instead of reported as an error.
     detachable: bool,
     /// The request that the replies of this sink answer; a sink of events has none.
     request: Option<Arc<Request>>,
@@ -284,8 +294,10 @@ impl OutputSink {
         }
     }
 
-    /// 영속 서비스의 연결. 세션은 클라이언트가 끊겨도 유지되므로(docs/spec/terminal-runtime.md), 입력의 끝을
-    /// 읽기 전에 출력 쪽이 먼저 닫힌 클라이언트도 분리한다. 다시 붙은 클라이언트는 현재 화면을 받는다.
+    /// The connection of the persistent service. A session stays alive when its client disconnects
+    /// (docs/spec/terminal-runtime.md), so a client whose output side closed first is also detached
+    /// before the end of its input is read. A client that attaches again receives the current
+    /// screen.
     fn detachable(connection: Connection) -> Self {
         Self {
             connection: Arc::new(tokio::sync::Mutex::new(Some(connection))),
@@ -295,7 +307,8 @@ impl OutputSink {
         }
     }
 
-    /// This sink for the replies of `request`. The sink that the registry keeps for events stays unbound.
+    /// Returns a copy of this sink that carries the replies of `request`. The sink that the registry
+    /// keeps for events stays unbound.
     fn bound(&self, request: Arc<Request>) -> OutputSink {
         OutputSink {
             request: Some(request),
@@ -308,8 +321,8 @@ impl OutputSink {
         self
     }
 
-    /// Sends the reply to the request of this sink: the line gets the `cids` of the request and the reply is recorded before
-    /// it is written.
+    /// Sends the reply to the request of this sink. The line gets the `cids` of the request, and
+    /// the reply is recorded before it is written.
     async fn reply(&self, mut line: Value) -> Result<(), ()> {
         if let Some(request) = &self.request {
             request.answer(&mut line);
@@ -321,7 +334,8 @@ impl OutputSink {
         self.send_carried(message).await.map(|_| ())
     }
 
-    /// 보내고, 메시지를 나른 연결의 전송 이미지 보관소를 돌려준다. 붙은 연결이 없으면 나른 연결도 없다.
+    /// Sends the message, and returns the transfer image store of the connection that carried it.
+    /// If no connection is attached, there is no carrying connection.
     async fn send_carried(&self, message: String) -> Result<Option<Arc<TransferStore>>, ()> {
         let connection = self.connection.lock().await.clone();
         match connection {
@@ -412,9 +426,10 @@ pub struct PersistentRegistry {
 
 const SURFACE_ACTOR_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// 표면 작업에 닫기를 보내고, 작업이 session 을 닫은 결과와 작업의 끝(actor 가 있으면)을 기다린다. closed 답과
-/// 정리 답은 이 결과 뒤에 보내므로, 답을 받은 host 는 그 표면의 PTY 자식이 이미 회수되었다고 본다
-/// (core 의 docs/spec/sidecars.md#messages).
+/// Sends a close to the surface action, then waits for the result of the action's session close and
+/// for the end of the action (if an actor exists). The closed answer and the cleanup answer are
+/// sent after this result, so a host that receives the answer treats the PTY child of that surface
+/// as already reaped (core docs/spec/sidecars.md#messages).
 async fn close_surface_actor(
     tx: &mpsc::Sender<Dispatch>,
     actor: Option<tokio::task::JoinHandle<()>>,
@@ -521,8 +536,9 @@ impl PersistentRegistry {
             .map(|_| ())
     }
 
-    /// 이 소유자의 세션 가운데 keep 에 없는 세션을 닫고 닫은 수를 반환한다. 앱이 다시 시작한 뒤, 어떤
-    /// 레이아웃에도 없는 표면의 세션은 다시 붙을 곳이 없다(docs/spec/terminal-runtime.md).
+    /// Closes the sessions of this owner that are not in `keep`, and returns the number closed.
+    /// After the app restarts, a session of a surface that is in no layout has no place to reattach
+    /// (docs/spec/terminal-runtime.md).
     async fn retain(
         &self,
         owner: &str,
@@ -612,7 +628,7 @@ impl PersistentRegistry {
     }
 }
 
-/// 엔진이 구현할 트레이트. VT 처리 엔진의 계약.
+/// The trait that an engine implements. It is the contract of the VT processing engine.
 pub trait Engine: Send + 'static {
     fn resize(&mut self, cols: u16, rows: u16);
     fn set_theme(&mut self, theme: crate::palette::TerminalTheme);
@@ -621,29 +637,34 @@ pub trait Engine: Send + 'static {
     fn drain_events(&mut self) -> Vec<EngineEvent>;
     fn resolve_clipboard(&mut self, request_id: u64, text: &str) -> Result<(), String>;
     fn reject_clipboard(&mut self, request_id: u64, reason: &str) -> Result<(), String>;
-    /// cell 경계에서 selection을 시작한다. `edge`는 0부터 column 수까지이다. edge `c`는 column `c`의
-    /// 왼쪽 경계이고, column 수는 마지막 column의 오른쪽 경계이다.
+    /// Starts a selection at a cell boundary. `edge` runs from 0 to the column count. Edge `c` is
+    /// the left boundary of column `c`, and the column count is the right boundary of the last
+    /// column.
     fn selection_start(&mut self, edge: u16, row: u16) -> Result<(), String>;
-    /// selection 끝을 cell 경계로 옮긴다. selection은 시작 경계와 끝 경계 사이의 cell을
-    /// 포함한다. 두 경계가 같으면 아무것도 선택하지 않는다.
+    /// Moves the end of the selection to a cell boundary. The selection includes the cells between
+    /// the start boundary and the end boundary. If the two boundaries are the same, nothing is
+    /// selected.
     fn selection_update(&mut self, edge: u16, row: u16) -> Result<(), String>;
-    /// selection을 끝내고 그 text를 반환한다. text를 포함하지 않는 selection은 지워지고
-    /// `None`을 반환한다. 이것은 정상 gesture이며 error가 아니다.
+    /// Ends the selection and returns its text. A selection that contains no text is cleared and
+    /// returns `None`. This is a normal gesture, not an error.
     fn selection_end(&mut self) -> Result<Option<String>, String>;
-    /// 이전 선택을 복사하지 않고 지운다. 픽셀이 바뀌었는지 돌려준다.
+    /// Clears the previous selection without copying it. Returns whether the pixels changed.
     fn selection_clear(&mut self) -> bool;
-    /// 현재 선택의 텍스트. 선택이 없거나 글자를 담지 않으면 `None` 이다.
+    /// The text of the current selection. `None` if there is no selection or it holds no
+    /// characters.
     fn selection_text(&self) -> Option<String>;
-    /// 기본 화면의 뷰포트를 lines 만큼 움직인다. 양수는 오래된 출력 쪽이다.
+    /// Moves the viewport of the primary screen by `lines`. A positive value moves toward the older
+    /// output.
     fn scroll_viewport(&mut self, lines: i32);
-    /// 뷰포트를 가장 새 출력으로 되돌리고, 움직였으면 true 를 반환한다.
+    /// Returns the viewport to the newest output, and returns true if it moved.
     fn scroll_to_newest(&mut self) -> bool;
     fn cursor(&self) -> Cursor;
     fn screen(&mut self) -> Screen;
     fn scroll_generation(&self) -> i64 {
         0
     }
-    /// 뷰포트가 가장 새 출력보다 위에 있는 줄 수. 스크롤백이 없는 엔진은 0 이다.
+    /// The number of lines by which the viewport is above the newest output. An engine without
+    /// scrollback returns 0.
     fn viewport_offset(&self) -> u32 {
         0
     }
@@ -651,10 +672,11 @@ pub trait Engine: Send + 'static {
     fn reset(&mut self);
 }
 
-/// 엔진과 서비스 사이에서 전달하는 중립 이벤트.
+/// A neutral event passed between the engine and the service.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineEvent {
-    /// 인라인 그림 명령과, 그 시퀀스를 만났을 때의 커서 위치와 스크롤 세대.
+    /// An inline image command, with the cursor position and scroll generation at the point where
+    /// its sequence was met.
     InlineImage {
         command: InlineImageCommand,
         anchor: InlineAnchor,
@@ -663,7 +685,8 @@ pub enum EngineEvent {
     ResetTitle,
     Directory {
         uri: String,
-        /// 이 컴퓨터의 디렉터리이면 그 경로, 다른 컴퓨터의 디렉터리이면 None.
+        /// The path if this is a directory of this computer, or None if it is a directory of
+        /// another computer.
         path: Option<String>,
     },
     Hyperlink {
@@ -695,14 +718,15 @@ pub enum EngineEvent {
         code: Option<i32>,
     },
     MouseCursorDirty,
-    /// OSC 22 가 정한 포인터 모양. CSS cursor 값이다.
+    /// The pointer shape set by OSC 22. It is a CSS cursor value.
     PointerShape(String),
     Error(String),
     /// An internal engine failure, recorded independently of surface output.
     RuntimeError(String),
 }
 
-/// 인라인 그림 시퀀스를 만났을 때의 커서 칸과 스크롤 세대. 그림은 이 자리에 놓인다.
+/// The cell column and scroll generation at the point where an inline image sequence was met. The
+/// image is placed at this position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct InlineAnchor {
     pub col: u16,
@@ -774,7 +798,7 @@ impl Default for CursorPolicy {
     }
 }
 
-/// 셀 하나의 속성
+/// The attributes of one cell
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Cell {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -792,7 +816,7 @@ pub struct Cell {
     pub underline: bool,
     #[serde(default)]
     pub inverse: bool,
-    /// OSC 8 하이퍼링크의 URI. 링크가 없는 셀은 없다.
+    /// The URI of an OSC 8 hyperlink. A cell without a link has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
 }
@@ -922,13 +946,13 @@ pub struct Modes {
     pub app_keypad: bool,
     #[serde(default)]
     pub bracketed_paste: bool,
-    /// ?1000: 누름과 뗌을 알린다.
+    /// ?1000: reports press and release.
     #[serde(default)]
     pub mouse_click: bool,
-    /// ?1002: 누름과 뗌, 버튼을 누른 채 움직임을 알린다.
+    /// ?1002: reports press and release, and motion while a button is held.
     #[serde(default)]
     pub mouse_drag: bool,
-    /// ?1003: 누름과 뗌, 모든 움직임을 알린다.
+    /// ?1003: reports press and release, and all motion.
     #[serde(default)]
     pub mouse_motion: bool,
     #[serde(default)]
@@ -943,7 +967,7 @@ pub struct Modes {
     pub alt_screen: bool,
 }
 
-/// 포인터 입력의 단계.
+/// The phase of a pointer input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MousePhase {
     Down,
@@ -956,13 +980,14 @@ fn mouse_drag_motion_owned(gesture: bool, motion_owner: bool, pressed: bool) -> 
 }
 
 impl Modes {
-    /// 프로그램이 마우스 보고를 켰는지.
+    /// Whether the program has turned on mouse reporting.
     pub fn mouse_report(&self) -> bool {
         self.mouse_click || self.mouse_drag || self.mouse_motion
     }
 }
 
-/// 뷰포트가 가장 새 출력보다 위에 있는 줄 수와 보관된 기록 줄 수.
+/// The number of lines by which the viewport is above the newest output, and the number of retained
+/// history lines.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct Scrollback {
     pub offset: u32,
@@ -976,7 +1001,8 @@ pub struct Screen {
     pub cursor: Cursor,
     #[serde(default)]
     pub scrollback: Scrollback,
-    /// 현재 기본 배경색(`#rrggbb`). 프로그램이 OSC 11 로 바꾼 값을 포함한다. 래스터는 칸 밖 여백도 이 색으로 채운다.
+    /// The current default background color (`#rrggbb`). It includes the value that the program
+    /// changed with OSC 11. The raster fills the margin outside the cells with this color.
     pub background: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub lines: Vec<Vec<Cell>>,
@@ -996,7 +1022,7 @@ pub struct InlineImagePlacement {
     pub visible: bool,
 }
 
-/// 데몬에서 받는 이벤트
+/// Event received from the daemon
 #[derive(Debug, Clone)]
 pub enum DaemonEvent {
     Output {
@@ -1014,13 +1040,14 @@ pub enum DaemonEvent {
     },
 }
 
-/// 세션 포트: 데몬과 통신하는 추상 인터페이스
-/// 세션을 여는 요청의 셸과 시작 디렉터리.
+/// Session port: the abstract interface that communicates with the daemon. The shell and the start
+/// directory of a request that opens a session.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ShellRequest {
-    /// 터미널 설정 shell 의 값. `login` 이거나 셸의 절대 경로다.
+    /// The value of the terminal setting shell. It is `login` or the absolute path of a shell.
     pub shell: String,
-    /// 셸이 시작할 디렉터리의 절대 경로. 없으면 계정의 홈 디렉터리다.
+    /// The absolute path of the directory the shell starts in. Without it, the home directory of
+    /// the account is used.
     pub directory: Option<String>,
 }
 
@@ -1032,13 +1059,14 @@ pub trait SessionPort: Send + Sync {
     async fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String>;
     async fn detach(&self, session_id: &str) -> Result<(), String>;
     async fn close(&self, session_id: &str) -> Result<(), String>;
-    /// 기존 session에 새 view를 붙이고 보존된 output을 재생한다.
+    /// Attaches a new view to an existing session and replays the retained output.
     async fn attach(&self, _session_id: &str, _from: i64) -> Result<String, String> {
         Err("session attach is not supported".to_string())
     }
-    /// 한 시점의 PTY 전송 상태 측정. pending 은 마스터가 쓰고 자식이 아직 읽지 않은 입력 바이트 수이고
-    /// written 는 reader 가 읽은 자식 출력의 누적 바이트 수다. 측정 관측이므로 제공하지 않는 포트는
-    /// 명시적으로 실패한다.
+    /// Measures the PTY transfer state at one point in time. pending is the number of input bytes
+    /// that the master wrote and the child has not read yet, and written is the cumulative number
+    /// of child output bytes that the reader has read. Because this is a measurement observation, a
+    /// port that does not provide it fails explicitly.
     async fn pty_measurement(
         &self,
         _session_id: &str,
@@ -1048,7 +1076,7 @@ pub trait SessionPort: Send + Sync {
     async fn get_events(&self) -> mpsc::Receiver<DaemonEvent>;
 }
 
-/// 호스트에서 받은 메시지 봉투
+/// Envelope of a message received from the host
 #[derive(Debug, Deserialize)]
 struct Envelope {
     surface: String,
@@ -1056,12 +1084,13 @@ struct Envelope {
     root: Option<String>,
     body: Option<Value>,
     closed: Option<bool>,
-    /// The correlation identifiers of the inputs the request continues (core docs/spec/sidecars.md#messages).
+    /// The correlation identifiers of the inputs the request continues (core
+    /// docs/spec/sidecars.md#messages).
     #[serde(default)]
     cids: Vec<String>,
 }
 
-/// 표면 작업으로 보낼 명령
+/// Commands sent to the surface action
 #[derive(Debug)]
 enum SurfaceCommand {
     Open {
@@ -1084,21 +1113,22 @@ enum SurfaceCommand {
         cids: Vec<String>,
     },
     Theme {
-        // 테마는 다른 명령보다 훨씬 크므로 명령 크기를 키우지 않도록 따로 둔다.
+        // The theme is much larger than the other commands, so it is kept apart to avoid increasing
+        // the size of the command.
         theme: Box<crate::palette::TerminalTheme>,
     },
     Font {
         font: std::sync::Arc<crate::platform::TerminalFont>,
         system: bool,
         skipped: Vec<String>,
-        /// 글꼴 크기(포인트).
+        /// Font size (points).
         size: f32,
     },
     Cursor {
         policy: CursorPolicy,
     },
     ScreenRead,
-    /// session 을 닫고 그 결과를 result 로 답한 뒤 작업을 끝낸다.
+    /// Closes the session, answers its result as `result`, and then ends the action.
     SessionClose {
         result: tokio::sync::oneshot::Sender<Result<(), String>>,
     },
@@ -1118,7 +1148,8 @@ enum SurfaceCommand {
     InlineImageDelete {
         name: String,
     },
-    /// 페이지의 포인터 입력. 프로그램이 마우스 보고를 켰으면 보고로 바꾼다.
+    /// Pointer input of the page. If the program turned on mouse reporting, it is converted to a
+    /// report.
     Mouse {
         input_id: String,
         phase: MousePhase,
@@ -1139,26 +1170,29 @@ enum SurfaceCommand {
         y: f64,
     },
     SelectionEnd,
-    /// 사용자의 복사 명령. 현재 선택의 텍스트를 copy 이벤트로 보낸다.
+    /// The user's copy command. It sends the text of the current selection as a copy event.
     Copy,
-    /// 휠 스크롤. lines 는 0 이 아니며 양수는 오래된 출력 쪽이다. col, row 는 포인터 칸이다.
+    /// Wheel scroll. `lines` is not 0, and a positive value moves toward the older output. `col`
+    /// and `row` are the pointer cell.
     Scroll {
         lines: i32,
         col: u16,
         row: u16,
         cids: Vec<String>,
     },
-    /// 스크롤바 끌기. 기본 뷰포트를 이 오프셋으로 옮기며 프로그램에는 쓰지 않는다.
+    /// Scrollbar drag. It moves the primary viewport to this offset, and it is not written to the
+    /// program.
     Viewport {
         offset: u32,
     },
-    /// 현재 세션에서 마스터가 쓰고 자식이 아직 읽지 않은 입력 바이트 수를 묻는 측정 연산.
+    /// A measurement operation that asks for the number of input bytes that the master wrote and
+    /// the child has not read yet in the current session.
     PtyPending,
 }
 
 use crate::platform::ImageConfiguration;
 
-/// 입력 키 정보
+/// Input key information
 #[derive(Debug, Clone, Deserialize)]
 struct InputKey {
     key: String,
@@ -1491,15 +1525,17 @@ fn pixels_to_cells(pixels: u32, cell_size: f32) -> u16 {
     (pixels as f32 / cell_size) as u16
 }
 
-/// CSI 14t 는 글자 영역을 기기 픽셀로 알린다. 인라인 그림의 픽셀 크기도 같은 단위이므로, 프로그램이 14t 로 셀 크기를
-/// 계산해 그림을 요청하면 그림이 셀에 맞는다.
+/// CSI 14t reports the character area in device pixels. The pixel size of an inline image uses the
+/// same unit, so when a program computes the cell size from 14t and requests an image, the image
+/// fits the cells.
 fn set_engine_metrics(engine: &mut Box<dyn Engine>, state: &ImageState) -> Result<(), String> {
     let width = state.metrics.cell_width.round() as u16;
     let height = state.metrics.cell_height.round() as u16;
     engine.set_cell_metrics(width, height)
 }
 
-/// terminal 크기를 검증하고 계산한다. width/height가 유효하지 않거나 결과가 0이면 error를 반환한다.
+/// Validates and computes the terminal size. It returns an error if width or height is invalid or
+/// the result is 0.
 fn calculate_terminal_size(
     width: u32,
     height: u32,
@@ -1519,7 +1555,8 @@ fn calculate_terminal_size(
     Ok((cols, rows))
 }
 
-/// Records that a raster holds no whole cell, so the grid of the surface stays as it is until a raster with a cell arrives.
+/// Records that a raster holds no whole cell, so the grid of the surface stays as it is until a
+/// raster with a cell arrives.
 fn record_empty_raster(log: &Events, surface_id: &str, width: u32, height: u32, reason: &str) {
     log.record_info(
         "raster",
@@ -1527,7 +1564,7 @@ fn record_empty_raster(log: &Events, surface_id: &str, width: u32, height: u32, 
     );
 }
 
-/// 키 입력을 바이트로 인코딩한다
+/// Encodes key input as bytes
 fn encode_keys(keys: &[InputKey], modes: &Modes) -> Result<Vec<u8>, String> {
     let mut all_bytes = Vec::new();
 
@@ -1535,7 +1572,7 @@ fn encode_keys(keys: &[InputKey], modes: &Modes) -> Result<Vec<u8>, String> {
         let key_name = &input_key.key;
         let text = &input_key.text;
 
-        // 수식자 비트 계산: shift=1, alt=2, ctrl=4
+        // Computes the modifier bits: shift=1, alt=2, ctrl=4
         let mut modifiers = 0u8;
         if input_key.shift {
             modifiers |= 1;
@@ -1547,7 +1584,7 @@ fn encode_keys(keys: &[InputKey], modes: &Modes) -> Result<Vec<u8>, String> {
             modifiers |= 4;
         }
 
-        // key 이름을 Key 열거형으로 변환
+        // Converts the key name to the Key enumeration
         let key = match key_name.as_str() {
             "Up" => Key::Up,
             "Down" => Key::Down,
@@ -1589,13 +1626,13 @@ fn encode_keys(keys: &[InputKey], modes: &Modes) -> Result<Vec<u8>, String> {
                 _ => return Err(format!("unknown key: {}", key_name)),
             },
             "Char" => {
-                // "Char" 특수 처리
+                // Special handling of "Char"
                 if text.is_empty() {
                     return Err("unknown key: Char with empty text".to_string());
                 }
                 let ch = text.chars().next().unwrap();
                 let encoded_bytes = if modifiers & 4 != 0 {
-                    // ctrl 비트가 설정됨
+                    // The ctrl bit is set
                     encoding::encode_ctrl_char(ch).map_err(|error| {
                         format!(
                             "unknown key: Char with ctrl: {:?} (text {:?}, U+{:04X})",
@@ -1603,10 +1640,10 @@ fn encode_keys(keys: &[InputKey], modes: &Modes) -> Result<Vec<u8>, String> {
                         )
                     })?
                 } else if modifiers & 2 != 0 {
-                    // alt 비트가 설정됨
+                    // The alt bit is set
                     encoding::encode_alt_char(ch)
                 } else {
-                    // 일반 텍스트
+                    // Plain text
                     encoding::encode_text(text)
                 };
                 all_bytes.extend_from_slice(&encoded_bytes);
@@ -1617,7 +1654,7 @@ fn encode_keys(keys: &[InputKey], modes: &Modes) -> Result<Vec<u8>, String> {
             }
         };
 
-        // 표준 키를 인코딩
+        // Encodes a standard key
         let encoded_bytes = encoding::encode_key(key, modifiers, modes)
             .map_err(|e| format!("unknown key: {} ({:?})", key_name, e))?;
         all_bytes.extend_from_slice(&encoded_bytes);
@@ -1628,17 +1665,19 @@ fn encode_keys(keys: &[InputKey], modes: &Modes) -> Result<Vec<u8>, String> {
 
 pub use crate::platform::ImageState;
 
-/// 화면을 그림에 그려 봉투를 보내고 그림을 호스트에 넘긴다.
-/// 그리기에 실패하면 오류 이벤트를 보내고 true 를 반환한다. 출력 통로가 닫혔으면 false 를 반환한다.
-/// 글꼴 크기의 기본값과 범위(포인트). 기본 크기에 프레임과 카드의 글자 배율(각각 최대 3)을 곱한 값이 범위 안에
-/// 든다(docs/spec/text-size.md).
+/// Draws the screen into the image, sends the envelope, and hands the image to the host. If drawing
+/// fails, it sends an error event and returns true. If the output channel has closed, it returns
+/// false. The default and the range of the font size (points). The default size multiplied by the
+/// text scale of the frame and of the card (each at most 3) stays within the range
+/// (docs/spec/text-size.md).
 const DEFAULT_FONT_SIZE: f32 = 13.0;
 const FONT_SIZE_MIN: f64 = 4.0;
 const FONT_SIZE_MAX: f64 = 128.0;
 
-/// The `screen` message of core (docs/spec/terminal-runtime.md#screen-message): the complete screen with the members that the
-/// screen hash covers, so the page hashes the message and compares it with the frame record of the same `segment` and `sequence`.
-/// The scrollback state and the background color are further members of the service. The `frame` member names the frame that
+/// The `screen` message of core (docs/spec/terminal-runtime.md#screen-message): the complete screen
+/// with the members that the screen hash covers, so the page hashes the message and compares it
+/// with the frame record of the same `segment` and `sequence`. The scrollback state and the
+/// background color are further members of the service. The `frame` member names the frame that
 /// shows the screen (`shown_frame`). A screen that cannot be hashed gets no message.
 pub fn screen_message(
     segment: &str,
@@ -1739,10 +1778,11 @@ fn collect_render_metadata(trace_dir: Option<&std::path::Path>) -> bool {
     cfg!(feature = "diagnostics") && trace_dir.is_some()
 }
 
-/// The `frame` member of a `screen` message: the identity of the frame that shows the screen of the surface. A frame is
-/// named by its sequence, and the screen of a frame is the screen of its sequence. The screen names the next sequence while
-/// it has changes that no sent frame holds (`dirty`), and also when no frame was sent for the image state (`sequence` 0).
-/// Otherwise it names the last sent frame. Without an image state no frame exists, so the member is null.
+/// The `frame` member of a `screen` message: the identity of the frame that shows the screen of the
+/// surface. A frame is named by its sequence, and the screen of a frame is the screen of its
+/// sequence. The screen names the next sequence while it has changes that no sent frame holds
+/// (`dirty`), and also when no frame was sent for the image state (`sequence` 0). Otherwise it
+/// names the last sent frame. Without an image state no frame exists, so the member is null.
 fn shown_frame(image: Option<&ImageState>) -> Value {
     match image {
         None => Value::Null,
@@ -1757,8 +1797,9 @@ fn shown_frame(image: Option<&ImageState>) -> Value {
     }
 }
 
-/// Records the frame record of a screen (core docs/spec/replay.md#records): the sequence of the last input that it includes, its
-/// size and its hash. A raster adds the time to draw it, its size in pixels and its number.
+/// Records the frame record of a screen (core docs/spec/replay.md#records): the sequence of the
+/// last input that it includes, its size and its hash. A raster adds the time to draw it, its size
+/// in pixels and its number.
 fn record_frame(
     log: &Events,
     surface_id: &str,
@@ -1796,8 +1837,9 @@ fn record_frame(
     );
 }
 
-/// Sends the screen of a surface that has no raster: the frame record, then the message. A screen that cannot be hashed is an
-/// error record and nothing is sent. Returns false when the output is closed.
+/// Sends the screen of a surface that has no raster: the frame record, then the message. A screen
+/// that cannot be hashed is an error record and nothing is sent. Returns false when the output is
+/// closed.
 async fn send_plain_screen(
     surface_id: &str,
     session: Option<&str>,
@@ -1832,9 +1874,9 @@ struct ScreenView<'a> {
     policy: &'a CursorPolicy,
 }
 
-/// Ends the selection gesture: the engine copies the selected text, and the event of the release (`selection.copy` or
-/// `selection.end`) is sent, after the raster that shows the end when the surface has one. Returns false when the output is
-/// closed.
+/// Ends the selection gesture: the engine copies the selected text, and the event of the release
+/// (`selection.copy` or `selection.end`) is sent, after the raster that shows the end when the
+/// surface has one. Returns false when the output is closed.
 #[allow(clippy::too_many_arguments)]
 async fn end_selection(
     surface_id: &str,
@@ -1896,8 +1938,10 @@ async fn present_screen(
     log: &Events,
     input_sequence: u64,
 ) -> bool {
-    // 호스트는 표시 요청의 래스터를 복사한 뒤 consumed 로 답한다. 답을 받기 전에 같은 래스터에 다시 그리면
-    // 복사 중인 픽셀을 덮어 글자가 빠진 프레임이 표시된다. 그 동안의 화면은 dirty 로 남겨 답을 받은 뒤 그린다.
+    // The host answers consumed after it copies the raster of a display request. If the same raster
+    // is drawn again before the answer arrives, the pixels being copied are overwritten and a frame
+    // with missing glyphs is shown. The screen in the meantime stays dirty and is drawn after the
+    // answer arrives.
     if state.pending_draw {
         state.dirty = true;
         return true;
@@ -1920,8 +1964,9 @@ async fn present_screen(
     let (layout, render) = match draw {
         Ok(result) => result,
         Err(reason) => {
-            // The failed screen is in no frame. It stays dirty, so the `screen` event names the next frame, and the next
-            // change draws that frame. Clearing it would name the last sent frame, which shows an earlier screen.
+            // The failed screen is in no frame. It stays dirty, so the `screen` event names the
+            // next frame, and the next change draws that frame. Clearing it would name the last
+            // sent frame, which shows an earlier screen.
             state.dirty = true;
             let response = json!({
                 "surface": surface_id,
@@ -1930,7 +1975,8 @@ async fn present_screen(
             if output_tx.send(response.to_string()).await.is_err() {
                 return false;
             }
-            // 그리기가 실패해도 상태 이벤트는 버리지 않는다. 오류가 그 화면에 그림이 없음을 알린다.
+            // A failed draw does not discard the state events. The error reports that the screen
+            // has no drawing.
             for event in std::mem::take(&mut state.presentation_events) {
                 if output_tx.send(event).await.is_err() {
                     return false;
@@ -1939,8 +1985,9 @@ async fn present_screen(
             return true;
         }
     };
-    // 프레임 한 장의 계기(V5-104): 무엇 때문에 그렸는지, 얼마나 걸렸는지, 어떤 래스터에. 프레임 기록(core
-    // docs/spec/replay.md#records)은 화면이 포함하는 마지막 입력의 순번과 화면의 크기와 hash 를 담는다.
+    // The instrument for one frame (V5-104): what caused the draw, how long it took, and for which
+    // raster. The frame record (core docs/spec/replay.md#records) holds the sequence number of the
+    // last input that the screen includes, and the size and hash of the screen.
     record_frame(
         log,
         surface_id,
@@ -1986,8 +2033,9 @@ async fn present_screen(
             }
         }
     });
-    // 페이지의 화면은 이 래스터가 그린 화면이다. 둘을 함께 보내야 커서와 글자 상태가 화면 픽셀과 같다.
-    // 이 래스터가 그린 인라인 그림의 상태 이벤트도 그 뒤에 보낸다.
+    // The screen of the page is the screen that this raster drew. Both must be sent together so
+    // that the cursor and glyph state match the screen pixels. The state events of the inline
+    // images that this raster drew are sent after them.
     match output_tx.send_carried(image_envelope.to_string()).await {
         Ok(carrier) => state.carrier = carrier,
         Err(()) => return false,
@@ -2038,8 +2086,9 @@ fn screen_message_work(
     }
 }
 
-/// Records the drawing mode that an `open` or an applied `image.configure` leaves on a surface: `image` draws the output of
-/// the session, `headless` feeds it without drawing (core checklist item F192).
+/// Records the drawing mode that an `open` or an applied `image.configure` leaves on a surface:
+/// `image` draws the output of the session, `headless` feeds it without drawing (core checklist
+/// item F192).
 fn record_surface_mode(log: &Events, surface_id: &str, headless: bool, cause: &str) {
     log.emit_for(
         Level::Info,
@@ -2049,9 +2098,10 @@ fn record_surface_mode(log: &Events, surface_id: &str, headless: bool, cause: &s
     );
 }
 
-/// 호스트가 앞 래스터를 복사하는 중인지. 그동안의 화면 변경은 dirty 로 남기고 그리거나 화면 JSON 을 보내지
-/// 않는다. 출력이 몰릴 때 화면마다 JSON 을 보내면 페이지가 지난 화면을 처리하느라 입력과 스크롤이 밀린다.
-/// 호스트가 답하면 그때의 화면을 한 번 그리고 보낸다.
+/// Whether the host is copying the previous raster. Screen changes in the meantime stay dirty, and
+/// the screen is neither drawn nor sent as JSON. If JSON is sent for every screen while output
+/// piles up, the page spends its time on past screens, and input and scrolling fall behind. When
+/// the host answers, the screen at that time is drawn once and sent.
 fn hold_while_presenting(image_state: &mut Option<ImageState>) -> bool {
     match image_state.as_mut() {
         Some(state) if state.pending_draw => {
@@ -2062,8 +2112,9 @@ fn hold_while_presenting(image_state: &mut Option<ImageState>) -> bool {
     }
 }
 
-/// 표면이 이미지 상태를 놓는다. 호스트가 아직 답하지 않은 전송 이미지는 그 이미지를 나른 연결에 맡겨 답이 오거나
-/// 연결이 끝날 때까지 남긴다. 나른 연결이 없으면 올 답도 없다. 남은 인라인 그림을 돌려준다.
+/// The surface releases its image state. A transfer image that the host has not answered yet is
+/// left to the connection that carried it, until the answer arrives or the connection ends. If no
+/// connection carried it, no answer can come. It returns the remaining inline images.
 fn release_image_state(surface_id: &str, state: ImageState) -> Vec<InlineImagePlacement> {
     let ImageState {
         name,
@@ -2089,7 +2140,7 @@ fn release_image_state(surface_id: &str, state: ImageState) -> Vec<InlineImagePl
     inline_images
 }
 
-/// 표시 요청에 대한 호스트의 답(consumed 또는 오류)이 가리키는 전송 이미지.
+/// The transfer image that the host's answer (consumed or error) to a display request refers to.
 struct ImageAnswer<'a> {
     name: &'a str,
     generation: u64,
@@ -2097,7 +2148,8 @@ struct ImageAnswer<'a> {
     sequence: u64,
 }
 
-/// 표시 요청에 대한 호스트의 답(consumed 또는 오류)의 이름, generation, raster 와 순번.
+/// The name, generation, raster, and sequence number of the host's answer (consumed or error) to a
+/// display request.
 fn image_answer(image: &serde_json::Map<String, Value>) -> Option<ImageAnswer<'_>> {
     let answer = match image.get("consumed") {
         Some(consumed) => consumed.as_object()?,
@@ -2273,7 +2325,7 @@ fn refresh_inline_image_positions(
         return;
     };
     let current_scroll = engine.scroll_generation();
-    // 스크롤백을 보는 동안 뷰포트는 그만큼 아래로 내려간 행을 보인다.
+    // While scrollback is viewed, the viewport shows the rows moved down by that amount.
     let offset = engine.viewport_offset() as i32;
     let cell_height = state.metrics.cell_height.round() as u32;
     for image in &mut state.inline_images {
@@ -2342,7 +2394,8 @@ fn apply_inline_image_command(
     }
 }
 
-/// 표면 actor 가 응답, 세션, 성능 기록에 쓰는 대상. actor 가 사는 동안 바뀌지 않는다.
+/// The objects that the surface actor uses for replies, the session, and performance records. They
+/// do not change while the actor lives.
 struct SurfacePorts<'a> {
     surface_id: &'a str,
     session_port: &'a Arc<dyn SessionPort>,
@@ -2351,15 +2404,17 @@ struct SurfacePorts<'a> {
     inputs: &'a mut ReplayInputs,
 }
 
-/// The inputs of the engine of one surface, recorded in the order in which the surface task applies them (core
-/// docs/spec/replay.md#records): the theme, the output of the program, the input to the program, each resize and each view
-/// change that took effect (the selection and the viewport). `sequence` counts them from 1 without a gap, and a frame names
-/// the sequence of the last input that its screen includes. The view changes are applied to the engine through the methods
-/// of this type, so the engine call and its record cannot differ.
+/// The inputs of the engine of one surface, recorded in the order in which the surface task applies
+/// them (core docs/spec/replay.md#records): the theme, the output of the program, the input to the
+/// program, each resize and each view change that took effect (the selection and the viewport).
+/// `sequence` counts them from 1 without a gap, and a frame names the sequence of the last input
+/// that its screen includes. The view changes are applied to the engine through the methods of this
+/// type, so the engine call and its record cannot differ.
 struct ReplayInputs {
     log: Events,
     sequence: u64,
-    /// The inputs before the session existed: the event and its fields with `sequence`. They are recorded when it opens.
+    /// The inputs before the session existed: the event and its fields with `sequence`. They are
+    /// recorded when it opens.
     deferred: Vec<(&'static str, Value)>,
 }
 
@@ -2388,7 +2443,8 @@ impl ReplayInputs {
             .emit_for(Level::Info, event, Subject::session(session, &[]), fields);
     }
 
-    /// The output of the program is fed to the engine. It is stored when the policy stores the class `io`.
+    /// The output of the program is fed to the engine. It is stored when the policy stores the
+    /// class `io`.
     fn output(&mut self, session: &str, data: &[u8]) {
         self.sequence += 1;
         if self.log.gate(crate::policy::Class::Io, Level::Debug) {
@@ -2441,7 +2497,8 @@ impl ReplayInputs {
         self.input(session, "sidecar.vt.selection", fields);
     }
 
-    /// Starts the selection at a cell boundary. A call that the engine refuses is an error and no input.
+    /// Starts the selection at a cell boundary. A call that the engine refuses is an error and no
+    /// input.
     fn selection_start(
         &mut self,
         engine: &mut dyn Engine,
@@ -2493,8 +2550,9 @@ impl ReplayInputs {
         cleared
     }
 
-    /// Moves the viewport by `lines` (positive toward older lines). The input holds the change that the engine applied, which
-    /// its limit to the retained lines may make smaller, and a move that changed nothing is no input.
+    /// Moves the viewport by `lines` (positive toward older lines). The input holds the change that
+    /// the engine applied, which its limit to the retained lines may make smaller, and a move that
+    /// changed nothing is no input.
     fn scroll_viewport(&mut self, engine: &mut dyn Engine, session: Option<&str>, lines: i32) {
         let before = i64::from(engine.viewport_offset());
         engine.scroll_viewport(lines);
@@ -2513,7 +2571,8 @@ impl ReplayInputs {
         moved
     }
 
-    /// Writes `data` to the session and records the write with the `cids` of the inputs that caused it.
+    /// Writes `data` to the session and records the write with the `cids` of the inputs that caused
+    /// it.
     async fn write(
         &mut self,
         port: &Arc<dyn SessionPort>,
@@ -2563,7 +2622,8 @@ async fn send_engine_events(
                 if let Err(error) =
                     apply_inline_image_command(command, anchor, image_state, multipart)
                 {
-                    // The command is dropped whether or not the page is told, so the service records it.
+                    // The command is dropped whether or not the page is told, so the service
+                    // records it.
                     log.record_error("inline image", &error);
                     if !emit_surface_events {
                         continue;
@@ -2618,7 +2678,8 @@ async fn send_engine_events(
                     }),
                 };
                 let event = json!({"surface": surface_id, "body": body}).to_string();
-                // 그림 영역이 있으면 그 그림을 그린 표시와 함께 보낸다. 출력 처리는 이 이벤트 뒤에 화면을 그린다.
+                // When there is an image area, the event is sent with the display that drew that
+                // image. Output processing draws the screen after this event.
                 match image_state.as_mut() {
                     Some(state) => state.presentation_events.push(event),
                     None => {
@@ -2792,7 +2853,8 @@ async fn send_engine_events(
                 if !emit_surface_events {
                     continue;
                 }
-                // 엔진의 거부는 프로그램 출력의 시퀀스에 대한 것이다. 페이지는 이를 터미널 오류가 아니라 기록으로 남긴다.
+                // An engine rejection concerns the sequence of the program output. The page records
+                // it as a record, not as a terminal error.
                 let response = json!({"surface": surface_id, "body": {"event": "sequence.rejected", "reason": reason}});
                 if output_tx.send(response.to_string()).await.is_err() {
                     return false;
@@ -2871,9 +2933,10 @@ async fn open_if_configured(
     let (cols, rows) =
         match calculate_terminal_size(state.width_px, state.height_px, &state.metrics) {
             Ok(size) => size,
-            // 셀 하나의 공간도 없는 래스터는 끌기 중 카드가 무너지는 과도 상태이다. 여기서
-            // 오류를 내면 열기 요청이 사라지고 나중 크기로 다시 열리지 않는다. 열지 않고
-            // 기다리면 다음 configure 가 세션을 연다(V5-96-14-6-4-8).
+            // A raster with no room for one cell is a transient state in which the card collapses
+            // during a drag. An error here would discard the open request, and the session would
+            // not reopen at a later size. Without opening, it waits, and the next configure opens
+            // the session (V5-96-14-6-4-8).
             Err(reason) => {
                 record_empty_raster(log, surface_id, state.width_px, state.height_px, &reason);
                 return true;
@@ -2917,7 +2980,8 @@ fn newer_configuration(configuration: &ImageConfiguration, state: &ImageState) -
     (configuration.generation, configuration.raster) > (state.generation, state.raster)
 }
 
-/// retain 요청의 surfaces 목록 `[{surface, root}]` 을 세션 키로 바꾼다. 형식이 틀리면 오류다.
+/// Converts the surfaces list `[{surface, root}]` of a retain request to session keys. A malformed
+/// list is an error.
 fn retain_keys(value: &Value) -> Result<std::collections::HashSet<String>, String> {
     let surfaces = value
         .get("surfaces")
@@ -2938,8 +3002,10 @@ fn retain_keys(value: &Value) -> Result<std::collections::HashSet<String>, Strin
         .collect()
 }
 
-/// 이 연결의 표면 하나를 닫는다. 영속 등록부가 있으면 등록부에서 닫고, 이 연결의 송신기와 부착 판도 지운다.
-/// 남기면 같은 표면을 다시 열 때 지운 등록부 항목의 판과 비교되어 낡은 부착으로 거부된다(closed 알림과 close 요청).
+/// Closes one surface of this connection. If a persistent registry exists, it closes the surface
+/// there, and it also clears the sender and the attachment epoch of this connection. If the entry
+/// stays, reopening the same surface compares it with the epoch of the cleared registry entry, and
+/// the stale attachment is rejected (closed notice and close request).
 async fn close_connection_surface(
     registry: Option<&Arc<PersistentRegistry>>,
     surface_txs: &mut HashMap<String, mpsc::Sender<Dispatch>>,
@@ -2973,11 +3039,13 @@ fn local_surface_key(
         .keys()
         .find(|key| key.ends_with(&format!("\0{surface}")))
         .cloned()
-        // default: a surface that came without a root and is not found among the registered keys gets a key without a root, which the lookup reports as an unknown surface.
+        // default: a surface that came without a root and is not found among the registered keys
+        // gets a key without a root, which the lookup reports as an unknown surface.
         .unwrap_or_else(|| format!("\0{surface}"))
 }
 
-/// 표면별 비동기 작업. 엔진과 데몬 연결을 소유하며 명령을 처리한다.
+/// Asynchronous work per surface. It owns the engine and the daemon connection, and processes
+/// commands.
 async fn surface_task(
     surface_id: String,
     log: Events,
@@ -3002,27 +3070,30 @@ async fn surface_task(
     let mut last_image_detach: Option<ImageDetachReplay> = None;
     let mut image_owner_revision = 0_u64;
     let mut focused = false;
-    // 마우스 보고로 시작한 누름. 뗄 때까지 선택 연산은 선택하지 않는다.
+    // A press that started with mouse reporting. Selection operations select nothing until it is
+    // released.
     let mut mouse_gesture = false;
-    // motion 소유권은 button-down 시점에 고정된다.  terminal은 drag 진행 중에
-    // mouse mode를 바꿀 수 있다. move마다 mode를 다시 읽으면
-    // 하나의 gesture가 TUI와 page selection으로 나뉜다.
+    // The motion ownership is fixed at button-down time. The terminal can change the mouse mode
+    // while a drag is in progress. If the mode is read again at every move, one gesture is split
+    // between the TUI and the page selection.
     let mut mouse_gesture_motion = false;
     let mut mouse_cell: Option<(u16, u16)> = None;
-    // selection release는 그 직전에 생성된 raster를 기술한다.
-    // 그 raster가 consume될 때까지 event를 보류하여, 이전 selection이 화면에 남아 있는 동안
-    // client가 copy acknowledgement를 관찰하지 못하게 한다.
+    // A selection release describes the raster that was created just before it. The event is held
+    // until that raster is consumed, so the client cannot observe the copy acknowledgement while
+    // the previous selection remains on the screen.
     let mut pending_selection_event: Option<String> = None;
-    // A release that arrived while the event of the previous release waited, with the output that answers its request.
+    // A release that arrived while the event of the previous release waited, with the output that
+    // answers its request.
     let mut deferred_selection_end: Option<OutputSink> = None;
     let mut preedit: Option<Preedit> = None;
     let mut current_theme = crate::palette::TerminalTheme::dark();
-    // The first input of a session is the theme in force, so a replay starts from it and not from a default of its own.
+    // The first input of a session is the theme in force, so a replay starts from it and not from a
+    // default of its own.
     inputs.set_theme(engine.as_mut(), None, current_theme);
     let mut cursor_policy = CursorPolicy::default();
-    // 이 표면의 터미널 글꼴. font 요청 전까지 시스템 고정폭 글꼴이다.
+    // The terminal font of this surface. Until a font request, it is the system fixed-pitch font.
     let mut terminal_font = crate::platform::default_font();
-    // 글꼴 크기(포인트). font 연산이 정한다(docs/spec/text-size.md).
+    // Font size (points). The font operation sets it (docs/spec/text-size.md).
     let mut terminal_font_size = DEFAULT_FONT_SIZE;
     let mut cursor_activity = Instant::now();
     let mut cursor_tick = tokio::time::interval(Duration::from_millis(50));
@@ -3032,12 +3103,13 @@ async fn surface_task(
     loop {
         tokio::select! {
             _ = cursor_tick.tick(), if image_state.is_some() && !headless => {
-                // 커서 깜빡임이 아예 꺼져 있으면 이 틱은 아무것도 하지 않는다(V5-96-14-6-4-9).
-                // engine.screen() 은 전체 그리드를 복사하므로, "바뀌었나?"를 검사하려고
-                // 50ms마다 전체 화면을 복사하는 것이 대기 CPU 의 원인이었다.
-                // 측정: 아이들에서 blink 프레임은 초당 0.15회(무시할 만함)였지만 틱은
-                // 초당 20회 돌며 매번 화면을 복사했다. 커서가 안 깜빡이면 화면이 안
-                // 바뀌므로 복사할 필요도 없다.
+                // If cursor blinking is turned off entirely, this tick does nothing
+                // (V5-96-14-6-4-9). engine.screen() copies the whole grid, so copying the whole
+                // screen every 50ms to check whether it changed was the cause of the idle CPU.
+                // Measured: while idle, blink frames occurred 0.15 times per second (negligible),
+                // but the tick ran 20 times per second and copied the screen each time. If the
+                // cursor does not blink, the screen does not change, so there is no need to copy
+                // it.
                 let blink_enabled = focused
                     && !matches!(cursor_policy.blink, crate::platform::darwin::frame::CursorBlinkPolicy::Never)
                     && (cursor_policy.idle_timeout_ms == 0
@@ -3078,9 +3150,10 @@ async fn surface_task(
                 };
                 match cmd {
                     SurfaceCommand::Open { image, request } => {
-                        // An open without image for a surface that was opened with an image or holds a configured image
-                        // comes from a second owner of the surface. It would make the surface headless while its image stays
-                        // shown, so the output would be fed and not drawn; it is refused and changes nothing.
+                        // An open without image for a surface that was opened with an image or
+                        // holds a configured image comes from a second owner of the surface. It
+                        // would make the surface headless while its image stays shown, so the
+                        // output would be fed and not drawn; it is refused and changes nothing.
                         if image.is_none() && (requested_image.is_some() || image_state.is_some()) {
                             let shown = requested_image.as_deref()
                                 .or(image_state.as_ref().map(|state| state.name.as_str()))
@@ -3106,10 +3179,9 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::Reconnect => {
-                        // PTY와 VT 상태는 persistent session에 속하고,
-                        // IOSurface는 application instance에 속한다.
-                        // 이전 native image만 폐기하여 재연결하는
-                        // client가 새 Configure message를 제공하게 한다.
+                        // PTY and VT state belong to the persistent session, and the IOSurface
+                        // belongs to the application instance. Discarding only the previous native
+                        // image lets the client that reconnects provide a new Configure message.
                         if let Some(previous_state) = image_state.take() {
                             preserved_inline_images = release_image_state(&surface_id, previous_state);
                         }
@@ -3348,15 +3420,17 @@ async fn surface_task(
                         new_state.session = session_id.clone();
                         new_state.inline_images = image_state.as_ref()
                             .map(|previous_state| previous_state.inline_images.clone())
-                            // default: without an earlier image state the surface takes over the inline images that it kept in between.
+                            // default: without an earlier image state the surface takes over the
+                            // inline images that it kept in between.
                             .unwrap_or_else(|| std::mem::take(&mut preserved_inline_images));
                         let (cols, rows) = match calculate_terminal_size(
                             configuration.width, configuration.height, &new_state.metrics) {
                             Ok(size) => size,
-                            // 셀 하나의 공간도 없는 래스터는 끌기 중 카드가 무너지는 과도 상태이다.
-                            // 현재 격자를 유지해 정상 경로를 지나면(같은 크기 재조정은 아무 것도
-                            // 바꾸지 않는다) 그리기가 IOSurface 경계로 잘려 들어가고, 프레임이
-                            // 표시되므로 호스트의 표시 장벽이 멈추지 않는다(V5-96-14-6-4-8).
+                            // A raster with no room for one cell is a transient state in which the
+                            // card collapses during a drag. Keeping the current grid and passing
+                            // through the normal path (a resize to the same size changes nothing)
+                            // clips the drawing to the IOSurface boundary and displays the frame,
+                            // so the host's display barrier does not stall (V5-96-14-6-4-8).
                             Err(reason) => {
                                 record_empty_raster(&log, &surface_id, configuration.width, configuration.height, &reason);
                                 let screen = engine.screen();
@@ -3501,7 +3575,7 @@ async fn surface_task(
                     SurfaceCommand::Paste { text, cids } => {
                         cursor_activity = Instant::now();
                         last_cursor_frame = None;
-                        // 입력은 뷰포트를 가장 새 출력으로 되돌린 뒤 쓴다.
+                        // Input is written after the viewport is returned to the newest output.
                         if inputs.scroll_to_newest(engine.as_mut(), session_id.as_deref()) {
                             refresh_inline_image_positions(&mut engine, &mut image_state);
                             if !hold_while_presenting(&mut image_state) {
@@ -3562,7 +3636,9 @@ async fn surface_task(
                             .and_then(|state| state.selection_cell(x, y)) {
                             Ok(cell) => cell,
                             Err(reason) => {
-                                // 실패도 그 연산의 mouse 결과다. 같은 inputId 를 실어 page 가 다음 결과와 짝을 잃지 않는다.
+                                // A failure is also the mouse result of that operation. The same
+                                // inputId is carried, so the page does not lose its pairing with
+                                // the next result.
                                 let phase_name = match phase { MousePhase::Down => "down", MousePhase::Move => "move", MousePhase::Up => "up" };
                                 let response = json!({"surface": surface_id, "body": {
                                     "event": "mouse", "inputId": input_id, "phase": phase_name, "x": null, "y": null,
@@ -3575,7 +3651,8 @@ async fn surface_task(
                                 continue;
                             }
                         };
-                        // 프로그램이 마우스 보고를 켜면 일반 드래그를 프로그램에 보내고, Shift 드래그는 글자를 선택한다.
+                        // When the program turns on mouse reporting, an ordinary drag is sent to
+                        // the program, and a Shift drag selects text.
                         let report = match phase {
                             MousePhase::Down if modes.mouse_report() && !shift => {
                                 mouse_gesture = true;
@@ -3637,9 +3714,10 @@ async fn surface_task(
                                 }
                             }
                         } else {
-                            // 현재 mouse mode가 의도적으로 text selection으로 보내는 phase를 포함하여
-                            // 모든 pointer phase에 대해 측정값을 내보낸다. 이렇게 하면 보고되지 않은 phase가
-                            // 사라지지 않고 소유권을 관찰할 수 있다.
+                            // The measurement is sent for every pointer phase, including the phase
+                            // that the current mouse mode deliberately sends to text selection.
+                            // This way an unreported phase does not disappear, and its ownership
+                            // can be observed.
                             let phase_name = match phase {
                                 MousePhase::Down => "down",
                                 MousePhase::Move => "move",
@@ -3655,10 +3733,14 @@ async fn surface_task(
                             if output_tx.reply(response).await.is_err() { return; }
                         }
                     }
-                    // 표면의 현재 세션에서 읽지 않은 입력 바이트 수와 reader 가 읽은 자식 출력 누적 바이트
-                    // 수를 한 번에 측정해 응답한다. 쓰기 성공, 자식 수신, 자식 출력을 구분하는 진단 관측이다.
+                    // Measures, in one step, the number of input bytes that the current session of
+                    // the surface has not read and the cumulative number of child output bytes that
+                    // the reader has read, then answers. It is a diagnostic observation that
+                    // distinguishes a successful write, the child's receipt, and the child's
+                    // output.
                     SurfaceCommand::PtyPending => {
-                        // 오류 응답도 같은 event 표식을 실어 보낸다. 측정 요청의 답임이 응답만으로 드러나야 한다.
+                        // An error reply also carries the same event marker. The reply alone must
+                        // show that it answers a measurement request.
                         let response = match session_id.as_ref() {
                             Some(sid) => match session_port.pty_measurement(sid).await {
                                 Ok(measurement) => json!({"surface": surface_id, "body": {"event": "pty.pending", "pending": measurement.pending, "written": measurement.written}}),
@@ -3668,7 +3750,8 @@ async fn surface_task(
                         };
                         if output_tx.reply(response).await.is_err() { return; }
                     }
-                    // 마우스 보고 제스처는 글자를 선택하지 않는다. 페이지는 선택 연산의 답을 기다린다.
+                    // A mouse report gesture selects no text. The page waits for the answer of the
+                    // selection operation.
                     SurfaceCommand::SelectionStart { .. } if mouse_gesture => {
                         let response = json!({"surface": surface_id, "body": {"ack": true, "event": "selection.start"}});
                         if output_tx.reply(response).await.is_err() { return; }
@@ -3718,8 +3801,9 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::SelectionEnd => {
-                        // The event of the previous release waits for its raster; this release is applied after that event is
-                        // sent, so the two gestures report their ends in order.
+                        // The event of the previous release waits for its raster; this release is
+                        // applied after that event is sent, so the two gestures report their ends
+                        // in order.
                         if pending_selection_event.is_some() {
                             deferred_selection_end = Some(output_tx.clone());
                             continue;
@@ -3730,7 +3814,7 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::Viewport { offset } => {
-                        // 엔진이 보관된 기록 범위 안으로 제한한다.
+                        // Limits the viewport to the range of history that the engine retains.
                         let delta = i64::from(offset) - i64::from(engine.viewport_offset());
                         if delta != 0 {
                             inputs.scroll_viewport(engine.as_mut(), session_id.as_deref(), delta.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32);
@@ -3744,7 +3828,8 @@ async fn surface_task(
                     }
                     SurfaceCommand::Scroll { lines, col, row, cids } => {
                         let modes = engine.modes();
-                        // 마우스 보고, 대체 화면의 대체 스크롤, 기본 화면의 뷰포트 순으로 적용한다.
+                        // Applies, in this order: mouse reporting, the alternate scroll of the
+                        // alternate screen, and the viewport of the primary screen.
                         let bytes = if modes.mouse_report() {
                             match encoding::encode_wheel(&modes, lines > 0, col, row) {
                                 Ok(event) => Some(event.repeat(lines.unsigned_abs() as usize)),
@@ -3788,7 +3873,8 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::Copy => {
-                        // 선택이 없으면 복사하지 않고 그렇다고 알린다. 클립보드는 바꾸지 않는다.
+                        // If there is no selection, nothing is copied and the reply says so. The
+                        // clipboard is not changed.
                         let body = match engine.selection_text() {
                             Some(text) => json!({"event": "copy", "text": text, "userInitiated": true}),
                             None => json!({"event": "copy", "copied": false}),
@@ -3821,7 +3907,8 @@ async fn surface_task(
                                 continue;
                             }
                         };
-                        // 현재 raster 크기를 유지하고 새 글꼴의 셀 메트릭으로 열과 행을 다시 계산한다.
+                        // Keeps the current raster size and recalculates the columns and rows with
+                        // the cell metrics of the new font.
                         if let Some(state) = image_state.as_mut() {
                             let metrics = match crate::platform::metrics_for(&font, size, state.scale) {
                                 Ok(metrics) => metrics,
@@ -3833,8 +3920,9 @@ async fn surface_task(
                             };
                             let (cols, rows) = match calculate_terminal_size(state.width_px, state.height_px, &metrics) {
                                 Ok(size) => size,
-                                // 서브셀 래스터에서 글꼴이 바뀌어도 격자를 유지한다. 다음 유효한
-                                // 래스터가 새 글꼴의 격자로 다시 계산한다(V5-96-14-6-4-8).
+                                // Keeps the grid even when the font changes on a sub-cell raster.
+                                // The next valid raster recalculates the grid with the new font
+                                // (V5-96-14-6-4-8).
                                 Err(reason) => {
                                     record_empty_raster(&log, &surface_id, state.width_px, state.height_px, &reason);
                                     let screen = engine.screen();
@@ -3968,7 +4056,7 @@ async fn surface_task(
                             continue;
                         };
                         state.inline_images.remove(index);
-                        // 삭제 이벤트는 그림을 지운 표시와 함께 보낸다.
+                        // The delete event is sent with the display that cleared the image.
                         state.presentation_events.push(json!({
                             "surface": surface_id,
                             "body": {"event": "image.inline.deleted", "name": name}
@@ -3981,7 +4069,9 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::SessionClose { result } => {
-                        // 닫기의 답보다 먼저 맡겨야, 답을 받은 호스트가 보내는 표시의 답이 그 전송 이미지를 찾는다.
+                        // The image must be released before the close reply, so that the display
+                        // reply that the host sends after receiving the close reply finds that
+                        // transfer image.
                         if let Some(state) = image_state.take() {
                             release_image_state(&surface_id, state);
                         }
@@ -3992,8 +4082,9 @@ async fn surface_task(
                                 .map_err(|error| format!("Close failed: {error}")),
                             None => Ok(()),
                         };
-                        // 닫기를 보낸 쪽이 기다리기를 그만두었으면 그 쪽이 시간 초과를 이미 보고했다. 닫기 오류는
-                        // 받을 곳이 없으므로 오류 기록 event 로 남긴다.
+                        // If the sender of the close has stopped waiting, that sender has already
+                        // reported the timeout. A close error has no receiver, so it is kept as an
+                        // error record event.
                         if let Err(Err(error)) = result.send(closed) {
                             log.record_error(&format!("surface {surface_id}"), error);
                         }
@@ -4017,8 +4108,9 @@ async fn surface_task(
                         let consumed = image_obj.and_then(|o| o.get("consumed")).and_then(|v| v.as_object());
                         let is_error = image_obj.is_some_and(|o| o.get("error").is_some());
                         let answer = image_obj.and_then(image_answer);
-                        // Only the complete identity of the frame in flight may release this draw. A late answer for a
-                        // detached image must not unblock a newer generation with the same name.
+                        // Only the complete identity of the frame in flight may release this draw.
+                        // A late answer for a detached image must not unblock a newer generation
+                        // with the same name.
                         let releases_pending = image_state.as_ref().is_some_and(|state|
                             state.pending_draw
                                 && answer.as_ref().is_some_and(|answer| {
@@ -4029,7 +4121,8 @@ async fn surface_task(
                                 })
                                 && (consumed.is_some() || is_error));
                         if releases_pending {
-                            // 전송 완료 대기의 계기(V5-104): 보낸 순간부터 consumed/오류 응답까지.
+                            // Instrument of the wait for transfer completion (V5-104): from the
+                            // moment of sending to the consumed or error reply.
                             let state = image_state.as_mut().unwrap();
                             if let Some(sent) = state.sent_at.take() {
                                 let handled_at = std::time::Instant::now();
@@ -4062,8 +4155,9 @@ async fn surface_task(
                                 let (cols, rows) = match calculate_terminal_size(
                                     configuration.width, configuration.height, &new_state.metrics) {
                                     Ok(size) => size,
-                                    // Configure 와 같은 유지 규칙: 서브셀 래스터는 현재 격자를
-                                    // 유지하고 프레임을 표시한다(V5-96-14-6-4-8).
+                                    // The same retention rule as Configure: the sub-cell raster
+                                    // keeps the current grid and displays the frame
+                                    // (V5-96-14-6-4-8).
                                     Err(reason) => {
                                         record_empty_raster(&log, &surface_id, configuration.width, configuration.height, &reason);
                                         let screen = engine.screen();
@@ -4095,7 +4189,8 @@ async fn surface_task(
                                 }
                             } else if image_state.as_ref().unwrap().dirty {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-                                // 기다린 동안의 변경을 담은 화면 하나를 래스터와 함께 보낸다.
+                                // Sends one screen that holds the changes made during the wait,
+                                // together with the raster.
                                 if !present_screen(&surface_id, screen, image_state.as_mut().unwrap(), &output_tx, "image", &log, inputs.sequence).await {
                                     return;
                                 }
@@ -4133,7 +4228,8 @@ async fn surface_task(
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
 
                                 if let Some(ref mut img_state) = image_state {
-                                        // 그림이 호스트에 있으면 돌려받을 때까지 그리지 않고 변경 사실만 남긴다.
+                                        // If the image is on the host, it is not drawn until it
+                                        // comes back, and only the fact of the change is recorded.
                                         if img_state.pending_draw {
                                             img_state.dirty = true;
                                         } else if !present_screen(&surface_id, screen, img_state, &output_tx, "image", &log, inputs.sequence).await {
@@ -4156,7 +4252,7 @@ async fn surface_task(
                                     "body": {"event": "exit"}
                                 });
                                 if output_tx.send(response.to_string()).await.is_err() {
-                                    // output channel이 닫혔으므로 그대로 종료한다
+                                    // The output channel has closed, so this exits as it is
                                 }
                                 break;
                             }
@@ -4174,7 +4270,8 @@ async fn surface_task(
     }
 }
 
-/// 서비스 루프. stdin에서 JSON을 읽고 stdout으로 응답을 씀. 프레임, 요청, PTY 입출력의 event 는 `log` 에 쓴다.
+/// Service loop. Reads JSON from stdin and writes replies to stdout. The events of frames,
+/// requests, and PTY input and output are written to `log`.
 pub async fn serve<R, W>(
     engine_factory: Arc<dyn Fn() -> Box<dyn Engine> + Send + Sync>,
     reader: R,
@@ -4235,9 +4332,10 @@ where
     .await
 }
 
-/// 영속 연결의 소유자. 연결이 끝나도 그 소유자의 표면은 registry 에 남는다.
+/// The owner of a persistent connection. The surfaces of the owner remain in the registry after the
+/// connection ends.
 pub struct PersistentOwner {
-    /// 소유자가 닫기를 요청하면 부르는 함수.
+    /// The function called when the owner requests a close.
     pub close: Arc<dyn Fn() -> Result<(), String> + Send + Sync>,
     pub registry: Arc<PersistentRegistry>,
     pub owner: String,
@@ -4272,7 +4370,8 @@ where
     .await
 }
 
-/// 연결 하나의 입력 처리에 쓰는 공장과 소유자. registry 가 없으면 연결이 끝날 때 표면도 끝난다.
+/// The factories and the owner used to process the input of one connection. Without a registry, the
+/// surfaces also end when the connection ends.
 struct ServeOptions {
     engine_factory: Arc<dyn Fn() -> Box<dyn Engine> + Send + Sync>,
     session_port_factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync>,
@@ -4307,7 +4406,7 @@ where
     let output_trace = options.log.clone();
     let input_task = async {
         let result = run_input_loop(buf_reader, output_tx, options).await;
-        // 입력이 끝난 연결로는 답이 오지 않는다.
+        // No reply comes to a connection whose input has ended.
         transfers.end();
         result
     };
@@ -4335,7 +4434,7 @@ where
         detach_requests,
         submission_observer: _,
     } = options;
-    // 연결 순번. 같은 소유자의 연결을 trace 에서 구별한다.
+    // Connection sequence number. It distinguishes the connections of the same owner in the trace.
     static CONNECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let connection = CONNECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let mut surface_txs: HashMap<String, mpsc::Sender<Dispatch>> = HashMap::new();
@@ -4343,11 +4442,13 @@ where
     let mut tasks = tokio::task::JoinSet::new();
     let mut line = String::new();
     let connection_output = output_tx.connection().await;
-    // 이 연결이 나른 전송 이미지 가운데 표면이 놓은 것. 그 답은 이 연결로 온다.
+    // Of the transfer images that this connection carried, the ones that a surface released. Their
+    // replies come on this connection.
     let transfers = connection_output
         .as_ref()
         .map(|connection| connection.transfers.clone());
-    // 입력이 끝났을 때 이미 끝난 표면 작업. serve 의 끝에서 오류로 알린다.
+    // Surface actions that had already ended when the input ended. They are reported as errors at
+    // the end of serve.
     let mut ended_surfaces = Vec::new();
 
     loop {
@@ -4358,7 +4459,8 @@ where
 
         if n == 0 {
             if registry.is_none() {
-                // persistent 가 아닌 연결의 표면 작업은 session 에서 떨어지고 끝난다.
+                // The surface actions of a connection that is not persistent are detached from
+                // their sessions and end.
                 for (key, tx) in &surface_txs {
                     if tx
                         .send(Dispatch::internal(SurfaceCommand::SessionDetach))
@@ -4379,8 +4481,9 @@ where
             continue;
         }
 
-        // 이 요청의 처리 기록. 표면 작업으로 넘기는 일까지 포함해, 이번 반복을 떠날 때(다음 요청을 읽기 전) 남긴다.
-        // silent: a line that is not JSON is recorded as an unparsed request and answered with a parse error below.
+        // The processing record of this request. It is written when this iteration ends (before the
+        // next request is read), including the hand-off to a surface action. silent: a line that is
+        // not JSON is recorded as an unparsed request and answered with a parse error below.
         let parsed = serde_json::from_str::<Value>(trimmed).ok();
         let request = Arc::new(Request {
             operation: parsed
@@ -4391,11 +4494,13 @@ where
                 .and_then(|value| value.get("surface"))
                 .and_then(Value::as_str)
                 .map(str::to_string),
-            // A `cids` that is not a list of strings is answered with a parse error below; the event holds the body.
+            // A `cids` that is not a list of strings is answered with a parse error below; the
+            // event holds the body.
             cids: parsed
                 .as_ref()
                 .and_then(|value| value.get("cids"))
-                // silent: cids that are not a list of strings are answered with a parse error below, and the request event holds the body.
+                // silent: cids that are not a list of strings are answered with a parse error
+                // below, and the request event holds the body.
                 .and_then(|cids| serde_json::from_value::<Vec<String>>(cids.clone()).ok())
                 // default: a request without usable cids has none.
                 .unwrap_or_default(),
@@ -4419,13 +4524,16 @@ where
                     }
                     continue;
                 };
-                // 표면 작업을 먼저 닫는다. 각 작업은 자기 세션을 닫고 답한다. 소유자의 세션을 먼저 끝내면 세션이 끝난
-                // 작업이 스스로 끝나 그 닫기에 답하지 못한다(core F98). 소유자 닫기는 그 뒤에 남은 세션을 닫는다.
+                // Closes the surface actions first. Each action closes its own session and replies.
+                // If the owner's sessions end first, their actions end by themselves and cannot
+                // reply to the close (core F98). The owner close then closes the sessions that
+                // remain.
                 let closed = match registry.as_ref() {
                     Some(registry) => registry.close_owner(&owner).await,
                     None => Ok(()),
                 };
-                // The owner close waits for each child to be reaped, so it runs outside the runtime workers.
+                // The owner close waits for each child to be reaped, so it runs outside the runtime
+                // workers.
                 let owner_closed = match owner_close.clone() {
                     Some(close) => tokio::task::spawn_blocking(move || close())
                         .await
@@ -4519,7 +4627,8 @@ where
                         &owner,
                     )
                     .await;
-                    // 모든 closed 에 답한다. 실패하면 그 까닭을 함께 보낸다(core 의 docs/spec/sidecars.md#messages).
+                    // Replies to every closed. On failure, the reason is sent with it (core
+                    // docs/spec/sidecars.md#messages).
                     if let Err(error) = close_result {
                         let response =
                             json!({"surface": surface_id, "closed": true, "error": error});
@@ -4530,11 +4639,12 @@ where
                     }
                     let response = json!({"surface": surface_id, "closed": true});
                     if reply_tx.reply(response).await.is_err() {
-                        // output channel이 닫혔으므로 serve를 끝낸다
+                        // The output channel has closed, so serve ends
                         break;
                     }
                 } else if let Some(body) = env.body {
-                    // 닫힌 표면이 남긴 전송 이미지의 답이면 그 이미지를 놓는다. 그 답은 표면을 다시 만들지 않는다.
+                    // If this is the reply to a transfer image that a closed surface left, the
+                    // image is released. The reply does not recreate the surface.
                     if let Some(answer) = body
                         .get("image")
                         .and_then(Value::as_object)
@@ -4549,7 +4659,9 @@ where
                         local_surface_key(&surface_txs, env.root.as_deref(), &surface_id);
                     let tx = if let Some(tx) = surface_txs.get(&registry_key) {
                         if let Some(registry) = registry.as_ref() {
-                            // default: a surface that recorded no attachment epoch has epoch 0, and an epoch that differs from the registry is refused as a stale attachment.
+                            // default: a surface that recorded no attachment epoch has epoch 0, and
+                            // an epoch that differs from the registry is refused as a stale
+                            // attachment.
                             let epoch = surface_epochs.get(&registry_key).copied().unwrap_or(0);
                             if registry.current_epoch(&registry_key, &owner).await != Some(epoch) {
                                 let response = json!({"surface": surface_id, "body": {"error": "stale attachment"}});
@@ -4593,10 +4705,10 @@ where
                                     continue;
                                 }
 
-                                // persistent service는 실제로 새로운 surface에 대해
-                                // 새 actor를 만들어야 한다. 기존 registry entry만
-                                // 다시 attach할 수 있다. 어떤 error도 기존 session의
-                                // 암묵적 교체로 변환하지 않는다.
+                                // A persistent service must create a new actor for a surface that
+                                // is actually new. It can only attach again to an existing registry
+                                // entry. No error is converted into an implicit replacement of an
+                                // existing session.
                                 let (cmd_tx, cmd_rx) = mpsc::channel(10);
                                 let session_port = session_port_factory();
                                 let factory = engine_factory.clone();
@@ -4639,7 +4751,7 @@ where
                             }
                         }
                     } else {
-                        // 새 표면: 작업 생성
+                        // New surface: creates the action
                         let (cmd_tx, cmd_rx) = mpsc::channel(10);
                         let session_port = session_port_factory();
                         let factory = engine_factory.clone();
@@ -4648,20 +4760,20 @@ where
                         let sid_for_monitor = sid.clone();
                         let task_trace = log.clone();
 
-                        // 실제 surface task를 별도 handle로 spawn한다
+                        // Spawns the actual surface task as a separate handle
                         let surface_handle = tokio::spawn(async move {
                             surface_task(sid, task_trace, factory, session_port, cmd_rx, out_tx)
                                 .await;
                         });
 
-                        // panic을 감시하는 monitor task를 spawn한다
+                        // Spawns a monitor task that watches for panics
                         let out_tx_monitor = output_tx.clone();
                         let log_monitor = log.clone();
                         tasks.spawn(async move {
                             match surface_handle.await {
                                 Ok(_) => {},
                                 Err(join_err) if join_err.is_panic() => {
-                                    // task가 panic했으므로 error event를 보낸다
+                                    // The task panicked, so an error event is sent
                                     let panic_msg = if let Ok(panic_obj) = join_err.try_into_panic() {
                                         if let Some(s) = panic_obj.downcast_ref::<String>() {
                                             s.clone()
@@ -4697,7 +4809,7 @@ where
                         request: Arc::clone(&request),
                     };
 
-                    // operation field를 먼저 확인한다(request이다).
+                    // Checks the operation field first (it is a request).
                     if let Some(operation) = body.get("operation").and_then(|v| v.as_str()) {
                         match operation {
                             "reconnect" => {
@@ -4773,7 +4885,8 @@ where
                             }
                             "theme" => {
                                 let text = |name: &str| body.get(name).and_then(Value::as_str);
-                                // 모드와 네 색이 모두 맞아야 적용한다. 하나라도 틀리면 아무것도 바꾸지 않는다.
+                                // Applies only when the mode and all four colors match. If any one
+                                // does not match, nothing is changed.
                                 match crate::palette::TerminalTheme::from_request(
                                     text("mode"),
                                     text("background"),
@@ -4819,7 +4932,8 @@ where
                                     .and_then(|size| resolved.map(|selection| (selection, size)))
                                 {
                                     Ok((selection, size)) => {
-                                        // 설치되어 있지 않은 family 는 오류가 아니라 로그에 남긴다.
+                                        // A family that is not installed is recorded in the log,
+                                        // not reported as an error.
                                         for family in &selection.skipped {
                                             log.record_info(
                                                 "font",
@@ -4994,7 +5108,8 @@ where
                                 let Some(offset) = body
                                     .get("offset")
                                     .and_then(Value::as_u64)
-                                    // silent: a value that does not fit is refused by the invalidParams reply that follows.
+                                    // silent: a value that does not fit is refused by the
+                                    // invalidParams reply that follows.
                                     .and_then(|v| u32::try_from(v).ok())
                                 else {
                                     let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "viewport requires a nonnegative integer offset"}});
@@ -5015,12 +5130,14 @@ where
                                 let col = body
                                     .get("col")
                                     .and_then(Value::as_u64)
-                                    // silent: a value that does not fit is refused by the invalidParams reply that follows.
+                                    // silent: a value that does not fit is refused by the
+                                    // invalidParams reply that follows.
                                     .and_then(|v| u16::try_from(v).ok());
                                 let row = body
                                     .get("row")
                                     .and_then(Value::as_u64)
-                                    // silent: a value that does not fit is refused by the invalidParams reply that follows.
+                                    // silent: a value that does not fit is refused by the
+                                    // invalidParams reply that follows.
                                     .and_then(|v| u16::try_from(v).ok());
                                 let (Some(lines), Some(col), Some(row)) = (lines, col, row) else {
                                     let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "scroll requires a nonzero integer lines and cell col and row"}});
@@ -5138,7 +5255,8 @@ where
                                     &owner,
                                 )
                                 .await;
-                                // 닫기를 마친 뒤 빈 본문으로, 실패하면 그 까닭으로 답한다.
+                                // After the close, it replies with an empty body, or with the
+                                // reason when the close fails.
                                 let body = match close_result {
                                     Ok(()) => json!({}),
                                     Err(error) => json!({"error": error}),
@@ -5199,10 +5317,12 @@ where
                                 let generation = configure.get("generation")?.as_u64()?;
                                 let raster = configure.get("raster")?.as_u64()?;
                                 let width =
-                                    // silent: a width that does not fit u32 makes the configure invalid, which is answered with invalidParams below.
+                                    // silent: a width that does not fit u32 makes the configure
+                                    // invalid, which is answered with invalidParams below.
                                     u32::try_from(configure.get("width")?.as_u64()?).ok()?;
                                 let height =
-                                    // silent: a height that does not fit u32 makes the configure invalid, which is answered with invalidParams below.
+                                    // silent: a height that does not fit u32 makes the configure
+                                    // invalid, which is answered with invalidParams below.
                                     u32::try_from(configure.get("height")?.as_u64()?).ok()?;
                                 let scale = configure.get("scale")?.as_f64()? as f32;
                                 (generation > 0
@@ -5248,7 +5368,8 @@ where
                             break;
                         }
                     } else {
-                        // operation도 image object도 없으면 알 수 없는 message이다.
+                        // A message with neither an operation nor an image object is an unknown
+                        // message.
                         let response = json!({
                             "surface": surface_id,
                             "body": {"error": "unknown operation"}
@@ -5260,8 +5381,9 @@ where
                 }
             }
             Err(e) => {
-                // The surface and the cids are read from the line again, so an envelope that does not parse is answered on its
-                // surface when the surface is a string; a line without one is answered with an empty surface.
+                // The surface and the cids are read from the line again, so an envelope that does
+                // not parse is answered on its surface when the surface is a string; a line without
+                // one is answered with an empty surface.
                 let line = serde_json::from_str::<Value>(trimmed).ok();
                 let surface = line
                     .as_ref()
@@ -5289,14 +5411,14 @@ where
                     }),
                 };
                 if reply_tx.reply(response).await.is_err() {
-                    // output channel이 닫혔으므로 serve를 끝낸다
+                    // The output channel has closed, so serve ends
                     break;
                 }
             }
         }
     }
 
-    // 모든 monitor task가 완료될 때까지 기다린다
+    // Waits until every monitor task completes
     while tasks.join_next().await.is_some() {}
     if !ended_surfaces.is_empty() {
         return Err(std::io::Error::new(
@@ -5310,9 +5432,10 @@ where
     Ok(())
 }
 
-/// 연결의 읽기 쪽. 읽기가 1 초 이상 기다린 뒤 데이터를 받으면, 그 사이 읽기를 시도한 횟수와 마지막 시도 뒤의 시간을
-/// `read_wait` 로 남긴다. 시도가 한 번뿐이면 데이터가 온 뒤 작업이 깨어나지 않은 것이고, 여러 번이면 깨어났지만 읽을
-/// 것이 없다고 들은 것이다.
+/// The read side of the connection. When data arrives after a read has waited for one second or
+/// more, the number of read attempts made during that wait and the time since the last attempt are
+/// recorded as `read_wait`. If there was only one attempt, the task was not woken after the data
+/// arrived. If there were several, the task was woken but was told there was nothing to read.
 struct PolledReader<R> {
     inner: R,
     log: Events,
@@ -5373,7 +5496,8 @@ impl<R: AsyncRead + Unpin> AsyncRead for PolledReader<R> {
     }
 }
 
-/// 출력 한 줄을 쓰는 데 이만큼 이상 걸리면 상대가 읽지 않아 막힌 것으로 기록한다.
+/// If writing one output line takes at least this long, it is recorded as blocked because the peer
+/// does not read it.
 const OUTPUT_BLOCKED: std::time::Duration = std::time::Duration::from_millis(10);
 
 async fn run_output_loop<W>(
@@ -5390,7 +5514,8 @@ where
         writer.write_all(b"\n").await?;
         writer.flush().await?;
         let elapsed = started.elapsed();
-        // 출력이 막힌 계기: 상대가 읽지 않으면 이 쓰기가 기다리고, 출력 채널이 차면 표면 작업과 입력 루프가 멈춘다.
+        // Output-blocked instrument: if the peer does not read, this write waits, and when the
+        // output channel is full, the surface actions and the input loop stop.
         if elapsed >= OUTPUT_BLOCKED {
             log.emit(
                 Level::Info,
@@ -5402,25 +5527,28 @@ where
     Ok(())
 }
 
-/// 요청 하나의 처리 기록. 입력 루프가 요청을 읽은 때부터 다음 요청을 읽기 전까지의 시간을 남긴다.
+/// The processing record of one request. It records the time from when the input loop read the
+/// request until it reads the next request.
 struct RequestTrace<'a> {
     request: Arc<Request>,
-    /// 이 요청이 도착하기 전 입력 루프가 읽기를 기다린 시간.
+    /// The time the input loop waited for a read before this request arrived.
     idle: std::time::Duration,
-    /// 요청을 보낸 연결의 소유자.
+    /// The owner of the connection that sent the request.
     owner: String,
-    /// 이 서비스가 받은 연결의 순번.
+    /// The sequence number of the connection that this service received.
     connection: u64,
     /// The request as it arrived.
     body: RequestBody<'a>,
 }
 
-/// The longest line that the request event holds whole. A longer line is recorded by its head and its size, so the cost of
-/// recording does not depend on the size of the request (core docs/spec/logging.md#bounds).
+/// The longest line that the request event holds whole. A longer line is recorded by its head and
+/// its size, so the cost of recording does not depend on the size of the request (core
+/// docs/spec/logging.md#bounds).
 const REQUEST_BODY_BOUND: usize = 1_000_000;
 
-/// The body of the request event: the text of the line, which is JSON, a line that is not JSON as `{"unparsed": <line>}`,
-/// or a line over the bound as `{"head": <first 4,096 bytes>, "size": <bytes>}`. The text is borrowed from the line.
+/// The body of the request event: the text of the line, which is JSON, a line that is not JSON as
+/// `{"unparsed": <line>}`, or a line over the bound as `{"head": <first 4,096 bytes>, "size":
+/// <bytes>}`. The text is borrowed from the line.
 enum RequestBody<'a> {
     Raw(&'a serde_json::value::RawValue),
     Unparsed(&'a str),
@@ -5497,7 +5625,8 @@ impl Drop for RequestTrace<'_> {
     }
 }
 
-/// 요청의 작업 이름: operation, closed, body 의 operation, 또는 body 의 첫 키와 그 값의 첫 키(예: image.configure).
+/// The operation name of a request: operation, closed, the operation in body, or the first key of
+/// body followed by the first key of its value (for example, image.configure).
 pub fn request_operation(value: &Value) -> String {
     if let Some(operation) = value.get("operation").and_then(Value::as_str) {
         return operation.to_string();
@@ -5528,7 +5657,7 @@ pub fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
         .map_err(|error| format!("invalid base64 input: {error}"))
 }
 
-/// 기본 SessionPort 팩토리를 만든다 (DaemonFinder를 사용)
+/// Creates the default SessionPort factory (uses DaemonFinder)
 pub fn make_default_session_port_factory(
     log: Events,
 ) -> Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync> {
@@ -5536,8 +5665,8 @@ pub fn make_default_session_port_factory(
     Arc::new(move || Arc::new(LocalSessionPort::new(service.clone())) as Arc<dyn SessionPort>)
 }
 
-/// in-process PTY session port이다.  service는 모든 surface port가 공유한다.
-/// `open` 호출마다 여전히 독립된 PTY session 하나를 생성한다.
+/// The in-process PTY session port. The service is shared by all surface ports. Each `open` call
+/// still creates one independent PTY session.
 pub struct LocalSessionPort {
     service: Arc<crate::pty::PtyService>,
     owner: String,

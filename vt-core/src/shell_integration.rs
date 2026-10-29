@@ -1,5 +1,6 @@
-//! 셸 통합: zsh 와 bash 가 OSC 133 표시를 보내도록 사용자의 파일을 바꾸지 않고 시작 환경을 정한다.
-//! 스크립트는 실행 파일에 포함되고, 세션을 시작하기 전에 내용 해시로 이름 붙인 임시 디렉터리에 기록된다.
+//! Shell integration: sets the startup environment so that zsh and bash send OSC 133 marks, without
+//! changing the user's files. The scripts are included in the executable and are written to a
+//! temporary directory named by the content hash before a session starts.
 
 use portable_pty::CommandBuilder;
 use std::fs;
@@ -10,13 +11,15 @@ use std::path::{Path, PathBuf};
 const ZSH_ENV: &str = include_str!("shell-integration/zshenv");
 const BASH_INTEGRATION: &str = include_str!("shell-integration/bash-integration.bash");
 
-/// bash 가 첫 프롬프트에서 실행할 PROMPT_COMMAND 항목. 스크립트가 같은 문자열을 찾아 지운다.
-/// source 로 읽는 파일 안에서는 DEBUG 트랩이 보이지 않으므로 먼저 사용자의 트랩을 기록한다. 명령 치환에서
-/// 부모의 트랩을 보여 주는 것은 치환의 명령이 trap 일 때뿐이라 builtin 을 붙이지 않는다.
+/// The PROMPT_COMMAND entry that bash runs at the first prompt. The script finds the same string
+/// and removes it. A DEBUG trap is not visible inside a file read with source, so the user's trap
+/// is recorded first. The parent's trap is shown in a command substitution only when the
+/// substituted command is trap, so no builtin is attached.
 const BASH_ENTRY: &str =
     "_soksak_debug_trap=$(trap -p DEBUG); builtin source \"$SOKSAK_BASH_INTEGRATION\"";
 
-/// 스크립트 내용의 FNV-1a 64 해시. 실행 파일이 바뀌어 내용이 달라지면 다른 디렉터리를 쓴다.
+/// FNV-1a 64 hash of the script contents. When the executable changes and the contents differ,
+/// another directory is used.
 fn content_hash() -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in ZSH_ENV.bytes().chain([0]).chain(BASH_INTEGRATION.bytes()) {
@@ -26,7 +29,8 @@ fn content_hash() -> u64 {
     hash
 }
 
-/// 디렉터리가 이 계정 소유의 0700 디렉터리인지 확인한다. 다른 소유자나 심볼릭 링크는 쓰지 않는다.
+/// Checks that the directory is a 0700 directory owned by this account. Another owner or a symbolic
+/// link is not used.
 fn check_private_directory(path: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("shell integration directory {}: {error}", path.display()))?;
@@ -65,7 +69,8 @@ fn private_directory(path: &Path) -> Result<(), String> {
     check_private_directory(path)
 }
 
-/// 내용이 같은 파일은 그대로 두고, 다르거나 없으면 임시 파일에 쓴 뒤 이름을 바꿔 한 번에 바꾼다.
+/// Leaves a file whose contents are the same as it is. A different or missing file is written to a
+/// temporary file and then renamed, so the replacement happens in one step.
 fn write_file(path: &Path, content: &str) -> Result<(), String> {
     // silent: a file that cannot be read is written again below, and a failed write is an error.
     if fs::read(path).ok().as_deref() == Some(content.as_bytes()) {
@@ -94,7 +99,7 @@ fn write_file(path: &Path, content: &str) -> Result<(), String> {
         .map_err(|error| format!("install shell integration file {}: {error}", path.display()))
 }
 
-/// 통합 디렉터리를 준비하고 그 경로를 돌려준다.
+/// Prepares the integration directory and returns its path.
 pub fn install() -> Result<PathBuf, String> {
     let root = std::env::temp_dir().join(format!("soksak-shell-{:016x}", content_hash()));
     private_directory(&root)?;
@@ -105,7 +110,8 @@ pub fn install() -> Result<PathBuf, String> {
     Ok(root)
 }
 
-/// 셸 이름에 맞는 통합 환경을 command 에 더한다. zsh 와 bash 가 아닌 셸은 바꾸지 않는다.
+/// Adds the integration environment for the shell name to command. A shell other than zsh and bash
+/// is not changed.
 pub fn apply(
     shell: &str,
     command: &mut CommandBuilder,
@@ -114,7 +120,8 @@ pub fn apply(
     let name = Path::new(shell)
         .file_name()
         .and_then(|name| name.to_str())
-        // default: a shell whose name cannot be read is neither zsh nor bash, so it gets no integration.
+        // default: a shell whose name cannot be read is neither zsh nor bash, so it gets no
+        // integration.
         .unwrap_or_default();
     match name {
         "zsh" => {
@@ -137,7 +144,8 @@ pub fn apply(
                     .ok_or("the inherited PROMPT_COMMAND is not UTF-8")?
                     .to_string(),
             };
-            // 항목 뒤에 구분자를 두지 않는다. 시작 파일이 "$PROMPT_COMMAND; x" 로 덧붙여도 문법이 맞는다.
+            // No separator is placed after the entry. The syntax stays valid when a startup file
+            // appends "$PROMPT_COMMAND; x".
             let value = if inherited.is_empty() {
                 BASH_ENTRY.to_string()
             } else {

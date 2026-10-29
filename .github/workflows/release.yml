@@ -9,7 +9,7 @@ on:
 permissions:
   contents: write
 
-# sok sidecar release 를 build 하는 core release. 이 저장소가 릴리스하는 version 과 관계가 없다.
+# Core release that builds the sok sidecar release. It is unrelated to the version this repository releases.
 env:
   CORE_COMMIT: 22d7c2429556bb4af0f742e34fb1949a0c6ba265
 

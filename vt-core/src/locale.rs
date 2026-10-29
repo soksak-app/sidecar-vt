@@ -1,22 +1,25 @@
-//! 터미널 shell 의 locale 규칙(core docs/spec/terminal-runtime.md). 터미널의 문자 인코딩은 UTF-8 이다.
+//! Locale rules of the terminal shell (core docs/spec/terminal-runtime.md). The character encoding
+//! of the terminal is UTF-8.
 
 use std::ffi::OsStr;
 
-/// 이 셋 가운데 비어 있지 않은 값이 하나라도 있으면 shell 환경의 locale 을 바꾸지 않는다.
+/// If any of these variables has a non-empty value, the shell environment locale is not changed.
 pub const VARIABLES: [&str; 3] = ["LANG", "LC_ALL", "LC_CTYPE"];
 
-/// shell 환경에 정할 locale.
+/// Locale to set in the shell environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShellLocale {
-    /// 환경이 이미 locale 을 정한다.
+    /// The environment already sets the locale.
     Kept,
-    /// `LANG` 에 정할 `<language>_<region>.UTF-8`.
+    /// `<language>_<region>.UTF-8` to set in `LANG`.
     Lang(String),
-    /// 지역 locale 을 쓸 수 없어 `LC_CTYPE=UTF-8` 을 정한다. `name` 은 쓸 수 없던 locale 이름이다.
+    /// Sets `LC_CTYPE=UTF-8` because the regional locale is unavailable. `name` is the unavailable
+    /// locale name.
     CtypeUtf8 { name: String },
 }
 
-/// 자식 환경의 변수(`variable`), macOS locale 의 언어 코드와 지역 코드, 설치된 locale 판별로 shell locale 을 정한다.
+/// Chooses the shell locale from the child environment variables (`variable`), the macOS locale
+/// language and region codes, and the check for installed locales.
 pub fn shell_locale<'a>(
     variable: impl Fn(&str) -> Option<&'a OsStr>,
     language: Option<&str>,
@@ -29,7 +32,8 @@ pub fn shell_locale<'a>(
     {
         return ShellLocale::Kept;
     }
-    // default: an unknown language is empty, and the locale name built from it is then not installed.
+    // default: an unknown language is empty, and the locale name built from it is then not
+    // installed.
     let language = language.unwrap_or("");
     // default: an unknown region is empty, and the locale name built from it is then not installed.
     let region = region.unwrap_or("");

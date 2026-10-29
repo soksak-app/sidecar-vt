@@ -1,29 +1,32 @@
-//! 프로세스 그룹 구성원과 그 상태를 읽는다.
+//! Reads the members of a process group and their state.
 
-/// 프로세스 그룹의 구성원 하나.
+/// One member of a process group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Member {
     pub pid: i32,
-    /// 끝났고 아직 회수되지 않은 프로세스.
+    /// A process that has ended and is not reaped yet.
     pub zombie: bool,
-    /// exit() 을 처리하는 중인 프로세스. 예를 들어 읽히지 않은 출력이 남은 터미널을 닫으며 기다린다.
+    /// A process that is handling exit(). For example, it waits while a terminal with unread output
+    /// left is closed.
     pub exiting: bool,
 }
 
 impl Member {
-    /// 더 끝낼 것이 없는 구성원. macOS 는 이런 구성원만 남은 그룹의 신호에 EPERM 으로 답한다.
+    /// A member with nothing left to end. macOS answers a signal to a group that holds only such
+    /// members with EPERM.
     pub fn ended(&self) -> bool {
         self.zombie || self.exiting
     }
 }
 
-// sys/proc_info.h 의 PROC_FLAG_INEXIT. libc 크레이트는 이 값을 내보내지 않는다.
+// PROC_FLAG_INEXIT from sys/proc_info.h. The libc crate does not export this value.
 const PROC_FLAG_INEXIT: u32 = 4;
 
-// sys/proc_info.h 의 PROC_PGRP_ONLY. libc 크레이트는 이 값을 내보내지 않는다.
+// PROC_PGRP_ONLY from sys/proc_info.h. The libc crate does not export this value.
 const PROC_PGRP_ONLY: u32 = 2;
 
-/// 프로세스 그룹의 구성원과 상태를 읽는다. 읽는 동안 회수된 프로세스는 결과에 없다.
+/// Reads the members and state of a process group. A process reaped during the read is not in the
+/// result.
 pub fn members(group: i32) -> Result<Vec<Member>, String> {
     let size =
         unsafe { libc::proc_listpids(PROC_PGRP_ONLY, group as u32, std::ptr::null_mut(), 0) };
@@ -33,7 +36,7 @@ pub fn members(group: i32) -> Result<Vec<Member>, String> {
             std::io::Error::last_os_error()
         ));
     }
-    // 첫 호출과 둘째 호출 사이에 늘어난 구성원을 담도록 여유를 둔다.
+    // Leaves room for members added between the first call and the second call.
     let capacity = size as usize / std::mem::size_of::<i32>() + 16;
     let mut pids = vec![0i32; capacity];
     let filled = unsafe {
@@ -55,7 +58,8 @@ pub fn members(group: i32) -> Result<Vec<Member>, String> {
     for pid in pids.into_iter().filter(|pid| *pid > 0) {
         let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
         let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-        // PROC_PIDTBSDINFO 는 arg 가 0 이면 좀비에 ESRCH 로 답하고, 1 이면 좀비도 찾는다.
+        // PROC_PIDTBSDINFO answers ESRCH for a zombie when arg is 0, and finds the zombie too when
+        // arg is 1.
         let read = unsafe {
             libc::proc_pidinfo(
                 pid,
@@ -73,7 +77,8 @@ pub fn members(group: i32) -> Result<Vec<Member>, String> {
             });
             continue;
         }
-        // 목록을 읽은 뒤 회수된 프로세스는 정보를 주지 않는다. 그 밖의 실패는 상태를 모르는 것이다.
+        // A process reaped after the list was read gives no information. Any other failure means
+        // the state is unknown.
         let error = std::io::Error::last_os_error();
         if error.raw_os_error() != Some(libc::ESRCH) {
             return Err(format!("read process {pid} of group {group}: {error}"));

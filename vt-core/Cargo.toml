@@ -11,7 +11,7 @@ build = "build.rs"
 path = "src/vt-core.rs"
 
 [features]
-# 진단 build 의 engine 입력 기록(engine_trace.rs).
+# Engine input recording in diagnostic builds (engine_trace.rs).
 diagnostics = []
 # Test-only faults live in tests/pty/wait_fault_test.rs and tests/support/event_fault_test.rs. They run with
 # `--features fault-injection`, which the make test target passes.

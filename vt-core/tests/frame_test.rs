@@ -1404,7 +1404,7 @@ fn unfocused_cursor_policy_changes_only_cursor_pixels() {
         .expect("unchanged bottom");
     assert!(unchanged_bottom[0] > 100 || unchanged_bottom[1] > 100 || unchanged_bottom[2] > 100);
 
-    // solid 는 포커스가 없어도 칸 전체를 채운다. hollow 는 가운데를 비운다.
+    // solid fills the whole cell even without focus. hollow leaves the center empty.
     frame
         .draw_with_cursor(
             &state,
@@ -1546,7 +1546,8 @@ fn terminal_theme_changes_background_foreground_and_cursor_pixels_without_metric
     state.cursor.focused = true;
     let frame = Frame::new(width, height).expect("theme frame");
 
-    // 엔진은 테마의 기본 배경을 화면의 기본 배경으로 보고한다.
+    // The engine reports the default background of the theme as the default background of the
+    // screen.
     let hex = |rgb: [u8; 3]| format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
     state.background = hex(TerminalTheme::dark().background);
     frame
@@ -1590,7 +1591,7 @@ fn block_cursor_covers_the_full_width_of_the_character_under_it() {
     let cell = metrics.cell_width as u32;
     let height = metrics.cell_height as u32;
 
-    // 조합 중인 넓은 글자: 커서는 두 칸을 모두 덮는다.
+    // A wide character being composed: the cursor covers both cells.
     let mut wide_preedit = screen(4, 1);
     wide_preedit.cursor.focused = true;
     wide_preedit.cursor.preedit = Some(Preedit {
@@ -1613,7 +1614,7 @@ fn block_cursor_covers_the_full_width_of_the_character_under_it() {
         "the cursor must not extend past the wide preedit (bright {third:.2})"
     );
 
-    // 확정된 넓은 글자 위의 커서도 두 칸을 덮는다.
+    // The cursor on a committed wide character also covers both cells.
     let mut wide_text = screen(4, 1);
     wide_text.cursor.focused = true;
     wide_text.lines[0][0].ch = Some("한".to_string());
@@ -1627,7 +1628,7 @@ fn block_cursor_covers_the_full_width_of_the_character_under_it() {
         "the block cursor must cover the second cell of a wide character (bright {second:.2})"
     );
 
-    // 좁은 조합 글자는 한 칸 커서를 유지한다.
+    // A narrow character being composed keeps a one-cell cursor.
     let mut narrow = screen(4, 1);
     narrow.cursor.focused = true;
     narrow.cursor.preedit = Some(Preedit {
@@ -1665,7 +1666,7 @@ fn wide_preedit_glyph_is_not_clipped_by_its_continuation_cell() {
         ..CursorRender::default()
     };
 
-    // 확정된 넓은 글자의 둘째 칸 잉크가 기준이다.
+    // The ink of the second cell of a committed wide character is the reference.
     let mut committed = screen(4, 1);
     committed.lines[0][0].ch = Some("글".to_string());
     committed.lines[0][0].width = 2;
@@ -1745,7 +1746,8 @@ fn a_font_list_uses_the_first_installed_family_and_the_system_font_when_none_is_
     );
 }
 
-/// 서비스는 포커스 없는 커서 정책을 화면에 이미 적용한다. 그리기는 그 모양을 그대로 그린다.
+/// The service already applies the unfocused cursor policy to the screen. Drawing draws that shape
+/// as it is.
 #[test]
 fn drawing_an_unfocused_screen_keeps_its_cursor_shape() {
     let metrics = metrics(13.0, 1.0);
@@ -1772,7 +1774,8 @@ fn drawing_an_unfocused_screen_keeps_its_cursor_shape() {
     assert!(bottom[0] > 100 || bottom[1] > 100 || bottom[2] > 100);
 }
 
-/// 넓은 글자의 폭이 두 칸보다 좁으면(예: Menlo 아래의 대체 한글 글꼴) 두 칸 안에서 가로 가운데에 둔다.
+/// If the width of a wide character is narrower than two cells (for example, the fallback Korean
+/// font under Menlo), it is centered horizontally within the two cells.
 #[test]
 fn a_wide_glyph_narrower_than_two_cells_is_centred_in_them() {
     use soksak_sidecar_vt_core::platform::darwin::frame::{metrics_for, resolve_font_list};
@@ -1840,8 +1843,10 @@ fn underlined_and_linked_cells_draw_a_line_below_the_text() {
 
 #[test]
 fn the_padding_outside_the_cell_grid_uses_the_screen_default_background() {
-    // 영역이 칸의 배수가 아니면 격자 오른쪽과 아래에 칸 밖 여백이 남는다. 프로그램이 OSC 11 로 바꾼 기본 배경은
-    // 칸과 여백에 함께 적용되어야 한다. 테마 배경이 남은 여백은 카드 색 띠로 보인다.
+    // If the region is not a multiple of the cell size, margin outside the cells remains on the
+    // right and bottom of the grid. The default background that the program changed with OSC 11
+    // must apply to both the cells and the margin. A remaining margin filled with the theme
+    // background appears as a band in the card color.
     let metrics = metrics(13.0, 1.0);
     let width = metrics.cell_width as u32 + 5;
     let height = metrics.cell_height as u32 + 5;

@@ -1,4 +1,4 @@
-//! in-process terminal service를 위한 persistent protocol-1 transport이다.
+//! Persistent protocol-1 transport for the in-process terminal service.
 
 use crate::events::{Events, Level};
 use crate::platform::darwin::file_watch::{Change, Changed, Failed, watch_file};
@@ -41,8 +41,8 @@ struct Hello {
 struct HelloReply<'a> {
     operation: &'static str,
     protocol: Option<u64>,
-    /// The version of this sidecar, by which a host tells a service of another version than the installed one
-    /// (core docs/spec/terminal-runtime.md).
+    /// The version of this sidecar, by which a host tells a service of another version than the
+    /// installed one (core docs/spec/terminal-runtime.md).
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<&'static str>,
     ok: bool,
@@ -63,8 +63,8 @@ struct ServiceCleanup {
 
 impl Drop for ServiceCleanup {
     fn drop(&mut self) {
-        // The endpoint is removed only while it names this service: another service that took the folder publishes its
-        // own endpoint, and that endpoint is kept.
+        // The endpoint is removed only while it names this service: another service that took the
+        // folder publishes its own endpoint, and that endpoint is kept.
         match endpoint_left(&self.service_dir, &self.token) {
             Ok(Some("endpoint-replaced")) => {}
             Ok(_) => {
@@ -146,8 +146,9 @@ fn read_endpoint(service_dir: &Path) -> Result<Endpoint, String> {
     serde_json::from_slice(&bytes).map_err(|error| format!("decode {}: {error}", path.display()))
 }
 
-/// Returns why the endpoint of the service in `service_dir` no longer names the service with `token`: the folder was removed,
-/// the endpoint file was removed, or another endpoint replaced it. `Ok(None)` means the endpoint still names the service.
+/// Returns why the endpoint of the service in `service_dir` no longer names the service with
+/// `token`: the folder was removed, the endpoint file was removed, or another endpoint replaced it.
+/// `Ok(None)` means the endpoint still names the service.
 fn endpoint_left(service_dir: &Path, token: &str) -> Result<Option<&'static str>, String> {
     if !service_dir.exists() {
         return Ok(Some("folder-removed"));
@@ -155,8 +156,8 @@ fn endpoint_left(service_dir: &Path, token: &str) -> Result<Option<&'static str>
     match fs::read(service_dir.join("endpoint.json")) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Some("endpoint-removed")),
         Err(error) => Err(format!("read the endpoint: {error}")),
-        // The endpoint is written by rename, so a read holds a whole endpoint; one that is not an endpoint of this service
-        // was published by another writer.
+        // The endpoint is written by rename, so a read holds a whole endpoint; one that is not an
+        // endpoint of this service was published by another writer.
         Ok(bytes) => match serde_json::from_slice::<Endpoint>(&bytes) {
             Ok(endpoint) if endpoint.token == token => Ok(None),
             Ok(_) | Err(_) => Ok(Some("endpoint-replaced")),
@@ -175,8 +176,9 @@ impl Drop for EndpointWatch {
     }
 }
 
-/// 잠금을 얻었으면 이전 service 는 끝났다. 강제 종료나 충돌로 정리하지 못하고 끝난 이전 service 의 socket 디렉터리를
-/// 지운다. 이 service 가 만드는 /tmp/spv-* 디렉터리만 지우며, 지우지 못하면 그 까닭을 보고한다.
+/// Once the lock is held, the previous service has ended. Removes the socket directory of the
+/// previous service that ended without cleanup (forced exit or crash). Only the /tmp/spv-*
+/// directories that this service creates are removed; a failed removal is reported with its cause.
 pub fn remove_previous_socket(service_dir: &Path, log: &Events) {
     // try_exists reports a failed check as an error, which is not the absence of the endpoint.
     match service_dir.join("endpoint.json").try_exists() {
@@ -223,7 +225,7 @@ pub fn remove_previous_socket(service_dir: &Path, log: &Events) {
 }
 
 fn socket_path() -> Result<(PathBuf, PathBuf), String> {
-    // 절대 socket 경로를 macOS의 104-byte Unix socket 한도 미만으로 유지한다.
+    // Keeps the absolute socket path below the 104-byte Unix socket limit on macOS.
     let directory = PathBuf::from("/tmp").join(format!("spv-{}", Uuid::new_v4()));
     fs::create_dir(&directory).map_err(|e| format!("create socket directory: {e}"))?;
     fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
@@ -259,7 +261,8 @@ async fn authenticate(
         HelloReply {
             operation: "hello",
             protocol: Some(PROTOCOL),
-            // Both crates and vt-alacritty/package.json declare the same version (tests/versions.test.mjs).
+            // Both crates and vt-alacritty/package.json declare the same version
+            // (tests/versions.test.mjs).
             version: Some(env!("CARGO_PKG_VERSION")),
             ok: true,
             error: None,
@@ -289,8 +292,8 @@ async fn authenticate(
     Ok((reader, write_half, hello.client))
 }
 
-/// persistent service를 실행한다.  PTY service는 수락된 모든 connection이
-/// 공유하므로, transport 연결이 끊겨도 그 session은 멈추지 않는다.
+/// Runs the persistent service. The PTY service is shared by all accepted connections, so the
+/// session does not stop when a transport connection closes.
 pub async fn serve_persistent(
     service_dir: &Path,
     engine_factory: Arc<dyn Fn() -> Box<dyn crate::protocol::Engine> + Send + Sync>,
@@ -329,15 +332,18 @@ pub async fn serve_persistent(
         socket: socket.to_string_lossy().into_owned(),
         token,
     };
-    // 종료 요청을 받으면 루프를 끝내 endpoint 와 socket 디렉터리를 정리한다. 세션의 셸은 PTY 가 닫히면 끝난다. 처리기는
-    // 준비를 알리기 전에 둔다. 준비를 본 쪽이 곧바로 보낸 종료 요청이 기본 동작으로 process 를 끝내면 정리가 실행되지 않는다.
+    // On a termination request, the loop ends so the endpoint and socket directory are cleaned up.
+    // The session shell ends when its PTY closes. The handlers are installed before readiness is
+    // announced. If a termination request sent right after readiness is observed ends the process
+    // with the default action, cleanup does not run.
     let mut terminate =
         signal(SignalKind::terminate()).map_err(|e| format!("terminate signal: {e}"))?;
     let mut interrupt =
         signal(SignalKind::interrupt()).map_err(|e| format!("interrupt signal: {e}"))?;
     write_endpoint(service_dir, &endpoint)?;
-    // The watch is started before the ready line, so a check that removes the folder after the ready line is seen by it.
-    // The kernel reports each change of the folder and of the endpoint, and the state is read only on a change.
+    // The watch is started before the ready line, so a check that removes the folder after the
+    // ready line is seen by it. The kernel reports each change of the folder and of the endpoint,
+    // and the state is read only on a change.
     let (ended_sender, mut ended) = tokio::sync::mpsc::unbounded_channel::<&'static str>();
     let watched_dir = service_dir.to_path_buf();
     let watched_token = endpoint.token.clone();
@@ -345,7 +351,8 @@ pub async fn serve_persistent(
     let changed: Changed = Arc::new(move |_changes: &[Change]| {
         match endpoint_left(&watched_dir, &watched_token) {
             Ok(Some(reason)) => {
-                // The loop takes the first reason, and a later one is not used after the loop ended.
+                // The loop takes the first reason, and a later one is not used after the loop
+                // ended.
                 let _ = ended_sender.send(reason);
             }
             Ok(None) => {}
@@ -460,8 +467,8 @@ pub async fn serve_persistent(
     }
 }
 
-/// Records that the service stops, and why: the signal that asked for it, or the shutdown request of the last client.
-/// `clients` is the number of client tasks that the service still holds.
+/// Records that the service stops, and why: the signal that asked for it, or the shutdown request
+/// of the last client. `clients` is the number of client tasks that the service still holds.
 fn record_stop(log: &Events, reason: &str, clients: usize) {
     log.emit(
         Level::Info,
@@ -479,7 +486,8 @@ pub fn record_end(log: &Events, served: &std::io::Result<()>) {
     log.emit(Level::Info, "sidecar.vt.session_end", &fields);
 }
 
-/// Records the end of a client task that did not return normally (a panic, or a task that was cancelled).
+/// Records the end of a client task that did not return normally (a panic, or a task that was
+/// cancelled).
 pub(crate) fn record_client_end(log: &Events, joined: Result<(), tokio::task::JoinError>) {
     if let Err(error) = joined {
         log.record_error("client session", format!("the client task ended: {error}"));
@@ -568,7 +576,8 @@ mod tests {
         BufReader::new(client).read_line(&mut reply).await.unwrap();
         let reply = serde_json::from_str::<serde_json::Value>(reply.trim()).unwrap();
         assert_eq!(reply["ok"], true);
-        // The reply carries the version of this sidecar, so a host can tell a service of another version.
+        // The reply carries the version of this sidecar, so a host can tell a service of another
+        // version.
         assert_eq!(
             reply["version"],
             env!("CARGO_PKG_VERSION"),

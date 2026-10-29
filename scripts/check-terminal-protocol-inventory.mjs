@@ -15,7 +15,7 @@ const rustFiles = (directory) => readdirSync(directory, { withFileTypes: true })
 const sidecarRust = ["vt-core", "vt-alacritty"]
   .flatMap((name) => rustFiles(`${ROOT}${name}`)).map((path) => readFileSync(path, "utf8")).join("\n");
 
-/** "13-19,21" 이나 "`13`–`19`, `21`" 같은 선택자 목록을 선택자 하나씩으로 펼친다. */
+/** Expands a selector list such as "13-19,21" or "`13`–`19`, `21`" into one selector per entry. */
 function selectors(list) {
   return list.replaceAll("`", "").split(",").map((part) => part.trim()).filter(Boolean).flatMap((part) => {
     const range = /^(\d+)\s*[-–]\s*(\d+)$/.exec(part);
@@ -29,8 +29,9 @@ function selectors(list) {
 const OUTCOME_WORDS = { Implemented: "implemented", Unsupported: "unsupported", Vendor: "vendor implemented" };
 
 /**
- * 명세의 OSC 보고서 표를 엔진 목록과 선택자 하나씩 비교한다. 모든 선택자는 두 곳에 같은 결과로 있어야 하고,
- * 표가 근거로 적은 테스트는 사이드카 소스에 있어야 한다.
+ * Compares the OSC report table of the specification with the engine list, one selector at
+ * a time. Every selector must have the same result in both places, and each test that the
+ * table cites as evidence must exist in the sidecar source.
  */
 function auditOscReport(oscRows, specSource, evidenceSource) {
   const errors = [];

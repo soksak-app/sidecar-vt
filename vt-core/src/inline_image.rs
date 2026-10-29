@@ -1,4 +1,4 @@
-//! OSC 1337 image 전송 형식의 엄격한 parsing이다.
+//! Strict parsing of the OSC 1337 image transfer format.
 
 use base64::Engine as _;
 use std::collections::BTreeMap;
@@ -197,7 +197,8 @@ fn dimension(value: Option<&String>) -> Result<Dimension, String> {
     if let Some(number) = value.strip_suffix("px") {
         return number
             .parse::<u32>()
-            // silent: a number that does not parse is reported by the ok_or_else that names the dimension.
+            // silent: a number that does not parse is reported by the ok_or_else that names the
+            // dimension.
             .ok()
             .filter(|number| *number > 0 && *number <= MAX_DIMENSION)
             .map(Dimension::Pixels)
@@ -206,7 +207,8 @@ fn dimension(value: Option<&String>) -> Result<Dimension, String> {
     if let Some(number) = value.strip_suffix('%') {
         return number
             .parse::<u8>()
-            // silent: a number that does not parse is reported by the ok_or_else that names the dimension.
+            // silent: a number that does not parse is reported by the ok_or_else that names the
+            // dimension.
             .ok()
             .filter(|number| *number > 0 && *number <= 100)
             .map(Dimension::Percent)
@@ -214,7 +216,8 @@ fn dimension(value: Option<&String>) -> Result<Dimension, String> {
     }
     value
         .parse::<u32>()
-        // silent: a number that does not parse is reported by the ok_or_else that names the dimension.
+        // silent: a number that does not parse is reported by the ok_or_else that names the
+        // dimension.
         .ok()
         .filter(|number| *number > 0 && *number <= MAX_DIMENSION)
         .map(Dimension::Cells)

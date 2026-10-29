@@ -58,9 +58,8 @@ pub struct OscSelectorEvidence {
     pub test: &'static str,
 }
 
-/// protocol audit가 사용하는 selector 수준 범위이다. 이 inventory는 parser 수락 여부에서
-/// 도출하지 않는다. 각 행은 관찰 가능한 test 또는 명시적인 별도 vendor contract를
-/// 지정한다.
+/// Selector-level scope used by the protocol audit. This inventory is not derived from parser
+/// acceptance. Each row names an observable test or an explicit separate vendor contract.
 pub const OSC_SELECTOR_INVENTORY: &[OscSelectorEvidence] = &[
     OscSelectorEvidence {
         selector: "0,2",
@@ -149,13 +148,15 @@ pub const OSC_SELECTOR_INVENTORY: &[OscSelectorEvidence] = &[
     },
 ];
 
-/// X 색 이름의 `rgb:h/h/h`(성분마다 1–4자리 16진수)와 `#hhh`–`#hhhhhhhhhhhh` 형식.
+/// Forms of X color names: `rgb:h/h/h` (1–4 hexadecimal digits per component) and `#hhh` through
+/// `#hhhhhhhhhhhh`.
 fn parse_x_color(value: &str) -> Option<Rgb> {
     let scale = |digits: &str| -> Option<u8> {
         if digits.is_empty() || digits.len() > 4 {
             return None;
         }
-        // silent: a malformed color text is not a color, and the function returns None to its caller.
+        // silent: a malformed color text is not a color, and the function returns None to its
+        // caller.
         let value = u32::from_str_radix(digits, 16).ok()?;
         let max = (1u32 << (4 * digits.len())) - 1;
         Some(((value * 255 + max / 2) / max) as u8)
@@ -183,7 +184,8 @@ fn parse_x_color(value: &str) -> Option<Rgb> {
     })
 }
 
-/// OSC 22 의 포인터 이름을 CSS cursor 값으로 바꾼다. X 커서 글꼴 이름과 CSS 이름을 받는다. 빈 이름은 기본값이다.
+/// Converts an OSC 22 pointer name into a CSS cursor value. Accepts X cursor font names and CSS
+/// names. An empty name means the default.
 fn pointer_shape(name: &str) -> Option<&'static str> {
     Some(match name {
         "" | "default" | "left_ptr" | "arrow" | "top_left_arrow" => "default",
@@ -239,7 +241,8 @@ fn parse_vendor_osc(selector: &[u8], payload: &[u8]) -> Result<Option<EngineEven
                         return Err("OSC 8 hyperlink id is duplicated".to_string());
                     }
                 }
-                // default: an OSC 8 link without an id has an empty id (the id is an optional parameter).
+                // default: an OSC 8 link without an id has an empty id (the id is an optional
+                // parameter).
                 id.unwrap_or_default().to_string()
             };
             Ok(Some(EngineEvent::Hyperlink {
@@ -284,9 +287,10 @@ fn parse_vendor_osc(selector: &[u8], payload: &[u8]) -> Result<Option<EngineEven
     }
 }
 
-/// OSC 133 `redraw` 매개변수: 크기 변경 뒤 셸이 다시 그리는 영역. `0` 은 다시 그리지 않는다. `1` 은 프롬프트
-/// 전체를 다시 그리므로(zsh) 프롬프트 첫 행까지 올라가고, `last` 는 프롬프트의 마지막 줄만 다시 그리므로
-/// (readline) 커서가 있는 논리적 행의 첫 행까지 올라간다.
+/// OSC 133 `redraw` parameter: the area that the shell redraws after a size change. `0` does not
+/// redraw. `1` redraws the whole prompt (zsh), so the cursor moves up to the first row of the
+/// prompt. `last` redraws only the last line of the prompt (readline), so the cursor moves up to
+/// the first row of the logical line that holds the cursor.
 fn parse_redraw(value: &str) -> Result<Redraw, String> {
     match value {
         "0" => Ok(Redraw::Never),
@@ -296,28 +300,31 @@ fn parse_redraw(value: &str) -> Result<Redraw, String> {
     }
 }
 
-/// 클립보드 글을 OSC 52 응답으로 만드는 함수. 클립보드 읽기 요청 번호마다 둔다.
+/// Function that builds an OSC 52 reply from clipboard text. One is kept for each clipboard read
+/// request number.
 type ClipboardFormatter = Arc<dyn Fn(&str) -> String + Sync + Send + 'static>;
 
-/// OSC 133 표시가 정한 셸 상태. 크기 변경 때 프롬프트 행을 지울지 정한다.
+/// Shell state set by the OSC 133 marks. It decides whether the prompt rows are erased on a size
+/// change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellState {
     Output,
-    /// 프롬프트나 입력 중이다. 값은 셸이 크기 변경 뒤 다시 그리는 영역이다.
+    /// At a prompt or during input. The value is the area that the shell redraws after a size
+    /// change.
     Prompt(Redraw),
 }
 
-/// 크기 변경 뒤 셸이 다시 그리는 영역(OSC 133 `redraw`).
+/// Area that the shell redraws after a size change (OSC 133 `redraw`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Redraw {
     Never,
-    /// 프롬프트 첫 행부터 다시 그린다.
+    /// Redraws from the first row of the prompt.
     Prompt,
-    /// 커서가 있는 논리적 행의 첫 행부터 다시 그린다.
+    /// Redraws from the first row of the logical line that holds the cursor.
     LastLine,
 }
 
-/// 엔진 대신 직접 지우는 ED 시퀀스.
+/// ED sequence that is erased directly, not by the engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Erase {
     All,
@@ -325,7 +332,7 @@ enum Erase {
     History,
 }
 
-/// 입력 조각 안에서 OSC 133 표시가 끝나는 위치와 그 표시.
+/// Position where an OSC 133 mark ends within an input chunk, and the mark.
 struct ShellMark {
     end: usize,
     marker: ShellMarker,
@@ -345,9 +352,9 @@ pub struct CsiSelectorEvidence {
     pub test: &'static str,
 }
 
-/// 이 sidecar가 현재 노출하는 CSI 동작에 대한 selector 수준 근거이다.
-/// 나머지 XTerm category가 실행 가능한 동작 및 거부 contract를 갖출 때까지
-/// 이 inventory는 의도적으로 부분적이다.
+/// Selector-level evidence for the CSI actions that this sidecar currently exposes. The inventory
+/// is intentionally partial until the remaining XTerm categories have executable action and
+/// rejection contracts.
 pub const CSI_SELECTOR_INVENTORY: &[CsiSelectorEvidence] = &[
     CsiSelectorEvidence {
         selector: "A/B/C/D/G/H/f/s/u",
@@ -500,8 +507,9 @@ impl Dimensions for TermSize {
     }
 }
 
-/// VT 엔진이 발생한 이벤트를 소유자가 회수할 때까지 발생 순서대로 보존한다.
-/// 콜백 이벤트는 엔진 경계에서 필요한 값으로 변환한 뒤 중립 이벤트로 전달한다.
+/// Keeps the events that the VT engine raised, in the order they occurred, until the owner takes
+/// them. Callback events are converted to the values that the engine boundary needs, then passed on
+/// as neutral events.
 struct EventQueue {
     events: Mutex<VecDeque<QueuedEvent>>,
 }
@@ -562,19 +570,23 @@ pub struct AlacrittyEngine {
     pending_osc: Vec<u8>,
     pending_csi: Vec<u8>,
     pending_sequence: Vec<u8>,
-    /// 선택을 시작한 칸. 끄는 방향에 따라 이 칸과 포인터 칸을 모두 포함하도록 선택의 경계 쪽을 정한다.
+    /// Cell where the selection started. Depending on the drag direction, it selects the side of
+    /// the boundary so that both this cell and the pointer cell are included.
     selection_anchor: Option<(Point, Side)>,
     shell: ShellState,
-    /// 프롬프트 첫 행의 절대 행 번호(dropped + 기록 행 수 + 화면 행). 프롬프트 상태에서만 있다.
+    /// Absolute row number of the first prompt row (dropped + history row count + screen row).
+    /// Present only in the prompt state.
     prompt_start: Option<i64>,
-    /// 기록 한도를 넘어 버려진 행의 수. 프롬프트 상태에서 센다.
+    /// Number of rows dropped past the history limit. Counted in the prompt state.
     dropped: i64,
-    /// 기록 행 수의 한도.
+    /// Limit on the number of history rows.
     history_limit: usize,
-    /// OSC 17 과 19 가 정한 선택 영역의 배경과 글자 색. 없으면 선택 칸을 반전해 그린다.
+    /// Background and foreground colors of the selection, set by OSC 17 and 19. When unset,
+    /// selected cells are drawn inverted.
     highlight_background: Option<Rgb>,
     highlight_foreground: Option<Rgb>,
-    /// OSC 5 가 정한 특수 색(0 굵게, 1 밑줄, 2 깜빡임, 3 반전, 4 기울임)과 OSC 6/106 이 켠 사용 여부.
+    /// Special colors set by OSC 5 (0 bold, 1 underline, 2 blink, 3 inverse, 4 italic), and the
+    /// enabled flags set by OSC 6 and 106.
     special_colors: [Option<Rgb>; 5],
     special_enabled: [bool; 5],
 }
@@ -618,12 +630,15 @@ impl AlacrittyEngine {
         }
     }
 
-    /// 입력을 엔진에 넣기 전에 바꾸는 시퀀스. 입력 조각 사이에서 끊긴 앞부분은 다음 조각까지 보관한다.
-    /// - DECSCUSR 7 은 초기 커서 모양(0)으로 바꾼다.
-    /// - ED 2 와 ED 1 은 엔진에 넣지 않고 위치를 돌려주어 그 자리에서 직접 지운다. 엔진은 ED 2 에서 보이는 줄을
-    ///   기록으로 올려 clear 뒤에도 기록이 남고, ED 1 에서 커서가 둘째 줄이면 첫 줄을 지우지 않는다.
+    /// Rewrites sequences before the input enters the engine. A prefix cut between input chunks is
+    /// kept until the next chunk.
+    /// - DECSCUSR 7 is rewritten to the initial cursor shape (0).
+    /// - ED 2 and ED 1 are not passed to the engine. Their positions are returned so that the
+    ///   erase happens in place. At ED 2, the engine pushes the visible lines into history, so
+    ///   the history remains after clear. At ED 1, when the cursor is on the second line, the
+    ///   first line is not erased.
     fn normalize_sequences(&mut self, bytes: &[u8]) -> (Vec<u8>, Vec<(usize, Erase)>) {
-        // 찾을 시퀀스, 대신 넣을 시퀀스, 그 자리에서 직접 지우는 범위.
+        // Sequence to find, sequence to insert in its place, and the range erased in place.
         type Rewrite = (&'static [u8], Option<&'static [u8]>, Option<Erase>);
         const REWRITES: &[Rewrite] = &[
             (b"\x1b[7 q", Some(b"\x1b[0 q"), None),
@@ -662,7 +677,8 @@ impl AlacrittyEngine {
         (normalized, erases)
     }
 
-    /// ED 2(화면 전체)와 ED 1(화면 처음부터 커서 칸까지)을 현재 배경색으로 지운다. 기록과 커서는 그대로다.
+    /// Erases with the current background color: ED 2 (whole screen) and ED 1 (from the top of the
+    /// screen to the cursor cell). History and cursor are unchanged.
     fn erase(&mut self, erase: Erase) {
         let bg = self.term.grid().cursor.template.bg;
         let cursor = self.term.grid().cursor.point;
@@ -671,13 +687,15 @@ impl AlacrittyEngine {
         match erase {
             Erase::All => {
                 grid.reset_region(..);
-                // 화면을 지운 뒤 셸은 OSC 133;A 없이 프롬프트를 맨 위 행에서 다시 그린다.
+                // After the screen is cleared, the shell redraws the prompt on the top row without
+                // OSC 133;A.
                 if self.prompt_start.is_some() {
                     self.prompt_start = Some(self.dropped + grid.history_size() as i64);
                 }
             }
             Erase::History => {
-                // 지운 기록 행은 버려진 행으로 세어 화면 행의 절대 번호를 그대로 둔다.
+                // Erased history rows are counted as dropped rows, so the absolute numbers of the
+                // screen rows stay the same.
                 self.dropped += grid.history_size() as i64;
                 grid.clear_history();
             }
@@ -694,8 +712,9 @@ impl AlacrittyEngine {
         self.term.selection = None;
     }
 
-    /// OSC 시퀀스를 검사하고 이벤트를 쌓는다. 받아들인 OSC 133 표시는 끝 위치와 함께 돌려주어
-    /// 앞의 출력을 처리한 뒤에 셸 상태에 적용하게 한다.
+    /// Inspects OSC sequences and pushes their events. An accepted OSC 133 mark is returned with
+    /// its end position, so that the shell state is applied after the output before it is
+    /// processed.
     fn audit_osc(&mut self, bytes: &[u8]) -> Vec<ShellMark> {
         let mut marks = Vec::new();
         let mut index = 0;
@@ -769,8 +788,9 @@ impl AlacrittyEngine {
         marks
     }
 
-    /// 엔진이 직접 처리하는 OSC: 17/19 강조 색의 설정과 조회, 117/119 초기화, 22 포인터 모양. 처리하지 않는
-    /// 선택자는 None 이다. 조회의 답은 요청과 같은 종결자로 끝난다.
+    /// OSCs that the engine handles directly: setting and querying the 17/19 highlight colors,
+    /// resetting with 117/119, and the 22 pointer shape. A selector that is not handled returns
+    /// None. A query reply ends with the same terminator as the request.
     fn engine_osc(
         &mut self,
         selector: &[u8],
@@ -783,7 +803,8 @@ impl AlacrittyEngine {
         let terminator = if bel { "\x07" } else { "\x1b\\" };
         Some(match selector {
             "17" | "19" if payload == "?" => {
-                // 정하지 않은 강조 배경은 테마의 선택 배경, 강조 글자는 기본 전경색이다.
+                // An unset highlight background is the theme's selection background. An unset
+                // highlight foreground is the default foreground color.
                 let rgb = if selector == "17" {
                     self.highlight_background
                         .or(Some(self.theme_rgb(self.theme.selection)))
@@ -853,8 +874,9 @@ impl AlacrittyEngine {
         })
     }
 
-    /// OSC 5: 특수 색 번호와 색 이름의 쌍들. `?` 는 현재 색을 요청과 같은 종결자로 답한다. 깜빡임(2)은 격자가
-    /// 깜빡임 속성을 보관하지 않아 적용할 수 없으므로 명시적 오류다.
+    /// OSC 5: pairs of special color number and color name. `?` replies with the current color,
+    /// ending with the same terminator as the request. Blink (2) cannot be applied because the grid
+    /// does not keep a blink attribute, so it is an explicit error.
     fn special_color_osc(&mut self, payload: &str, terminator: &str) -> Option<EngineEvent> {
         let parts: Vec<_> = payload.split(';').collect();
         if parts.len() % 2 != 0 {
@@ -906,7 +928,7 @@ impl AlacrittyEngine {
         (!replies.is_empty()).then(|| EngineEvent::PtyWrite(replies.into_bytes()))
     }
 
-    /// OSC 6 과 106: 특수 색 번호와 켜기(0 이 아닌 값)·끄기(0)의 쌍들.
+    /// OSC 6 and 106: pairs of special color number and on (non-zero value) or off (0) state.
     fn special_mode_osc(&mut self, selector: &str, payload: &str) -> Option<EngineEvent> {
         let parts: Vec<_> = payload.split(';').collect();
         if parts.len() % 2 != 0 {
@@ -933,7 +955,8 @@ impl AlacrittyEngine {
         None
     }
 
-    /// 속성이 있는 기본 전경색 글자에 켜진 특수 색을 적용한다. 굵게, 밑줄, 반전, 기울임 순으로 첫 색을 쓴다.
+    /// Applies an enabled special color to default-foreground text that has attributes. The first
+    /// color is used in the order bold, underline, inverse, italic.
     fn special_foreground(&self, flags: Flags, foreground: Color) -> Option<Rgb> {
         if foreground != Color::Named(NamedColor::Foreground) {
             return None;
@@ -953,7 +976,7 @@ impl AlacrittyEngine {
         .and_then(|(index, _)| self.special_colors[index])
     }
 
-    /// 테마가 정한 기본 색.
+    /// Default color set by the theme.
     fn default_rgb(&self, name: NamedColor) -> Option<Rgb> {
         self.term.colors()[name].or_else(|| {
             self.theme
@@ -970,13 +993,15 @@ impl AlacrittyEngine {
     fn apply_shell_mark(&mut self, marker: ShellMarker, redraw: Option<Redraw>) {
         self.shell = match marker {
             ShellMarker::PromptStart => {
-                // 프롬프트는 새 행에서 시작한다. 앞의 출력이 개행 없이 끝났으면 다음 행으로 옮긴다.
+                // A prompt starts on a new row. If the previous output ended without a line break,
+                // the cursor moves to the next row.
                 let cursor = &self.term.grid().cursor;
                 if cursor.point.column.0 != 0 || cursor.input_needs_wrap {
                     self.processor.advance(&mut self.term, b"\r\n");
                 }
                 self.prompt_start = Some(self.absolute(self.term.grid().cursor.point.line.0));
-                // default: an A mark without a redraw parameter has redraw=1 (docs/spec/terminal-runtime.md).
+                // default: an A mark without a redraw parameter has redraw=1
+                // (docs/spec/terminal-runtime.md).
                 ShellState::Prompt(redraw.unwrap_or(Redraw::Prompt))
             }
             ShellMarker::PromptEnd => match (self.shell, redraw) {
@@ -991,7 +1016,8 @@ impl AlacrittyEngine {
         };
     }
 
-    /// 커서가 있는 논리적 행의 첫 행. 재배치가 기록으로 옮긴 행도 같은 논리적 행이면 포함한다.
+    /// First row of the logical line that holds the cursor. Includes a row that reflow moved into
+    /// history when that row belongs to the same logical line.
     fn cursor_logical_line_start(&self) -> i32 {
         let grid = self.term.grid();
         let last_column = Column(grid.columns() - 1);
@@ -1007,9 +1033,11 @@ impl AlacrittyEngine {
         start
     }
 
-    /// 크기 변경 뒤 셸이 다시 그리기 전에, 셸이 다시 그릴 영역의 첫 행(start)부터 화면 끝까지 지우고,
-    /// 커서를 그 첫 행에서 offset 만큼 아래 행의 0열로 옮긴다. 셸은 이전 폭에서의 커서 행 수(offset)만큼
-    /// 올라가 다시 출력한다. 그 행이 화면 아래를 넘으면 넘는 만큼 화면을 올린다.
+    /// Before the shell redraws after a size change, erases from the first row (start) of the area
+    /// that the shell redraws through the end of the screen, and moves the cursor to column 0 of
+    /// the row that is `offset` rows below that first row. The shell moves up by the number of
+    /// cursor rows at the previous width (offset) and writes again. When that row goes past the
+    /// bottom of the screen, the screen is scrolled up by the amount that it goes past.
     fn clear_prompt_for_redraw(&mut self, mut start: i32, offset: i32) {
         let bottom = self.term.grid().screen_lines() as i32 - 1;
         let template = GridCell::default();
@@ -1028,14 +1056,15 @@ impl AlacrittyEngine {
         self.term.goto((start + offset).clamp(0, bottom), 0);
     }
 
-    /// 화면 행(기록은 음수)의 절대 번호.
+    /// Absolute number of a screen row (history rows are negative).
     fn absolute(&self, line: i32) -> i64 {
         self.dropped + self.term.grid().history_size() as i64 + i64::from(line)
     }
 
-    /// 입력을 엔진에 넣는다. 프롬프트 상태에서는 기록 한도를 잠시 넓혀 이 입력이 올린 행을 모두 기록에 둔 뒤,
-    /// 한도를 넘은 행을 버리고 그 수를 센다. 그래서 프롬프트 첫 행의 절대 번호가 스크롤 뒤에도 맞다. 한 바이트는
-    /// 화면 행 수보다 많이 올리지 못한다.
+    /// Feeds input into the engine. In the prompt state, the history limit is raised temporarily so
+    /// that every row this input pushes up is kept in history. Then the rows past the limit are
+    /// dropped and counted. This keeps the absolute number of the first prompt row correct after
+    /// scrolling. One byte cannot push up more rows than the screen has.
     fn advance(&mut self, bytes: &[u8]) {
         if self.prompt_start.is_none() {
             self.processor.advance(&mut self.term, bytes);
@@ -1049,15 +1078,19 @@ impl AlacrittyEngine {
         self.limit_history();
     }
 
-    /// 기록을 한도로 줄이고 버린 행을 센다.
-    /// 격자 크기를 바꾼다. 엔진은 화면을 저장소의 마지막 행들로 보므로, 폭을 좁히는 재배치로 늘어난 행은 커서 아래 빈
-    /// 행이 있어도 위의 행을 기록으로 민다. 기본 화면에서는 행 수를 그대로 둔 채 폭을 먼저 바꾸고, 기록으로 간 행을 커서 아래
-    /// 빈 행 수만큼 화면으로 되돌린다(docs/spec/terminal-runtime.md). 빈 행은 커서보다 아래이므로 행 수를 그만큼 줄이면
-    /// 화면은 움직이지 않고 그 행만 빠지며, 다시 늘리면 엔진이 기록의 행을 위로 되돌린다.
+    /// Reduces the history to the limit and counts the dropped rows. Changes the grid size. The
+    /// engine treats the screen as the last rows of storage, so a row added by a reflow that
+    /// narrows the width pushes the rows above it into history, even when an empty row exists below
+    /// the cursor. In the primary screen, the width is changed first with the row count unchanged.
+    /// Then as many rows as there are empty rows below the cursor are returned from history to the
+    /// screen (docs/spec/terminal-runtime.md). Empty rows are below the cursor, so reducing the row
+    /// count by that amount removes only those rows and the screen does not move. When the row
+    /// count grows again, the engine moves history rows back up.
     fn resize_grid(&mut self, primary: bool, cols: usize, rows: usize) {
         let lines = self.term.grid().screen_lines();
         if primary && cols < self.term.grid().columns() {
-            // 기록 상한에 걸린 행이 버려지면 옮겨진 행 수를 셀 수 없으므로, 셀 동안만 상한을 화면 행 수만큼 늘린다.
+            // If a row at the history limit is dropped, the number of moved rows cannot be counted,
+            // so the limit is raised by the screen row count only while the rows are counted.
             let history = self.term.grid().history_size();
             self.term
                 .grid_mut()
@@ -1074,7 +1107,7 @@ impl AlacrittyEngine {
         self.term.resize(TermSize::new(cols, rows));
     }
 
-    /// 커서 행 아래에서 화면 맨 아래까지 이어지는 빈 행 수.
+    /// Number of empty rows from below the cursor row to the bottom of the screen.
     fn empty_rows_below_cursor(&self) -> usize {
         let grid = self.term.grid();
         let cursor = grid.cursor.point.line.0;
@@ -1095,7 +1128,8 @@ impl AlacrittyEngine {
         self.dropped += excess as i64;
     }
 
-    /// 프롬프트 첫 행의 화면 행. 기록 밖으로 버려졌거나 커서보다 아래면 셸이 다시 그릴 영역을 알 수 없으므로 오류다.
+    /// Screen row of the first prompt row. If it was dropped past the history or lies below the
+    /// cursor, the area that the shell redraws is unknown, so this is an error.
     fn prompt_row(&self) -> Result<i32, String> {
         let start = self.prompt_start.ok_or("no prompt start is recorded")?;
         let grid = self.term.grid();
@@ -1110,7 +1144,8 @@ impl AlacrittyEngine {
         Ok(row as i32)
     }
 
-    /// row 부터 커서가 있는 논리적 행 앞까지 끝나는 논리적 행의 수.
+    /// Number of logical lines that end from `row` up to, but not including, the logical line that
+    /// holds the cursor.
     fn logical_lines_before_cursor(&self, row: i32) -> usize {
         let grid = self.term.grid();
         let last_column = Column(grid.columns() - 1);
@@ -1123,7 +1158,8 @@ impl AlacrittyEngine {
             .count()
     }
 
-    /// 커서가 있는 논리적 행에서 count 개 위의 논리적 행의 첫 행.
+    /// First row of the logical line that is `count` logical lines above the logical line that
+    /// holds the cursor.
     fn logical_line_start_above_cursor(&self, count: usize) -> i32 {
         let grid = self.term.grid();
         let last_column = Column(grid.columns() - 1);
@@ -1205,7 +1241,7 @@ impl AlacrittyEngine {
         let (bytes, erases) = self.normalize_sequences(bytes);
         let marks = self.audit_osc(&bytes);
         self.audit_csi(&bytes);
-        // 셸 표시와 지우기를 입력 안의 위치 순서대로 적용한다.
+        // Applies the shell marks and the erases in the order of their positions within the input.
         enum Step {
             Mark(ShellMark),
             Erase(Erase),
@@ -1244,7 +1280,8 @@ impl AlacrittyEngine {
                 let keep = (1..PREFIX.len())
                     .rev()
                     .find(|length| self.pending_input.ends_with(&PREFIX[..*length]))
-                    // default: when the end of the input does not overlap the start of the prefix, no byte is kept.
+                    // default: when the end of the input does not overlap the start of the prefix,
+                    // no byte is kept.
                     .unwrap_or(0);
                 let split = self.pending_input.len().saturating_sub(keep);
                 let plain = self.pending_input[..split].to_vec();
@@ -1273,7 +1310,8 @@ impl AlacrittyEngine {
             };
             let payload = self.pending_input[body_start..end].to_vec();
             self.pending_input.drain(..end + terminator_len);
-            // 그림은 시퀀스를 만난 자리의 커서에 놓인다. 뒤의 출력이 커서를 옮기기 전에 위치를 싣는다.
+            // The graphic is placed at the cursor where the sequence was met. Its position is
+            // recorded before a later output moves the cursor.
             let cursor = self.term.grid().cursor.point;
             let anchor = InlineAnchor {
                 col: cursor.column.0 as u16,
@@ -1407,7 +1445,8 @@ impl AlacrittyEngine {
         Ok(())
     }
 
-    /// 뷰포트 좌표의 칸을 격자 좌표로 바꾼다. 스크롤백을 보는 동안 뷰포트의 위쪽 행은 기록 행이다.
+    /// Converts a cell in viewport coordinates to grid coordinates. While the scrollback is shown,
+    /// the upper rows of the viewport are history rows.
     fn viewport_point(&self, col: u16, row: u16) -> Option<Point> {
         if usize::from(col) >= self.term.grid().columns()
             || usize::from(row) >= self.term.grid().screen_lines()
@@ -1421,14 +1460,16 @@ impl AlacrittyEngine {
         ))
     }
 
-    /// 뷰포트를 lines 만큼 움직인다. 양수는 오래된 출력 쪽이며 보관된 기록 범위 안으로 제한된다.
+    /// Moves the viewport by `lines`. A positive value is toward older output, limited to the
+    /// stored history range.
     pub fn scroll_viewport(&mut self, lines: i32) {
         self.term.scroll_display(Scroll::Delta(lines));
     }
 
-    /// 뷰포트를 가장 새 출력으로 되돌리고, 움직였으면 true 를 반환한다.
+    /// Returns the viewport to the newest output. Returns true when the viewport moved.
     pub fn scroll_to_newest(&mut self) -> bool {
-        // 이미 가장 새 출력이면 움직이지 않는다. scroll_display 는 움직이지 않아도 렌더러 알림을 낸다.
+        // If the viewport is already at the newest output, it does not move. scroll_display sends a
+        // renderer notification even when it does not move.
         if self.term.grid().display_offset() == 0 {
             return false;
         }
@@ -1436,7 +1477,7 @@ impl AlacrittyEngine {
         true
     }
 
-    /// (뷰포트가 가장 새 출력보다 위에 있는 줄 수, 보관된 기록 줄 수).
+    /// (Number of lines the viewport is above the newest output, number of stored history lines).
     pub fn scrollback(&self) -> (usize, usize) {
         (
             self.term.grid().display_offset(),
@@ -1444,7 +1485,8 @@ impl AlacrittyEngine {
         )
     }
 
-    /// 칸 경계를 alacritty 의 칸과 쪽으로 바꾼다. 경계 c 는 칸 c 의 왼쪽이고, 열 수는 마지막 칸의 오른쪽이다.
+    /// Converts cell boundaries to alacritty cells and sides. Boundary c is the left side of cell
+    /// c, and the column count is the right side of the last cell.
     fn edge_point(&self, edge: u16, row: u16) -> Result<(Point, Side), String> {
         let columns = self.term.grid().columns();
         let outside = || format!("selection edge is outside the terminal grid: {edge},{row}");
@@ -1466,7 +1508,8 @@ impl AlacrittyEngine {
         Ok(())
     }
 
-    /// 선택은 시작 경계와 이 경계 사이의 칸이다. 같은 경계는 아무 칸도 선택하지 않는다.
+    /// The selection is the cells between the start boundary and this boundary. The same boundary
+    /// selects no cell.
     pub fn selection_update(&mut self, edge: u16, row: u16) -> Result<(), String> {
         let (point, side) = self.edge_point(edge, row)?;
         let (anchor, anchor_side) = self
@@ -1521,7 +1564,8 @@ impl AlacrittyEngine {
 
     pub fn cursor(&self) -> Cursor {
         let renderable = self.term.renderable_content();
-        // 커서 행은 격자 좌표이므로 뷰포트 행으로 바꾼다. 스크롤백을 보는 동안 뷰포트 밖이면 숨긴다.
+        // The cursor row is in grid coordinates, so it is converted to a viewport row. While the
+        // scrollback is shown, the cursor is hidden when it is outside the viewport.
         let row = renderable.cursor.point.line.0 + renderable.display_offset as i32;
         let in_view = row >= 0 && (row as usize) < self.term.grid().screen_lines();
         Cursor {
@@ -1646,13 +1690,14 @@ impl Engine for AlacrittyEngine {
     fn resize(&mut self, cols: u16, rows: u16) {
         let grid = self.term.grid();
         if grid.columns() == cols as usize && grid.screen_lines() == rows as usize {
-            // 같은 크기에는 PTY 가 SIGWINCH 를 보내지 않으므로 셸도 다시 그리지 않는다.
+            // At the same size the PTY sends no SIGWINCH, so the shell does not redraw either.
             return;
         }
         let primary = !self.term.mode().contains(TermMode::ALT_SCREEN);
         let cursor = self.term.grid().cursor.point.line.0;
-        // 프롬프트 첫 행은 논리적 행의 첫 행이다. 재배치는 논리적 행을 유지하므로, 커서의 논리적 행에서 몇 개 위의
-        // 논리적 행인지로 재배치 뒤 위치를 다시 찾는다.
+        // The first prompt row is the first row of a logical line. Reflow keeps logical lines
+        // intact, so the position after reflow is found again by the number of logical lines above
+        // the cursor's logical line.
         let prompt = match self.prompt_row() {
             Ok(row) => Some((row, self.logical_lines_before_cursor(row))),
             Err(error) => {
@@ -1665,7 +1710,8 @@ impl Engine for AlacrittyEngine {
                 None
             }
         };
-        // 셸이 올라갈 행 수: 이전 폭에서 커서가 다시 그릴 영역의 첫 행보다 아래에 있던 행 수.
+        // Number of rows the shell moves up: the rows that were below the first row of the area the
+        // shell redraws at the previous width.
         let region = match self.shell {
             ShellState::Prompt(Redraw::Prompt) if primary => {
                 prompt.map(|(row, lines)| (cursor - row, lines))
@@ -1693,7 +1739,7 @@ impl Engine for AlacrittyEngine {
             let start = self.logical_line_start_above_cursor(lines);
             self.clear_prompt_for_redraw(start, offset);
             if self.prompt_start.is_some() {
-                // 셸은 지운 영역의 첫 행에서 다시 그린다.
+                // The shell redraws from the first row of the erased area.
                 let row = self.term.grid().cursor.point.line.0 - offset;
                 self.prompt_start =
                     Some(self.absolute(row.max(-(self.term.grid().history_size() as i32))));
@@ -1767,7 +1813,8 @@ impl Engine for AlacrittyEngine {
         let cols = self.term.grid().columns() as u16;
         let rows = self.term.grid().screen_lines() as u16;
         let mut lines = vec![Vec::<Cell>::new(); rows as usize];
-        // 표시 점은 격자 좌표다. 스크롤백을 보는 동안 기록 행은 음수이므로 뷰포트 오프셋을 더한다.
+        // The display point is in grid coordinates. While the scrollback is shown, history rows are
+        // negative, so the viewport offset is added.
         let offset = renderable.display_offset as i32;
 
         for indexed in renderable.display_iter {
@@ -1779,11 +1826,14 @@ impl Engine for AlacrittyEngine {
             }
             lines[row].resize_with(col + 1, Cell::default);
             let mut cell = self.cell(indexed.cell, renderable.colors);
-            // 두 번째 인자는 커서 위치다. alacritty 는 블록 커서가 선택 경계에 있을 때만 그 칸을 반전하지 않는다.
+            // The second argument is the cursor position. alacritty skips inverting the cell only
+            // when the block cursor is at the selection boundary.
             if renderable.selection.as_ref().is_some_and(|selection| {
                 selection.contains_cell(&indexed, renderable.cursor.point, renderable.cursor.shape)
             }) {
-                // 선택한 칸은 강조 배경(없으면 테마의 선택 배경) 위에 강조 글자(없으면 칸의 글자 색)로 그린다.
+                // Selected cells are drawn with the highlight background (or the theme's selection
+                // background when unset) and the highlight foreground (or the cell's foreground
+                // color when unset).
                 let hex = |rgb: Rgb| format!("#{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b);
                 let foreground = if cell.inverse {
                     cell.bg.clone()
@@ -1794,7 +1844,8 @@ impl Engine for AlacrittyEngine {
                     foreground.or_else(|| self.default_rgb(NamedColor::Foreground).map(hex));
                 cell.bg = Some(hex(self
                     .highlight_background
-                    // default: without the OSC 17 highlight background a selected cell uses the selection background of the theme (docs/spec/terminal-runtime.md).
+                    // default: without the OSC 17 highlight background a selected cell uses the
+                    // selection background of the theme (docs/spec/terminal-runtime.md).
                     .unwrap_or_else(|| self.theme_rgb(self.theme.selection))));
                 cell.fg = self.highlight_foreground.map(hex).or(foreground);
                 cell.inverse = false;
@@ -1820,7 +1871,8 @@ impl Engine for AlacrittyEngine {
                 offset: offset as u32,
                 history: history as u32,
             },
-            // 프로그램이 OSC 11 로 정한 배경이 없으면 테마의 기본 배경이다.
+            // The theme's default background applies when the program sets no background with OSC
+            // 11.
             background: self.term.colors()[NamedColor::Background].map_or_else(
                 || self.theme_hex(self.theme.background),
                 |rgb| format!("#{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b),

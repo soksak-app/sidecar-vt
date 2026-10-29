@@ -6,7 +6,7 @@ import test from "node:test";
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
-/** Cargo.toml 의 [package] version. */
+/** The [package] version of Cargo.toml. */
 function crateVersion(text) {
   let inPackage = false;
   for (const line of text.split("\n")) {

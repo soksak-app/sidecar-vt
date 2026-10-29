@@ -1,7 +1,7 @@
-/// VT 기본 팔레트와 특수 색상 슬롯을 정의한다.
+/// Defines the default VT palette and the special color slots.
 ///
-/// 엔진은 이 값을 화면 셀과 OSC 색상 응답에 사용하고, 네이티브 renderer는
-/// 같은 호출에서 전달받은 foreground/background/cursor 값을 사용한다.
+/// The engine uses these values for screen cells and OSC color replies, and the native renderer
+/// uses the foreground/background/cursor values passed in the same call.
 pub const DEFAULT_FOREGROUND_RGB: [u8; 3] = [0xd0, 0xd0, 0xd0];
 pub const DEFAULT_BACKGROUND_RGB: [u8; 3] = [0x1e, 0x1e, 0x1e];
 pub const DEFAULT_CURSOR_RGB: [u8; 3] = DEFAULT_FOREGROUND_RGB;
@@ -13,10 +13,11 @@ pub struct TerminalTheme {
     pub foreground: [u8; 3],
     pub background: [u8; 3],
     pub cursor: [u8; 3],
-    /// 선택한 칸의 배경. 프로그램이 OSC 17 강조 배경을 정하지 않았을 때 쓴다.
+    /// Background of the selected cells. Used when the program has not set the OSC 17 highlight
+    /// background.
     pub selection: [u8; 3],
     pub palette: [[u8; 3]; 256],
-    /// 인덱스 ANSI 팔레트를 고른 외관.
+    /// Appearance that selects the indexed ANSI palette.
     pub mode: ThemeMode,
 }
 
@@ -151,7 +152,8 @@ impl TerminalTheme {
         }
     }
 
-    /// 페이지의 theme 요청에서 외관을 만든다. 모드와 네 색(#rrggbb)이 모두 있어야 한다.
+    /// Builds the appearance from the page theme request. The mode and all four colors (#rrggbb)
+    /// must be present.
     pub fn from_request(
         mode: Option<&str>,
         background: Option<&str>,
@@ -194,13 +196,14 @@ impl TerminalTheme {
     }
 }
 
-/// `#rrggbb` 를 읽는다. 다른 형식이면 None.
+/// Reads `#rrggbb`. Returns None for any other format.
 pub fn parse_hex(text: &str) -> Option<[u8; 3]> {
     let digits = text.strip_prefix('#')?;
     if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
-    // default: the six hexadecimal digits were checked above, so the two-digit conversion cannot fail.
+    // default: the six hexadecimal digits were checked above, so the two-digit conversion cannot
+    // fail.
     let channel = |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).ok();
     Some([channel(0)?, channel(2)?, channel(4)?])
 }
@@ -209,7 +212,7 @@ const fn dim(color: [u8; 3]) -> [u8; 3] {
     [color[0] / 2, color[1] / 2, color[2] / 2]
 }
 
-/// 0..255 기본 팔레트와 256..268 named 슬롯을 해석한다.
+/// Resolves the default palette at 0..255 and the named slots at 256..268.
 pub const fn default_terminal_color(index: usize) -> Option<[u8; 3]> {
     if index < 256 {
         return Some(DEFAULT_PALETTE[index]);

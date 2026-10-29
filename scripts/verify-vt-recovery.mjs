@@ -26,8 +26,9 @@ const withTimeout = async (promise, label) => {
   }
 };
 
-// 서비스는 기본 글꼴을 읽은 뒤 엔드포인트를 게시하고 준비 줄을 쓴다. 호스트처럼 준비 줄을 기다린다. 첫 CoreText
-// 호출은 몇 초 걸릴 수 있으므로 한도는 멈춤만 막는다(docs/spec/terminal-runtime.md).
+// The service publishes the endpoint and writes the ready line after it reads the default
+// font. Like the host, this waits for the ready line. The first CoreText call can take
+// several seconds, so the limit only guards against a hang (docs/spec/terminal-runtime.md).
 const READY_GUARD_MS = 60000;
 
 const readyLine = (service) => new Promise((resolve, reject) => {
@@ -48,7 +49,8 @@ const readyLine = (service) => new Promise((resolve, reject) => {
   const onExit = (code, signal) => finish(new Error(`service ${service.pid} exited before its ready line ` +
     `(exit ${code ?? "none"}, signal ${signal ?? "none"}, stdout ${JSON.stringify(buffered)})`));
   const onError = (error) => finish(new Error(`service ${service.pid ?? "unstarted"} could not start: ${error.message}`));
-  // 실패를 해석하도록 서비스가 살아 있는지와 부하를 적는다. 서비스 stderr 는 호출자가 붙인다.
+  // Records whether the service is alive and the system load, so the failure can be
+  // interpreted. The caller attaches the service stderr.
   const timer = setTimeout(() => finish(new Error(`service ${service.pid} wrote no ready line within ${READY_GUARD_MS}ms ` +
     `(exit ${service.exitCode ?? "none"}, signal ${service.signalCode ?? "none"}, stdout ${JSON.stringify(buffered)}, ` +
     `load average ${loadavg().map((value) => value.toFixed(1)).join(" ")})`)), READY_GUARD_MS);
@@ -58,8 +60,9 @@ const readyLine = (service) => new Promise((resolve, reject) => {
   service.once("error", onError);
 });
 
-// root 가 있으면 호스트처럼 표시 요청마다 래스터를 받았다고 consumed 로 답한다. 사이드카는 답을 받기 전에 바뀐
-// 화면을 그리거나 보내지 않는다(docs/spec/terminal-runtime.md).
+// When root is set, like the host, answers consumed for each display request after it
+// receives the raster. The sidecar does not draw or send a changed screen before it
+// receives the answer (docs/spec/terminal-runtime.md).
 const lineClient = async (endpoint, clientName, { root = null } = {}) => {
   const socket = net.createConnection(endpoint.socket);
   await withTimeout(new Promise((resolve, reject) => {
@@ -164,7 +167,8 @@ const worker = async () => {
 
   const endpoint = JSON.parse(await readFile(endpointPath, "utf8"));
   const surface = "recovery-surface";
-  // orphan 표면은 닫힘 알림 없이 애플리케이션과 함께 사라진 표면이다. 재시작한 애플리케이션의 레이아웃에 없다.
+  // An orphan surface is a surface that disappeared with its application without a close
+  // notification. It is not in the layout of the restarted application.
   const orphan = "orphan-surface";
   const project = "/recovery/project";
   const client = await lineClient(endpoint, serviceDirectory, { root: project });
@@ -192,8 +196,9 @@ const worker = async () => {
       return;
     }
 
-    // 재시작한 애플리케이션은 표면을 보내기 전에 레이아웃의 표면만 남기도록 retain 을 보낸다. 닫힌 수 1 은
-    // 고아 세션이 재시작 뒤에도 서비스에 남아 있었다는 측정이다.
+    // Before it sends surfaces, the restarted application sends retain so that only the
+    // surfaces in its layout remain. A closed count of 1 measures that the orphan session
+    // remained in the service after the restart.
     client.write({ operation: "retain", request: "orphan-retain", surfaces: [{ surface, root: project }] });
     const retained = await waitFor(client, (value) => value.operation === "retained" && value.request === "orphan-retain", "worker retain reply");
     console.log(`WORKER_RETAIN_REPLY=${JSON.stringify(retained)}`);
@@ -235,7 +240,7 @@ const runWorker = async (endpointPath, serviceDirectory, mode, sessionId = "-", 
   try {
     result = await withTimeout(exited, `worker ${mode} process`);
   } catch (error) {
-    // 멈춘 단계를 찾도록 작업자가 남긴 출력을 붙이고 작업자를 끝낸다.
+    // Attaches the output the worker left to locate the stalled step, then ends the worker.
     child.kill("SIGKILL");
     await exited;
     fail(`${error.message}; worker stdout: ${stdout.trim() || "none"}; worker stderr: ${stderr.trim() || "none"}`);

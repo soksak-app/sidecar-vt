@@ -1,27 +1,27 @@
-//! 키·마우스·조합 입력을 PTY 에 쓸 바이트로 인코딩하는 순수 함수들.
+//! Pure functions that encode keyboard, mouse, and composition input into bytes written to the PTY.
 //!
-//! 터미널 엔진마다 다시 구현할 필요가 없는 공통 계층. 페이지에서 받은 논리적 입력을
-//! 표준 VT 시퀀스로 변환한다.
+//! A common layer that terminal engines do not need to reimplement. It converts the logical input
+//! received from the page into standard VT sequences.
 
 use crate::Modes;
 
-/// 입력 장치가 보낼 수 있는 키의 열거형.
-/// 각 키는 표준 VT 시퀀스로 인코딩되어야 한다.
+/// Enum of the keys that an input device can send. Each key must be encoded as a standard VT
+/// sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
-    // 커서 키
+    // Cursor keys
     Up,
     Down,
     Left,
     Right,
-    // 영역 키
+    // Navigation keys
     Home,
     End,
     Insert,
     Delete,
     PageUp,
     PageDown,
-    // 기능 키
+    // Function keys
     F1,
     F2,
     F3,
@@ -34,18 +34,18 @@ pub enum Key {
     F10,
     F11,
     F12,
-    // 특수 키
+    // Special keys
     Enter,
     Tab,
     Backspace,
     Escape,
-    /// 숫자 키패드의 글자 키: `0`–`9`, `.`, `+`, `-`, `*`, `/`, `=`.
+    /// Character key of the numeric keypad: `0`–`9`, `.`, `+`, `-`, `*`, `/`, `=`.
     Keypad(char),
-    /// 숫자 키패드의 Enter.
+    /// Enter key of the numeric keypad.
     KeypadEnter,
 }
 
-/// 마우스 보고의 버튼. None 은 버튼을 누르지 않고 움직인 포인터다.
+/// Button of a mouse report. None is a pointer that moved without a pressed button.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseButton {
     Left,
@@ -54,7 +54,7 @@ pub enum MouseButton {
     WheelDown,
 }
 
-/// 마우스 보고의 동작.
+/// Action of a mouse report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseAction {
     Press,
@@ -62,7 +62,7 @@ pub enum MouseAction {
     Motion,
 }
 
-/// 마우스 보고 하나. 칸은 0부터 센다.
+/// One mouse report. Cell columns and rows are counted from 0.
 #[derive(Debug, Clone, Copy)]
 pub struct MouseReport {
     pub button: MouseButton,
@@ -73,42 +73,42 @@ pub struct MouseReport {
     pub ctrl: bool,
 }
 
-/// 키 인코딩 오류.
+/// Key encoding error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EncodeError {
-    /// 미지원 키 또는 입력.
+    /// Unsupported key or input.
     Unsupported,
-    /// 기타 오류.
+    /// Other error.
     Other(String),
 }
 
-/// 수식자 플래그 (shift, alt, ctrl의 조합).
-/// 각 비트: shift=1, alt=2, ctrl=4
+/// Modifier flags (a combination of shift, alt, and ctrl). Each bit: shift=1, alt=2, ctrl=4
 pub type Modifiers = u8;
 
-/// 키를 PTY 에 쓸 바이트로 인코딩한다.
+/// Encodes a key into bytes written to the PTY.
 ///
-/// # 인코딩 규칙
-/// - 커서 키 (`Up`/`Down`/`Right`/`Left`): 보통 `ESC [ A|B|C|D`, app cursor 모드면 `ESC O A|B|C|D`.
-/// - `Home`/`End`: `ESC [ H` / `ESC [ F` (app cursor 면 `ESC O H` / `ESC O F`).
+/// # Encoding rules
+/// - Cursor keys (`Up`/`Down`/`Right`/`Left`): normally `ESC [ A|B|C|D`, and
+///   `ESC O A|B|C|D` in app cursor mode.
+/// - `Home`/`End`: `ESC [ H` / `ESC [ F` (`ESC O H` / `ESC O F` in app cursor mode).
 /// - `Insert`/`Delete`/`PageUp`/`PageDown`: `ESC [ 2~` / `ESC [ 3~` / `ESC [ 5~` / `ESC [ 6~`.
-/// - `F1..F12`: VT 관례 (F1–F4 는 `ESC O P|Q|R|S`, F5 `ESC [ 15~`, 등).
-/// - 수식자(shift=1, alt=2, ctrl=4)가 있으면 `ESC [ 1 ; <n> A` 꼴 (커서 키),
-///   또는 `ESC [ 2 ; <n> ~` 꼴 (Tilde 계열).
+/// - `F1..F12`: VT convention (F1–F4 are `ESC O P|Q|R|S`, F5 is `ESC [ 15~`, and so on).
+/// - When a modifier (shift=1, alt=2, ctrl=4) is present, the form is `ESC [ 1 ; <n> A`
+///   (cursor keys) or `ESC [ 2 ; <n> ~` (tilde-family keys).
 /// - `Enter` → `\r`, `Tab` → `\t`, `Backspace` → `\x7f`, `Escape` → `\x1b`.
-/// - 문자 기반 키 (`A`–`Z`, `0`–`9` 등)는 이 함수에 전달되지 않음.
-///   문자는 `encode_text()`를 통해 직접 인코딩하기.
+/// - Character-based keys (`A`–`Z`, `0`–`9`, and so on) are not passed to this function.
+///   Encode characters directly with `encode_text()`.
 ///
-/// # 미지원
-/// - **응용 키패드 모드**: `modes.app_keypad` 가 켜져 있으면 수정 키 없는 키패드 키가 `ESC O` 시퀀스가 됨.
-///   숫자 키는 그대로 보냄. 향후 확장 예정.
+/// # Unsupported
+/// - **Application keypad mode**: when `modes.app_keypad` is on, keypad keys without a
+///   modifier become `ESC O` sequences. Number keys are sent unchanged. Planned for future
+///   extension.
 ///
-/// # 에러
-/// 모르는 키나 매칭 불가능한 입력은 `Err(Unsupported)` 를 반환함.
-/// 오류를 조용히 삼키지 않으니 호출자가 적절히 처리하기.
+/// # Errors An unknown key or an input that cannot be matched returns `Err(Unsupported)`. Errors
+/// are not silently discarded; the caller handles them.
 pub fn encode_key(key: Key, modifiers: Modifiers, modes: &Modes) -> Result<Vec<u8>, EncodeError> {
     match key {
-        // 커서 키
+        // Cursor keys
         Key::Up => {
             if modifiers == 0 {
                 if modes.app_cursor {
@@ -158,7 +158,7 @@ pub fn encode_key(key: Key, modifiers: Modifiers, modes: &Modes) -> Result<Vec<u
             }
         }
 
-        // Home/End 키
+        // Home/End keys
         Key::Home => {
             if modifiers == 0 {
                 if modes.app_cursor {
@@ -184,7 +184,7 @@ pub fn encode_key(key: Key, modifiers: Modifiers, modes: &Modes) -> Result<Vec<u
             }
         }
 
-        // Tilde 계열 키 (Insert, Delete, PageUp, PageDown)
+        // Tilde-family keys (Insert, Delete, PageUp, PageDown)
         Key::Insert => {
             if modifiers == 0 {
                 Ok(b"\x1b[2~".to_vec())
@@ -218,8 +218,8 @@ pub fn encode_key(key: Key, modifiers: Modifiers, modes: &Modes) -> Result<Vec<u
             }
         }
 
-        // 기능 키 (F1–F12)
-        // F1–F4 는 수식자가 없으면 SS3, 있으면 CSI 에 수식자 인자를 싣는다.
+        // Function keys (F1–F12) F1–F4 use SS3 without a modifier; with a modifier, the modifier
+        // parameter is carried in CSI.
         Key::F1 | Key::F2 | Key::F3 | Key::F4 => {
             let final_byte = match key {
                 Key::F1 => b'P',
@@ -299,16 +299,17 @@ pub fn encode_key(key: Key, modifiers: Modifiers, modes: &Modes) -> Result<Vec<u
             }
         }
 
-        // 특수 키
+        // Special keys
         Key::Enter => Ok(b"\r".to_vec()),
-        // Shift+Tab 은 BackTab(CSI Z) 이다. 전체화면 프로그램이 이 시퀀스로 모드 순환을 묶는다.
+        // Shift+Tab is BackTab (CSI Z). Full-screen programs bind mode switching to this sequence.
         Key::Tab if modifiers & 1 != 0 => Ok(b"\x1b[Z".to_vec()),
         Key::Tab => Ok(b"\t".to_vec()),
-        // Alt+Backspace 는 앞 단어 지우기(ESC DEL)다. readline 이 backward-kill-word 로 묶는다.
+        // Alt+Backspace is delete previous word (ESC DEL). readline binds it to backward-kill-word.
         Key::Backspace if modifiers & 2 != 0 => Ok(b"\x1b\x7f".to_vec()),
         Key::Backspace => Ok(b"\x7f".to_vec()),
         Key::Escape => Ok(b"\x1b".to_vec()),
-        // 응용 키패드 모드(ESC =)에서 수정 키 없는 키패드 키는 SS3 시퀀스다. 그 밖에는 키의 글자다.
+        // In application keypad mode (ESC =), keypad keys without a modifier are SS3 sequences.
+        // Otherwise they send their characters.
         Key::Keypad(ch) => {
             let application = match ch {
                 '0'..='9' => (b'p' + (ch as u8 - b'0')) as char,
@@ -336,11 +337,11 @@ pub fn encode_key(key: Key, modifiers: Modifiers, modes: &Modes) -> Result<Vec<u
     }
 }
 
-/// Ctrl 기반 바이트 인코딩. `ctrl+a` → `0x01` 부터 `ctrl+z` → `0x1a` 까지.
-/// 일반 문자가 아닌 특수 시퀀스도 지원: `ctrl+[` → `0x1b`, `ctrl+\` → `0x1c`, `ctrl+]` → `0x1d`, `ctrl+space` → `0x00`.
+/// Byte encoding for Ctrl. `ctrl+a` → `0x01` through `ctrl+z` → `0x1a`. Also supports special
+/// sequences that are not plain letters: `ctrl+[` → `0x1b`, `ctrl+\` → `0x1c`, `ctrl+]` → `0x1d`,
+/// `ctrl+space` → `0x00`.
 ///
-/// # 에러
-/// `ch` 가 컨트롤 가능한 문자가 아니면 `Err(Unsupported)`.
+/// # Errors Returns `Err(Unsupported)` when `ch` is not a controllable character.
 pub fn encode_ctrl_char(ch: char) -> Result<Vec<u8>, EncodeError> {
     match ch {
         'a'..='z' => {
@@ -359,13 +360,13 @@ pub fn encode_ctrl_char(ch: char) -> Result<Vec<u8>, EncodeError> {
     }
 }
 
-/// 텍스트를 utf-8 바이트로 인코딩한다. 텍스트 입력 처리용.
+/// Encodes text as UTF-8 bytes. Used for text input.
 pub fn encode_text(text: &str) -> Vec<u8> {
     text.as_bytes().to_vec()
 }
 
-/// Alt + 문자 조합. 문자 앞에 ESC 를 붙인다.
-/// 예: `alt+a` → `ESC` + `a` 의 UTF-8 바이트.
+/// Alt plus a character. Prepends ESC to the character. Example: `alt+a` → `ESC` followed by the
+/// UTF-8 bytes of `a`.
 pub fn encode_alt_char(ch: char) -> Vec<u8> {
     let mut result = vec![0x1b]; // ESC
     let mut buf = [0u8; 4];
@@ -374,17 +375,19 @@ pub fn encode_alt_char(ch: char) -> Vec<u8> {
     result
 }
 
-/// 수식자 파라미터를 계산한다.
-/// shift=1, alt=2, ctrl=4 의 비트가 주어질 때, (shift+alt+ctrl) + 1 을 반환.
-/// 예: alt+ctrl → (2+4)+1=7, shift 만 → (1)+1=2, 수식자 없음 → (0)+1=1.
+/// Computes the modifier parameter. Given the bits shift=1, alt=2, ctrl=4, returns (shift+alt+ctrl)
+/// + 1. Examples: alt+ctrl → (2+4)+1=7, shift only → (1)+1=2, no modifier → (0)+1=1.
 fn compute_modifier_param(modifiers: Modifiers) -> u8 {
     modifiers + 1
 }
 
-/// 마우스 보고 하나를 현재 인코딩으로 만든다. SGR(1006), UTF-8(1005), 기본 인코딩 순으로 모드를 따른다.
+/// Builds one mouse report in the current encoding. The mode is followed in this order: SGR (1006),
+/// UTF-8 (1005), then the default encoding.
 ///
-/// 버튼 값은 왼쪽 0, 버튼 없음 3, 휠 64/65 이고, 움직임은 32, alt 는 8, ctrl 은 16 을 더한다. SGR 은 뗌을 `m` 으로
-/// 끝내고 버튼을 유지한다. 기본과 UTF-8 인코딩의 뗌은 버튼 3 이다. 기본 인코딩이 나타낼 수 없는 칸은 오류다.
+/// The button value is 0 for left, 3 for no button, and 64/65 for the wheel. Motion adds 32, alt
+/// adds 8, and ctrl adds 16. SGR ends a release with `m` and keeps the button. In the default and
+/// UTF-8 encodings, a release reports button 3. A cell that the default encoding cannot represent
+/// is an error.
 pub fn encode_mouse(report: &MouseReport, modes: &Modes) -> Result<Vec<u8>, String> {
     let mut code: u32 = match report.button {
         MouseButton::Left => 0,
@@ -439,7 +442,8 @@ pub fn encode_mouse(report: &MouseReport, modes: &Modes) -> Result<Vec<u8>, Stri
     ])
 }
 
-/// 포인터 칸 (col, row) 의 휠 버튼 이벤트 하나. older 가 참이면 버튼 64(오래된 출력 쪽), 아니면 65 다.
+/// One wheel-button event at pointer cell (col, row). When `older` is true, the button is 64
+/// (toward older output); otherwise it is 65.
 pub fn encode_wheel(modes: &Modes, older: bool, col: u16, row: u16) -> Result<Vec<u8>, String> {
     let button = if older {
         MouseButton::WheelUp
@@ -459,12 +463,14 @@ pub fn encode_wheel(modes: &Modes, older: bool, col: u16, row: u16) -> Result<Ve
     )
 }
 
-/// 붙여넣기 텍스트를 인코딩한다.
+/// Encodes paste text.
 ///
-/// # 처리
-/// - `bracketed_paste` 모드가 켜져 있으면 `ESC [ 200 ~` 로 시작해 `ESC [ 201 ~` 로 끝남.
-/// - 텍스트 내의 `ESC [ 201 ~` 시퀀스는 감싸기를 빠져나가지 못하도록 거부함.
-/// - 텍스트의 UTF-8 바이트와 개행을 그대로 보존함.
+/// # Processing
+/// - When `bracketed_paste` mode is on, the output starts with `ESC [ 200 ~` and ends with
+///   `ESC [ 201 ~`.
+/// - An `ESC [ 201 ~` sequence inside the text is rejected so that it cannot end the wrapping
+///   early.
+/// - The UTF-8 bytes and line breaks of the text are preserved unchanged.
 pub fn encode_paste(text: &str, modes: &Modes) -> Result<Vec<u8>, String> {
     if modes.bracketed_paste && text.contains("\x1b[201~") {
         return Err("paste text contains the bracketed-paste terminator".to_string());
@@ -484,18 +490,18 @@ pub fn encode_paste(text: &str, modes: &Modes) -> Result<Vec<u8>, String> {
     Ok(result)
 }
 
-/// 조합(IME) 상태를 추적하는 간단한 상태 머신.
-/// 조합 중인 문자열을 보관하고, 확정 시점에만 바이트를 돌려준다.
+/// A simple state machine that tracks composition (IME) state. It holds the composing string and
+/// returns bytes only at the confirmation point.
 ///
-/// # 사용법
+/// # Usage
 /// ```
 /// use soksak_sidecar_vt_core::encoding::CompositionState;
 /// let mut composer = CompositionState::new();
-/// // 조합 중에는 PTY 로 나가는 바이트가 없다.
-/// assert_eq!(composer.add_char('한'), None);
+/// // While composing, no bytes are sent to the PTY.
+/// assert_eq!(composer.add_char('\u{d55c}'), None);
 /// assert!(composer.is_composing());
-/// // 확정할 때 한 번만 나간다.
-/// assert_eq!(composer.confirm(), Some("한".as_bytes().to_vec()));
+/// // The bytes are sent once, at confirmation.
+/// assert_eq!(composer.confirm(), Some("\u{d55c}".as_bytes().to_vec()));
 /// assert!(!composer.is_composing());
 /// ```
 #[derive(Debug, Clone, Default)]
@@ -504,26 +510,25 @@ pub struct CompositionState {
 }
 
 impl CompositionState {
-    /// 새로운 조합 상태 생성.
+    /// Creates a new composition state.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// 조합 중인 문자를 추가한다.
-    /// **PTY 로 보내지 않음**. 호출자가 화면에 미리 그려야 함.
-    /// `None` 을 반환 (바이트 없음).
+    /// Adds a character to the composition.
+    /// **Not sent to the PTY**. The caller must draw it on the screen in advance. Returns `None`
+    /// (no bytes).
     pub fn add_char(&mut self, ch: char) -> Option<Vec<u8>> {
         self.buffer.push(ch);
-        None // 조합 중에는 바이트 반환 안 함
+        None // No bytes are returned while composing
     }
 
-    /// 조합을 취소한다.
+    /// Cancels the composition.
     pub fn cancel(&mut self) {
         self.buffer.clear();
     }
 
-    /// 조합을 확정한다.
-    /// 버퍼의 텍스트를 UTF-8 바이트로 돌려주고 버퍼를 비운다.
+    /// Confirms the composition. Returns the buffered text as UTF-8 bytes and empties the buffer.
     pub fn confirm(&mut self) -> Option<Vec<u8>> {
         if self.buffer.is_empty() {
             None
@@ -534,12 +539,12 @@ impl CompositionState {
         }
     }
 
-    /// 현재 조합 중인 텍스트를 돌려줌 (읽기 전용).
+    /// Returns the text currently being composed (read-only).
     pub fn current(&self) -> &str {
         &self.buffer
     }
 
-    /// 조합이 진행 중인지 확인.
+    /// Checks whether a composition is in progress.
     pub fn is_composing(&self) -> bool {
         !self.buffer.is_empty()
     }
@@ -727,7 +732,7 @@ mod tests {
             ..Default::default()
         };
 
-        // 일반 모드
+        // Normal mode
         assert_eq!(
             encode_key(Key::Up, 0, &modes_normal).unwrap(),
             b"\x1b[A".to_vec()
@@ -745,7 +750,7 @@ mod tests {
             b"\x1b[D".to_vec()
         );
 
-        // App cursor 모드
+        // App cursor mode
         assert_eq!(
             encode_key(Key::Up, 0, &modes_app).unwrap(),
             b"\x1bOA".to_vec()
@@ -767,10 +772,10 @@ mod tests {
     #[test]
     fn test_function_keys_with_modifiers() {
         let modes = Modes::default();
-        // 수식자가 없으면 SS3.
+        // Without a modifier, SS3 is used.
         assert_eq!(encode_key(Key::F1, 0, &modes).unwrap(), b"\x1bOP".to_vec());
         assert_eq!(encode_key(Key::F4, 0, &modes).unwrap(), b"\x1bOS".to_vec());
-        // shift(1) 이면 인자는 2, ctrl(4) 이면 5.
+        // With shift (1), the parameter is 2; with ctrl (4), it is 5.
         assert_eq!(
             encode_key(Key::F1, 1, &modes).unwrap(),
             b"\x1b[1;2P".to_vec()
@@ -812,7 +817,7 @@ mod tests {
             ..Default::default()
         };
 
-        // 일반 모드
+        // Normal mode
         assert_eq!(
             encode_key(Key::Home, 0, &modes_normal).unwrap(),
             b"\x1b[H".to_vec()
@@ -822,7 +827,7 @@ mod tests {
             b"\x1b[F".to_vec()
         );
 
-        // App cursor 모드
+        // App cursor mode
         assert_eq!(
             encode_key(Key::Home, 0, &modes_app).unwrap(),
             b"\x1bOH".to_vec()
@@ -855,7 +860,7 @@ mod tests {
             b"\x1b[6~".to_vec()
         );
 
-        // modifier 포함
+        // With a modifier
         assert_eq!(
             encode_key(Key::Delete, 2, &modes).unwrap(),
             b"\x1b[3;3~".to_vec() // alt (2+1=3)
@@ -906,7 +911,7 @@ mod tests {
             b"\x1b[24~".to_vec()
         );
 
-        // Shift를 누른 F5 (modifier 1)
+        // F5 with Shift (modifier 1)
         assert_eq!(
             encode_key(Key::F5, 1, &modes).unwrap(),
             b"\x1b[15;2~".to_vec()
@@ -919,9 +924,9 @@ mod tests {
 
         assert_eq!(encode_key(Key::Enter, 0, &modes).unwrap(), b"\r".to_vec());
         assert_eq!(encode_key(Key::Tab, 0, &modes).unwrap(), b"\t".to_vec());
-        // Shift+Tab 은 BackTab(CSI Z) 이다. 전체화면 프로그램이 이 시퀀스로 모드 전환을 묶는다.
+        // Shift+Tab is BackTab (CSI Z). Full-screen programs bind mode switching to this sequence.
         assert_eq!(encode_key(Key::Tab, 1, &modes).unwrap(), b"\x1b[Z".to_vec());
-        // Alt+Backspace 는 앞 단어 지우기(ESC DEL)다.
+        // Alt+Backspace is delete previous word (ESC DEL).
         assert_eq!(
             encode_key(Key::Backspace, 2, &modes).unwrap(),
             b"\x1b\x7f".to_vec()
@@ -938,14 +943,14 @@ mod tests {
 
     #[test]
     fn test_encode_ctrl_char() {
-        // Ctrl+A부터 Ctrl+Z까지
+        // Ctrl+A through Ctrl+Z
         assert_eq!(encode_ctrl_char('a').unwrap(), vec![0x01]);
         assert_eq!(encode_ctrl_char('u').unwrap(), vec![0x15]);
         assert_eq!(encode_ctrl_char('z').unwrap(), vec![0x1a]);
         assert_eq!(encode_ctrl_char('A').unwrap(), vec![0x01]);
         assert_eq!(encode_ctrl_char('Z').unwrap(), vec![0x1a]);
 
-        // 특수 ctrl code
+        // Special ctrl codes
         assert_eq!(encode_ctrl_char('[').unwrap(), vec![0x1b]);
         assert_eq!(encode_ctrl_char('\\').unwrap(), vec![0x1c]);
         assert_eq!(encode_ctrl_char(']').unwrap(), vec![0x1d]);
@@ -961,7 +966,7 @@ mod tests {
         let result = encode_alt_char('a');
         assert_eq!(result, vec![0x1b, b'a']);
 
-        // Alt+한 (한글)
+        // Alt plus a Korean syllable
         let result = encode_alt_char('한');
         let mut expected = vec![0x1b];
         let korean_str = "한";
@@ -977,11 +982,11 @@ mod tests {
         };
         let modes_normal = Modes::default();
 
-        // bracketed paste mode 켜짐
+        // bracketed paste mode on
         let result = encode_paste("hello", &modes_bracketed).unwrap();
         assert_eq!(result, b"\x1b[200~hello\x1b[201~".to_vec());
 
-        // bracketed paste mode 꺼짐
+        // bracketed paste mode off
         let result = encode_paste("hello", &modes_normal).unwrap();
         assert_eq!(result, b"hello".to_vec());
     }
@@ -1016,11 +1021,11 @@ mod tests {
     fn test_composition_state_not_composing() {
         let mut composer = CompositionState::new();
 
-        // 확정 전에는 byte가 없다
+        // No bytes exist before confirmation
         assert_eq!(composer.add_char('あ'), None);
         assert!(composer.is_composing());
 
-        // 확정하고 byte를 얻는다
+        // Confirm and obtain the bytes
         let confirmed = composer.confirm();
         assert_eq!(confirmed, Some("あ".as_bytes().to_vec()));
         assert!(!composer.is_composing());
@@ -1051,7 +1056,7 @@ mod tests {
         assert_eq!(confirmed, Some(b"abc".to_vec()));
         assert!(!composer.is_composing());
 
-        // 다음 조합은 새로 시작한다
+        // The next composition starts anew
         composer.add_char('x');
         let confirmed2 = composer.confirm();
         assert_eq!(confirmed2, Some(b"x".to_vec()));

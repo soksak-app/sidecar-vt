@@ -1,4 +1,4 @@
-// 페이지가 보낸 테마 색을 읽고 검사하는지 확인한다.
+// Verifies that the theme colors sent by the page are read and checked.
 use soksak_sidecar_vt_core::{DEFAULT_PALETTE, LIGHT_PALETTE, TerminalTheme, ThemeMode, parse_hex};
 
 #[test]
@@ -16,7 +16,7 @@ fn a_theme_request_sets_the_four_colors_and_keeps_the_mode_palette() {
     assert_eq!(theme.cursor, [0x12, 0x68, 0x4b]);
     assert_eq!(theme.selection, [0xd8, 0xdb, 0xe4]);
     assert_eq!(theme.mode, ThemeMode::Light);
-    // 인덱스 ANSI 색은 테마가 아니라 모드가 고른다.
+    // The mode, not the theme, selects the indexed ANSI colors.
     assert_eq!(theme.palette, LIGHT_PALETTE);
     let dark = TerminalTheme::from_request(
         Some("dark"),

@@ -1,4 +1,4 @@
-// OSC 7 디렉터리 URI 를 이 컴퓨터의 경로로 바꾸는 규칙.
+// The rule that converts an OSC 7 directory URI to a path on this computer.
 use soksak_sidecar_vt_core::directory_uri::{host_name, local_path};
 
 #[test]

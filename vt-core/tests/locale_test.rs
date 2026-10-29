@@ -1,6 +1,6 @@
-// 터미널 locale 규칙(core docs/spec/terminal-runtime.md): service 환경에 LANG, LC_ALL, LC_CTYPE 이 모두 없으면
-// PTY 자식은 UTF-8 locale 로 실행된다. 프로세스 환경을 바꾸는 test 는 이 binary 의 하나뿐이고, 나머지 test 는
-// 프로세스 환경을 읽지 않는다.
+// Terminal locale rule (core docs/spec/terminal-runtime.md): when the service environment has none
+// of LANG, LC_ALL, and LC_CTYPE, PTY children run in a UTF-8 locale. Only one test in this binary
+// changes the process environment, and the other tests do not read the process environment.
 
 #[path = "support/events_test.rs"]
 mod events_test;

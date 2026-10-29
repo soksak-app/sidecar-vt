@@ -1,4 +1,4 @@
-// 공통 VT 계층: 프로토콜, 세션 수명, 화면 타입, Engine 트레이트
+// Common VT layer: protocol, session lifetime, screen types, and the Engine trait
 pub mod arguments;
 pub mod directory_uri;
 pub mod encoding;

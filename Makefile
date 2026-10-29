@@ -1,4 +1,5 @@
-# 터미널 engine sidecar repository 의 test, build, release(docs/features.md). release 는 core 의 sok 를 쓴다.
+# Test, build, and release of the terminal engine sidecar repository (docs/features.md).
+# The release uses sok from core.
 .PHONY: install test build release candidate-release repeat push-check hooks
 
 MACOS_MINIMUM = 14.4
@@ -41,7 +42,7 @@ test: build
 	pnpm exec soksak-records
 
 # `FEATURES=diagnostics` enables the diagnostic service build; the runtime trace remains opt-in.
-# sidecar.json 이 가리키는 vt-alacritty/build/soksak-vt-alacritty 를 쓴다.
+# Uses vt-alacritty/build/soksak-vt-alacritty, which sidecar.json points to.
 build:
 	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo build $(CARGO_PROFILE) $(CARGO_FEATURE_ARGS) -p soksak-sidecar-vt-alacritty
 	mkdir -p vt-alacritty/build

@@ -1,6 +1,7 @@
-//! OSC 7 디렉터리 URI 를 이 컴퓨터의 경로로 바꾼다. 다른 컴퓨터의 디렉터리는 경로가 없다.
+//! Converts an OSC 7 directory URI to a path on this computer. A directory on another computer has
+//! no path.
 
-/// 이 컴퓨터의 호스트 이름(gethostname).
+/// Host name of this computer (gethostname).
 pub fn host_name() -> Result<String, String> {
     let mut buffer = [0u8; 256];
     let result = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
@@ -23,7 +24,8 @@ fn decode(path: &str) -> Result<String, String> {
         if bytes[index] == b'%' {
             let hex = path
                 .get(index + 1..index + 3)
-                // silent: a digit pair that does not parse is reported by the ok_or_else that follows.
+                // silent: a digit pair that does not parse is reported by the ok_or_else that
+                // follows.
                 .and_then(|digits| u8::from_str_radix(digits, 16).ok())
                 .ok_or_else(|| format!("OSC 7 path has an invalid percent escape: {path}"))?;
             decoded.push(hex);
@@ -36,8 +38,9 @@ fn decode(path: &str) -> Result<String, String> {
     String::from_utf8(decoded).map_err(|_| format!("OSC 7 path is not UTF-8: {path}"))
 }
 
-/// `file` 또는 `kitty-shell-cwd` URI 의 경로. 호스트가 비었거나 `localhost` 이거나 이 컴퓨터의 호스트
-/// 이름이면 퍼센트 디코딩한 절대 경로를, 다른 호스트이면 None 을 돌려준다. 다른 형식은 오류다.
+/// Path of a `file` or `kitty-shell-cwd` URI. When the host is empty, `localhost`, or the host name
+/// of this computer, returns the percent-decoded absolute path. For another host, returns None. Any
+/// other format is an error.
 pub fn local_path(uri: &str) -> Result<Option<String>, String> {
     let rest = uri
         .strip_prefix("file://")

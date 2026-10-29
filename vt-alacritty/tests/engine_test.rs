@@ -203,7 +203,8 @@ fn every_unsupported_osc_inventory_selector_emits_an_explicit_error() {
 
 #[test]
 fn x11_and_tektronix_osc_selectors_are_explicitly_rejected() {
-    // 17 과 19(강조 색)는 구현했다. 나머지는 포인터 색과 Tektronix 색이다.
+    // 17 and 19 (highlight colors) are implemented. The rest are the pointer color and Tektronix
+    // colors.
     for selector in ["13", "14", "15", "16", "18"] {
         let mut engine = AlacrittyEngine::new();
         engine.feed(format!("\x1b]{selector};ignored\x07").as_bytes());
@@ -743,7 +744,7 @@ fn the_current_selection_text_is_readable_until_the_selection_is_cleared() {
     engine.selection_update(5, 0).expect("selection update");
     engine.selection_end().expect("selection copy");
     assert_eq!(engine.selection_text().as_deref(), Some("hello"));
-    // 움직이지 않은 클릭은 빈 선택으로 이전 선택을 지운다.
+    // A click without movement clears the previous selection as an empty selection.
     engine.selection_start(8, 0).expect("click press");
     assert_eq!(engine.selection_end().expect("click release"), None);
     assert_eq!(
@@ -815,7 +816,7 @@ fn the_viewport_scrolls_through_the_scrollback_and_returns_to_the_newest_output(
     );
     assert_eq!(line_text(&engine.screen(), 0), "LINE00");
 
-    // 스크롤한 뷰포트의 선택은 보이는 글자를 복사한다.
+    // A selection in a scrolled viewport copies the visible characters.
     engine.selection_start(0, 1).expect("selection start");
     engine.selection_update(6, 1).expect("selection update");
     assert_eq!(
@@ -831,7 +832,7 @@ fn the_viewport_scrolls_through_the_scrollback_and_returns_to_the_newest_output(
     assert!(engine.screen().cursor.visible);
 }
 
-/// 선택 배경(기본 테마의 선택 색)으로 그린 칸의 글자.
+/// Glyph of a cell drawn with the selection background (the default theme's selection color).
 fn inverted_text(screen: &soksak_sidecar_vt_core::Screen, row: usize) -> String {
     let selection = format!(
         "#{:02x}{:02x}{:02x}",
@@ -1381,7 +1382,7 @@ fn csi_private_modes_export_keyboard_paste_and_mouse_state() {
     engine.feed(b"\x1b[?1h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?2004h");
     let enabled = engine.modes();
     assert!(enabled.app_cursor);
-    // 마우스 모드는 하나만 켜진다. 마지막으로 켠 ?1003 이 남는다.
+    // Only one mouse mode is on at a time. The last enabled ?1003 remains.
     assert!(enabled.mouse_motion && !enabled.mouse_click && !enabled.mouse_drag);
     assert!(enabled.bracketed_paste);
 
@@ -1445,7 +1446,8 @@ fn wrapped_prompt(mark: &[u8]) -> AlacrittyEngine {
     engine.resize(20, 6);
     engine.feed(b"o1\r\no2\r\no3\r\n");
     engine.feed(mark);
-    // 프롬프트 "P>" 와 입력 30자는 폭 20에서 3, 4행을 차지한다. 폭 10에서는 네 행이다.
+    // The prompt "P>" and 30 input characters take three or four rows at width 20. At width 10 they
+    // take four rows.
     engine.feed(b"P>abcdefghijklmnopqrstuvwxyz0123");
     engine.drain_events();
     engine
@@ -1453,7 +1455,7 @@ fn wrapped_prompt(mark: &[u8]) -> AlacrittyEngine {
 
 const PROMPT_LINE: &str = "o1o2o3P>abcdefghijklmnopqrstuvwxyz0123";
 
-/// 기록과 화면의 모든 칸 글자를 위에서부터 이어 붙인다.
+/// Joins the characters of all cells in the history and the screen, from the top.
 fn all_text(engine: &mut AlacrittyEngine) -> String {
     let (_, history) = engine.scrollback();
     engine.scroll_viewport(history as i32);
@@ -1473,7 +1475,8 @@ fn all_text(engine: &mut AlacrittyEngine) -> String {
 
 #[test]
 fn a_resize_in_the_prompt_state_clears_the_cursor_logical_line_to_the_bottom() {
-    // 폭 10에서 출력 세 행과 프롬프트 네 행은 일곱 행이다. 화면 여섯 행에 들어맞지 않는 o1 만 기록으로 간다.
+    // At width 10, three output rows and four prompt rows make seven rows. Only o1, which does not
+    // fit in the six screen rows, moves to history.
     let mut engine = wrapped_prompt(b"\x1b]133;A\x07");
     engine.resize(10, 6);
     let screen = engine.screen();
@@ -1506,7 +1509,8 @@ fn a_resize_in_the_prompt_state_clears_the_cursor_logical_line_to_the_bottom() {
 
 #[test]
 fn redraw_last_places_the_cursor_as_redraw_1_does() {
-    // 폭 20에서 커서는 논리적 행의 첫 행(3행)보다 한 행 아래(4행)에 있었다. readline 도 한 행 올라가 다시 그린다.
+    // At width 20, the cursor was one row below (row 4) the first row of the logical line (row 3).
+    // readline also moves up one row to redraw.
     let mut engine = wrapped_prompt(b"\x1b]133;A;redraw=last;cl=line\x07");
     engine.resize(10, 6);
     let screen = engine.screen();
@@ -1529,7 +1533,7 @@ fn redraw_last_places_the_cursor_as_redraw_1_does() {
 fn redraw_last_scrolls_the_screen_when_the_offset_row_is_below_the_bottom() {
     let mut engine = AlacrittyEngine::new();
     engine.resize(10, 5);
-    // 폭 10에서 프롬프트 행은 네 행이고 커서는 그 첫 행보다 세 행 아래에 있다.
+    // At width 10, the prompt row is four rows and the cursor is three rows below its first row.
     engine.feed(b"o1\r\no2\r\n\x1b]133;A;redraw=last\x07P>abcdefghijklmnopqrstuvwxyz0123");
     engine.resize(40, 5);
     let cursor = engine.cursor();
@@ -1553,7 +1557,8 @@ fn prompt_rows_that_the_reflow_moved_into_the_scrollback_are_cleared() {
     let mut engine = AlacrittyEngine::new();
     engine.resize(20, 3);
     engine.feed(b"o1\r\n\x1b]133;A;redraw=last\x07P>abcdefghijklmnopqrstuvwxyz0123");
-    // 폭 10에서 프롬프트 행은 네 행이고, 커서 행을 유지하는 재배치가 앞의 행을 기록으로 옮긴다.
+    // At width 10, the prompt row is four rows, and the reflow that keeps the cursor row moves the
+    // earlier rows into history.
     engine.resize(10, 3);
     assert_eq!(all_text(&mut engine), "o1");
     let cursor = engine.cursor();
@@ -1566,8 +1571,9 @@ fn prompt_rows_that_the_reflow_moved_into_the_scrollback_are_cleared() {
 
 #[test]
 fn a_resize_clears_every_row_from_the_prompt_start_when_the_prompt_ends_its_own_line() {
-    // 폭 10에서 두 행 프롬프트("PROMPT-LINE", 줄바꿈, "P>")와 입력 30자는 여섯 행이다. 커서는 프롬프트 첫 행보다
-    // 다섯 행 아래에 있고, 셸은 그만큼 올라가 프롬프트를 다시 그린다.
+    // At width 10, the two-row prompt ("PROMPT-LINE", a line break, "P>") and 30 input characters
+    // are six rows. The cursor is five rows below the first prompt row, and the shell moves up that
+    // many rows to redraw the prompt.
     let mut engine = AlacrittyEngine::new();
     engine.resize(10, 8);
     engine.feed(b"o1\r\no2\r\n\x1b]133;A\x07PROMPT-LINE\r\nP>abcdefghijklmnopqrstuvwxyz0123");
@@ -1587,8 +1593,9 @@ fn a_resize_clears_every_row_from_the_prompt_start_when_the_prompt_ends_its_own_
 
 #[test]
 fn a_widening_resize_counts_the_rows_of_a_prompt_that_ended_at_the_margin() {
-    // 폭 10에서 20자 프롬프트는 두 행을 채우고, 셸은 줄바꿈 뒤에 입력 15자를 두 행에 쓴다. 커서는 프롬프트
-    // 첫 행보다 세 행 아래에 있다. 폭 30에서 프롬프트가 한 행이 되어도 셸은 세 행 올라간다.
+    // At width 10, the 20-character prompt fills two rows, and the shell writes 15 input characters
+    // in two rows after a line break. The cursor is three rows below the first prompt row. At width
+    // 30, the prompt becomes one row, but the shell still moves up three rows.
     let mut engine = AlacrittyEngine::new();
     engine.resize(10, 8);
     engine.feed(b"o1\r\no2\r\n\x1b]133;A\x07PPPPPPPPPPPPPPPPPP> \r\nabcdefghijklmno");
@@ -1608,8 +1615,8 @@ fn a_widening_resize_counts_the_rows_of_a_prompt_that_ended_at_the_margin() {
 
 #[test]
 fn a_prompt_redrawn_after_a_screen_clear_starts_at_the_top_row() {
-    // 화면 지우기(ESC[H ESC[2J) 뒤에 셸은 OSC 133;A 없이 프롬프트를 맨 위 행에 다시 그린다. 폭 10에서 커서는
-    // 그 행보다 다섯 행 아래에 있다.
+    // After a screen clear (ESC[H ESC[2J), the shell redraws the prompt on the top row without OSC
+    // 133;A. At width 10, the cursor is five rows below that row.
     let mut engine = AlacrittyEngine::new();
     engine.resize(10, 8);
     engine.feed(b"o1\r\no2\r\n\x1b]133;A\x07PROMPT-LINE\r\nP>");
@@ -1666,7 +1673,7 @@ fn a_resize_on_the_alternate_screen_keeps_its_cells() {
 fn a_prompt_start_moves_a_cursor_off_column_zero_to_the_next_line() {
     let mut engine = AlacrittyEngine::new();
     engine.resize(20, 6);
-    // 표시가 입력 조각 사이에서 끊겨도 앞의 출력 뒤에 적용된다.
+    // A mark split between input chunks is applied after the output before it.
     engine.feed(b"partial\x1b]133;");
     engine.feed(b"A\x07P>");
     let screen = engine.screen();
@@ -1745,7 +1752,7 @@ fn osc8_linked_cells_carry_their_uri() {
 
 #[test]
 fn erase_display_clears_the_screen_without_moving_it_into_the_history() {
-    // ED 2 는 화면을 지우고 기록으로 옮기지 않는다. clear 는 ED 3 뒤에 ED 2 를 보낸다.
+    // ED 2 clears the screen and does not move its rows to history. clear sends ED 2 after ED 3.
     let mut engine = AlacrittyEngine::new();
     engine.resize(20, 6);
     engine.feed(b"one\r\ntwo\r\nsh$ clear\r\n");
@@ -1757,7 +1764,7 @@ fn erase_display_clears_the_screen_without_moving_it_into_the_history() {
     );
     assert_eq!(text(&engine.screen()), "", "clear left text on the screen");
 
-    // 커서는 움직이지 않고, 지운 칸은 현재 배경색을 가진다.
+    // The cursor does not move, and the cleared cells have the current background color.
     let mut engine = AlacrittyEngine::new();
     engine.resize(20, 6);
     engine.feed(b"one\r\ntwo\x1b[41m\x1b[2J");
@@ -1778,7 +1785,8 @@ fn erase_display_clears_the_screen_without_moving_it_into_the_history() {
 
 #[test]
 fn erase_above_clears_every_line_above_the_cursor_and_the_line_up_to_it() {
-    // ED 1 은 화면 처음부터 커서까지(커서 칸 포함) 지운다. 커서가 둘째 줄에 있어도 첫 줄을 지워야 한다.
+    // ED 1 erases from the top of the screen to the cursor, including the cursor cell. Even when
+    // the cursor is on the second line, the first line must be erased.
     let mut engine = AlacrittyEngine::new();
     engine.resize(20, 6);
     engine.feed(b"one\r\ntwo-three\x1b[2;4H\x1b[1J");
@@ -1810,7 +1818,8 @@ fn osc_highlight_colors_are_set_queried_reset_and_draw_the_selection() {
     engine.resize(10, 2);
     engine.feed(b"AB");
     let default_background = engine.screen().background;
-    // 설정하지 않은 강조 배경은 테마의 선택 배경, 강조 글자는 기본 전경색이다.
+    // An unset highlight background is the theme's selection background, and an unset highlight
+    // foreground is the default foreground color.
     engine.set_theme(
         TerminalTheme::from_request(
             Some("dark"),
@@ -1955,7 +1964,8 @@ fn osc_special_colors_draw_attributed_text_when_enabled_and_answer_queries() {
 
 #[test]
 fn an_inline_image_is_anchored_at_the_cursor_where_its_sequence_appears() {
-    // 같은 출력 조각에서 그림 시퀀스 뒤에 온 글자가 커서를 옮겨도 그림은 시퀀스 자리의 커서에 놓인다.
+    // In the same output chunk, even when a character that follows the graphic sequence moves the
+    // cursor, the graphic is placed at the cursor at the sequence position.
     let mut engine = AlacrittyEngine::new();
     engine.resize(20, 10);
     engine.feed(
@@ -2009,7 +2019,8 @@ fn a_narrowing_reflow_moves_rows_into_the_history_when_the_screen_is_full() {
 
 #[test]
 fn a_prompt_redrawn_after_a_narrowing_resize_has_no_empty_row_above_it_when_rows_grow() {
-    // zsh 는 크기 변경 뒤 마지막으로 그린 폭에서의 행 수만큼 올라가 프롬프트를 다시 그린다. 이 프롬프트는 한 행이었다.
+    // After a size change, zsh moves up by the number of rows at the width where it last drew, then
+    // redraws the prompt. This prompt was one row.
     let prompt = b"~/backup/soksak-test-wails % ";
     let mut engine = AlacrittyEngine::new();
     engine.resize(30, 6);
@@ -2017,14 +2028,14 @@ fn a_prompt_redrawn_after_a_narrowing_resize_has_no_empty_row_above_it_when_rows
     engine.feed(prompt);
     engine.resize(28, 6);
     engine.feed(prompt);
-    // 폭 28에서 프롬프트는 두 행이었으므로 zsh 는 한 행 올라가 다시 그린다.
+    // At width 28, the prompt was two rows, so zsh moves up one row to redraw it.
     engine.resize(28, 8);
     engine.feed(b"\x1b[A\r");
     engine.feed(prompt);
     let screen = engine.screen();
     assert_eq!(
         (0..3).map(|row| row_text(&screen, row)).collect::<Vec<_>>(),
-        // row_text 는 글자가 있는 칸만 이으므로 공백 칸은 빠진다.
+        // row_text joins only the cells that have characters, so blank cells are omitted.
         ["~/backup/soksak-test-wails%", "", ""],
         "a row increase must not show a cleared prompt row above the redrawn prompt"
     );
@@ -2037,8 +2048,9 @@ fn a_prompt_redrawn_after_a_narrowing_resize_has_no_empty_row_above_it_when_rows
     );
 }
 
-// The bytes of a session of the window checks of core on 2026-10-12, ordered by their time: after the grid narrowed from 53
-// to 26 columns, the input line that the shell redrew was on none of the rows (#S44).
+// The bytes of a session of the window checks of core on 2026-10-12, ordered by their time: after
+// the grid narrowed from 53 to 26 columns, the input line that the shell redrew was on none of the
+// rows (#S44).
 #[test]
 fn a_narrowing_reflow_keeps_the_redrawn_input_line() {
     let mut engine = AlacrittyEngine::new();

@@ -1,4 +1,4 @@
-# 사이드카 Rust 워크스페이스. 루트 Cargo.toml 의 tauri git 고정과 분리된다.
+# Sidecar Rust workspace. Separated from the tauri git pin in the root Cargo.toml.
 [workspace]
 resolver = "2"
 members = ["vt-core", "vt-alacritty"]

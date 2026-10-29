@@ -45,13 +45,15 @@ test("VT recovery reports a service spawn error without waiting for the ready gu
   assert.doesNotMatch(result.stderr, /wrote no ready line within 60000ms/);
 });
 
-// 명세상 서비스는 기본 글꼴을 읽은 뒤 엔드포인트를 게시하고, 호스트는 시간 제한 없이 준비 줄을 기다린다.
-// 첫 CoreText 호출은 몇 초 걸릴 수 있으므로 검사도 준비 줄을 기다려야 한다.
+// The specification has the service publish the endpoint after it reads the default font,
+// and the host waits for the ready line without a time limit. The first CoreText call can
+// take several seconds, so the check must also wait for the ready line.
 test("VT recovery waits for a ready line that the service writes after several seconds", { timeout: 90000 }, async (t) => {
   const fixture = await mkdtemp(join(tmpdir(), "vt-recovery-slow-"));
   t.after(() => rm(fixture, { recursive: true, force: true }));
   const service = join(fixture, "slow-service");
-  // 6초 뒤에 엔드포인트를 게시하는 가짜 서비스다. 소켓은 없으므로 검사는 연결 단계에서 실패해야 한다.
+  // Fake service that publishes the endpoint after 6 seconds. It has no socket, so the check
+  // must fail at the connection step.
   await writeFile(service, `#!${process.execPath}
 const { writeFileSync } = require("node:fs");
 const { join } = require("node:path");

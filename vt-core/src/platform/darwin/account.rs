@@ -1,8 +1,9 @@
-//! 사용자 데이터베이스의 계정 정보.
+//! Account information from the user database.
 
 use std::ffi::CStr;
 
-/// 이 프로세스 사용자의 로그인 셸. 사용자 데이터베이스(getpwuid)의 셸 항목이며, 항목이 없거나 비어 있으면 오류다.
+/// Login shell of the process user. This is the shell field of the user database (getpwuid); a
+/// missing or empty field is an error.
 pub fn login_shell() -> Result<String, String> {
     let entry = unsafe { libc::getpwuid(libc::getuid()) };
     if entry.is_null() {

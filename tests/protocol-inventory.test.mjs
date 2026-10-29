@@ -1,4 +1,5 @@
-// 터미널 protocol inventory(docs/spec/terminal-protocols.md)를 engine source 와 test 에 대조하는 검사의 test.
+// Test of the check that compares the terminal protocol inventory
+// (docs/spec/terminal-protocols.md) with the engine source and tests.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";

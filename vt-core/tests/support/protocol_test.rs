@@ -218,7 +218,8 @@ async fn previous_client_eof_preserves_new_attachment_output() {
         },
     );
     tokio::pin!(input);
-    // 이전 연결을 읽기 대기까지 진행한 뒤 새 부착과 EOF 순서를 제어한다.
+    // Advances the previous connection to its read wait, then controls the order of the new
+    // attachment and EOF.
     tokio::select! {
         biased;
         result = &mut input => panic!("previous input ended before EOF: {result:?}"),
@@ -255,7 +256,8 @@ async fn previous_client_eof_preserves_new_attachment_output() {
 
 #[tokio::test]
 async fn a_persistent_sink_detaches_when_its_client_output_closed_and_a_direct_sink_fails() {
-    // 영속 서비스의 세션은 클라이언트가 끊겨도 유지된다. 출력 쪽이 먼저 닫힌 연결로 보낸 출력은 분리로 다룬다.
+    // A session of the persistent service stays alive when its client disconnects. Output sent to a
+    // connection whose output side closed first is handled as a detach.
     let (sender, receiver) = mpsc::channel(4);
     let persistent = OutputSink::detachable(test_connection(sender));
     drop(receiver);
@@ -273,7 +275,8 @@ async fn a_persistent_sink_detaches_when_its_client_output_closed_and_a_direct_s
     );
 }
 
-/// 시험 표면 작업의 닫기 처리. 닫기 명령이면 성공으로 답하고 참을 돌려준다.
+/// Close handling of a test surface action. For a close command, it answers success and returns
+/// true.
 fn answer_close(dispatch: Dispatch) -> bool {
     match dispatch.command {
         SurfaceCommand::SessionClose { result } => {
@@ -399,7 +402,7 @@ async fn assert_cleanup_closes_remaining_actors(retain: bool) {
             },
         );
     }
-    // HashMap 순서는 바꾸지 않고 첫 항목의 액터만 이미 종료된 상태로 만든다.
+    // Leaves the HashMap order unchanged and makes only the actor of the first entry already ended.
     let (dead_tx, dead_rx) = mpsc::channel(1);
     drop(dead_rx);
     {
@@ -524,8 +527,9 @@ async fn persistent_registry_close_owner_keeps_other_client_sessions() {
     assert!(!registry.contains("root\0b").await);
 }
 
-// 닫기에 답하지 않는 표면 작업은 입력 loop 를 끝없이 막지 않고, 닫기 상한이 지나면 오류로 보고된다. closed 답은 닫기가
-// 끝난 뒤에 보내므로(S20) 닫기는 작업을 기다리며, 이 시험은 그 기다림에 상한이 있음을 확인한다.
+// A surface action that does not answer a close does not block the input loop forever. When the
+// close limit passes, it is reported as an error. The closed answer is sent after the close ends
+// (S20), so the close waits for the action. This test confirms that the wait has a limit.
 #[tokio::test(start_paused = true)]
 async fn persistent_surface_close_reports_an_actor_that_does_not_answer() {
     let registry = PersistentRegistry::new();
@@ -557,7 +561,8 @@ async fn persistent_surface_close_reports_an_actor_that_does_not_answer() {
 
 #[tokio::test]
 async fn a_surface_reopened_after_its_closed_notice_is_not_a_stale_attachment() {
-    // 창이 닫혀 closed 알림을 받은 표면을 같은 연결에서 다시 열면 낡은 부착이 아니라 새 표면이다.
+    // A surface that was reopened on the same connection after its window closed and it received
+    // the closed notice is a new surface, not a stale attachment.
     let (sender, mut receiver) = mpsc::channel(64);
     let output = OutputSink::direct(test_connection(sender));
     let open = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}"#;
@@ -610,7 +615,8 @@ async fn retained(
     }
 }
 
-// 영속 연결에서 retain 이 실제 PTY 세션의 표면 작업을 닫은 뒤에도 입력 루프는 다음 요청을 받는 즉시 처리해야 한다.
+// After retain closes the surface actions of real PTY sessions on a persistent connection, the
+// input loop must still handle the next request at once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_request_after_retain_closes_pty_sessions_is_handled_at_once() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -652,7 +658,8 @@ async fn a_request_after_retain_closes_pty_sessions_is_handled_at_once() {
                 r#"{{"operation":"retain","request":"{request}","surfaces":[]}}"#
             ))
         };
-        // 표면 작업은 명령을 받은 순서대로 처리하므로, retain 의 닫기 명령은 open 이 PTY 세션을 연 뒤에 처리된다.
+        // Surface actions process commands in the order they were received, so the close command of
+        // retain is processed after open opens the PTY session.
         client_write.write_all(&retain("1")).await.unwrap();
         tokio::time::timeout(Duration::from_secs(5), retained(&mut replies, "1"))
             .await
@@ -671,8 +678,9 @@ async fn a_request_after_retain_closes_pty_sessions_is_handled_at_once() {
     }
 }
 
-// 소유자 닫기는 그 소유자의 PTY 세션을 끝낸다. 세션이 끝난 표면 작업은 스스로 끝나므로, 표면 작업을 닫기 전에
-// 세션을 끝내면 그 닫기는 답을 받지 못한다(core F98). 열린 PTY 세션의 close-owner 는 성공으로 답해야 한다.
+// Owner close ends the PTY sessions of that owner. A surface action whose session has ended ends by
+// itself, so when the session ends before the surface action is closed, that close receives no
+// answer (core F98). The close-owner of an open PTY session must answer with success.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn close_owner_closes_open_pty_surfaces_without_error() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -713,7 +721,8 @@ async fn close_owner_closes_open_pty_surfaces_without_error() {
                 .write_all(&line(&format!(r#"{{"surface":"{surface}","root":"/tmp","body":{{"operation":"open","shell":"/bin/sh"}}}}"#)))
                 .await
                 .unwrap();
-            // 표면 작업은 명령을 받은 순서대로 처리하므로, 화면 답이 오면 open 이 PTY 세션을 열었다.
+            // Surface actions process commands in the order they were received, so when the screen
+            // answer arrives, open has opened the PTY session.
             client_write
                 .write_all(&line(&format!(r#"{{"surface":"{surface}","root":"/tmp","body":{{"operation":"screen.read"}}}}"#)))
                 .await
@@ -769,9 +778,10 @@ async fn close_owner_closes_open_pty_surfaces_without_error() {
 
 #[tokio::test]
 async fn a_surface_reopened_after_its_close_request_is_not_a_stale_attachment() {
-    // 영속 연결에서 close 요청으로 닫은 표면을 다시 열면 낡은 부착이 아니라 새 표면이다. close 가 연결의 표면
-    // 채널을 남기면 다음 구성과 open 은 등록부에서 지워진 작업을 찾아 거부되고, 화면은 그려지지 않는다
-    // (core G1.4-90-4-2).
+    // A surface that was closed by a close request on a persistent connection and then reopened is
+    // a new surface, not a stale attachment. If close leaves the surface channel of the connection,
+    // the next configure and open find the action removed from the registry and are rejected, and
+    // the screen is not drawn (core G1.4-90-4-2).
     let (sender, mut receiver) = mpsc::channel(64);
     let output = OutputSink::direct(test_connection(sender));
     let open = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}"#;
@@ -808,9 +818,10 @@ async fn a_surface_reopened_after_its_close_request_is_not_a_stale_attachment() 
     );
 }
 
-/// 표면 하나를 열고 closed 봉투를 보낸 뒤, closed 답이 올 때 그 표면의 session 이 이미 닫혔는지 확인한다.
-/// 현재 thread runtime 에서 입력 loop 를 이 작업 안에서 돌리므로, loop 가 답을 쓰기 전에 표면 작업이 실행되는 길은
-/// loop 가 그 작업의 닫기를 기다리는 것뿐이다(S20, core F61).
+/// Opens one surface and sends a closed envelope, then checks that the session of that surface has
+/// already closed when the closed answer arrives. The current thread runtime runs the input loop
+/// inside this action, so the only path by which a surface action runs before the loop writes the
+/// answer is that the loop waits for the close of that action (S20, core F61).
 async fn assert_closed_answer_follows_the_session_close(registry: Option<Arc<PersistentRegistry>>) {
     use tokio::io::AsyncWriteExt;
     let port = Arc::new(FakeSessionPort::new());

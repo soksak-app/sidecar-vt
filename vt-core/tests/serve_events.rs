@@ -1,6 +1,7 @@
-// The events of the serve loop and of the PTY service (core docs/spec/logging.md): the frames, the requests with their
-// whole bodies, and the writes to the PTY with the correlation identifiers of the request that caused them. The events
-// are produced by the writer of this crate and read from its file.
+// The events of the serve loop and of the PTY service (core docs/spec/logging.md): the frames, the
+// requests with their whole bodies, and the writes to the PTY with the correlation identifiers of
+// the request that caused them. The events are produced by the writer of this crate and read from
+// its file.
 #[path = "support/catalog_test.rs"]
 mod catalog_test;
 #[path = "support/events_test.rs"]
@@ -8,7 +9,8 @@ mod events_test;
 
 use events_test::TestEvents;
 
-// 프레임 생산자: 트레이스가 켜진 serve 는 프레임마다 reason 과 그리기 시간을 남긴다.
+// Frame producer: a serve with tracing enabled records the reason and the drawing time for each
+// frame.
 use soksak_sidecar_vt_core::policy::{Class, Policy};
 use soksak_sidecar_vt_core::protocol::{
     Cursor, CursorShape, Engine, EngineEvent, Modes, Screen, SessionPort, ShellRequest,
@@ -134,8 +136,8 @@ impl SessionPort for TracePort {
     }
 }
 
-/// Serves `input` on a connection with the engine and the port of this file and returns the lines of the events after the
-/// connection ended and the writer put them on disk.
+/// Serves `input` on a connection with the engine and the port of this file and returns the lines
+/// of the events after the connection ended and the writer put them on disk.
 async fn serve_lines(events: &TestEvents, input: &[u8]) -> Vec<String> {
     let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
     let port = Arc::new(TracePort);
@@ -173,9 +175,9 @@ async fn serve_with(
     replies
 }
 
-/// Serves `input` and keeps the connection open until the event `until` is in the file of `events` (the output of a session
-/// reaches the surface task when the task takes it, and nothing tells the test when). The wait has a limit that ends a stalled
-/// test; success is judged by the event.
+/// Serves `input` and keeps the connection open until the event `until` is in the file of `events`
+/// (the output of a session reaches the surface task when the task takes it, and nothing tells the
+/// test when). The wait has a limit that ends a stalled test; success is judged by the event.
 async fn serve_until(
     events: &TestEvents,
     engine_factory: Arc<dyn Fn() -> Box<dyn Engine> + Send + Sync>,
@@ -224,8 +226,9 @@ async fn a_served_surface_records_its_frames_with_reasons() {
             "every frame carries a reason and a draw time: {frame}"
         );
     }
-    // Each frame names its session, the number of its image (consecutive from 1 for a surface), the size of its screen and the
-    // screen hash (the contents of the frame record are checked by the test of the replay records).
+    // Each frame names its session, the number of its image (consecutive from 1 for a surface), the
+    // size of its screen and the screen hash (the contents of the frame record are checked by the
+    // test of the replay records).
     for (index, frame) in frames.iter().enumerate() {
         assert_eq!(frame["session"], "perf-session", "{frame}");
         assert_eq!(frame["fields"]["image"], index as u64 + 1, "{frame}");
@@ -273,7 +276,8 @@ not json at all
     assert_eq!(unparsed["fields"]["body"]["unparsed"], "not json at all");
 }
 
-// The host answers a frame with `consumed`: the time from sending the frame to the answer is the event `consumed_wait`.
+// The host answers a frame with `consumed`: the time from sending the frame to the answer is the
+// event `consumed_wait`.
 #[tokio::test]
 async fn the_answer_of_the_host_to_a_frame_is_the_event_consumed_wait() {
     let events = TestEvents::new();
@@ -302,10 +306,11 @@ async fn the_answer_of_the_host_to_a_frame_is_the_event_consumed_wait() {
     );
 }
 
-/// Serves a connection whose output pipe holds `output_capacity` bytes. The sender writes `line` after `before_line`. The client
-/// reads the first byte of the replies, which the service has written when the read returns, then waits `before_reading` and
-/// reads the rest; a write longer than the pipe therefore waits for the client at least `before_reading`, however late the
-/// service starts it. The waits are the condition that the events under test report.
+/// Serves a connection whose output pipe holds `output_capacity` bytes. The sender writes `line`
+/// after `before_line`. The client reads the first byte of the replies, which the service has
+/// written when the read returns, then waits `before_reading` and reads the rest; a write longer
+/// than the pipe therefore waits for the client at least `before_reading`, however late the service
+/// starts it. The waits are the condition that the events under test report.
 async fn serve_slowly(
     events: &TestEvents,
     output_capacity: usize,
@@ -341,7 +346,8 @@ async fn serve_slowly(
 const NOTHING: &[u8] =
     b"{\"surface\":\"s1\",\"root\":\"/tmp\",\"body\":{\"operation\":\"nothing\"}}\n";
 
-// A connection that sends nothing for one second and then a line is the event `read_wait`: the read side waited.
+// A connection that sends nothing for one second and then a line is the event `read_wait`: the read
+// side waited.
 #[tokio::test]
 async fn a_read_that_waited_a_second_is_the_event_read_wait() {
     let events = TestEvents::new();
@@ -368,12 +374,13 @@ async fn a_read_that_waited_a_second_is_the_event_read_wait() {
     );
 }
 
-// A client that does not read blocks the write of a line: a write that takes 10 milliseconds or more is the event
-// `output_blocked`.
+// A client that does not read blocks the write of a line: a write that takes 10 milliseconds or
+// more is the event `output_blocked`.
 #[tokio::test]
 async fn a_write_to_a_client_that_does_not_read_is_the_event_output_blocked() {
     let events = TestEvents::new();
-    // The pipe to the client holds 16 bytes, so the reply cannot be written before the client reads.
+    // The pipe to the client holds 16 bytes, so the reply cannot be written before the client
+    // reads.
     serve_slowly(
         &events,
         16,
@@ -397,8 +404,8 @@ async fn a_write_to_a_client_that_does_not_read_is_the_event_output_blocked() {
     );
 }
 
-// A raster that holds no whole cell is a transient state of a drag: the grid stays and the service records that it did not
-// size the grid to this raster.
+// A raster that holds no whole cell is a transient state of a drag: the grid stays and the service
+// records that it did not size the grid to this raster.
 #[tokio::test]
 async fn a_raster_without_a_whole_cell_is_recorded_and_the_grid_stays() {
     let events = TestEvents::new();
@@ -528,8 +535,8 @@ impl SessionPort for OutputPort {
     }
 }
 
-// An inline image command that cannot be applied is an error of the page (the event `error` of the surface) and an error
-// record of the service, also for a surface that sends no surface events.
+// An inline image command that cannot be applied is an error of the page (the event `error` of the
+// surface) and an error record of the service, also for a surface that sends no surface events.
 #[tokio::test]
 async fn an_inline_image_command_that_cannot_be_applied_is_an_error_record() {
     let events = TestEvents::new();
@@ -555,11 +562,13 @@ async fn an_inline_image_command_that_cannot_be_applied_is_an_error_record() {
         .write_all(b"{\"surface\":\"s1\",\"root\":\"/tmp\",\"body\":{\"operation\":\"open\",\"shell\":\"/bin/sh\"}}\n")
         .await
         .unwrap();
-    // The surface task takes the output of its session when it chooses; the connection stays open until the record exists.
-    // No notification reaches this test from the task, so it asks the file again after a short pause.
+    // The surface task takes the output of its session when it chooses; the connection stays open
+    // until the record exists. No notification reaches this test from the task, so it asks the file
+    // again after a short pause.
     let records = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            // Output that arrives before the open is ignored, so the output is reported again until the session takes it.
+            // Output that arrives before the open is ignored, so the output is reported again until
+            // the session takes it.
             sender
                 .send(soksak_sidecar_vt_core::protocol::DaemonEvent::Output {
                     session_id: "scripted-session".to_string(),
@@ -593,10 +602,11 @@ async fn an_inline_image_command_that_cannot_be_applied_is_an_error_record() {
     );
 }
 
-// The inputs of a session are replay inputs (core docs/spec/replay.md#records): the output of the program, the input to it and
-// each resize carry the session, a `sequence` that counts the inputs of the session from 1 without a gap, and the complete
-// bytes as `hex` without a text copy. A frame record carries the sequence of the last input that its screen includes, the size
-// of the screen and the screen hash.
+// The inputs of a session are replay inputs (core docs/spec/replay.md#records): the output of the
+// program, the input to it and each resize carry the session, a `sequence` that counts the inputs
+// of the session from 1 without a gap, and the complete bytes as `hex` without a text copy. A frame
+// record carries the sequence of the last input that its screen includes, the size of the screen
+// and the screen hash.
 #[tokio::test]
 async fn the_inputs_and_the_frames_of_a_session_are_replay_records() {
     let events = TestEvents::new();
@@ -700,8 +710,9 @@ async fn the_inputs_and_the_frames_of_a_session_are_replay_records() {
     }
 }
 
-// The class `io` is stored when the policy stores it: with the class off neither the output of the program nor the bytes
-// written to it are stored (both are declared with the class `io`), and the gate counts what it refused.
+// The class `io` is stored when the policy stores it: with the class off neither the output of the
+// program nor the bytes written to it are stored (both are declared with the class `io`), and the
+// gate counts what it refused.
 #[tokio::test]
 async fn the_bytes_of_the_program_are_not_stored_when_the_policy_turns_the_class_io_off() {
     let events = TestEvents::with_policy(Policy::default().with(Class::Io, None));
@@ -728,8 +739,9 @@ async fn the_bytes_of_the_program_are_not_stored_when_the_policy_turns_the_class
     );
 }
 
-// The `screen` event that the service sends carries the members of the screen hash, and its `sequence` is the sequence of the
-// frame record that carries the hash of the same screen, so a page compares the two (core docs/spec/terminal-runtime.md).
+// The `screen` event that the service sends carries the members of the screen hash, and its
+// `sequence` is the sequence of the frame record that carries the hash of the same screen, so a
+// page compares the two (core docs/spec/terminal-runtime.md).
 #[tokio::test]
 async fn the_screen_event_is_the_screen_of_the_frame_record_of_its_sequence() {
     let events = TestEvents::new();
@@ -765,13 +777,14 @@ async fn the_screen_event_is_the_screen_of_the_frame_record_of_its_sequence() {
             soksak_sidecar_vt_core::screen_hash::screen_hash_json(screen).unwrap(),
             "the hash of the message is the hash of the frame record"
         );
-        // The segment is the boot of the event file that holds the frame record (core docs/spec/replay.md#segments).
+        // The segment is the boot of the event file that holds the frame record (core
+        // docs/spec/replay.md#segments).
         assert_eq!(screen["segment"], "test", "{screen}");
     }
 }
 
-// A request line over the bound of an event is recorded by its first 4,096 bytes and its size, and the line is neither cloned
-// nor serialized whole (core docs/spec/logging.md#bounds).
+// A request line over the bound of an event is recorded by its first 4,096 bytes and its size, and
+// the line is neither cloned nor serialized whole (core docs/spec/logging.md#bounds).
 #[tokio::test]
 async fn a_request_line_over_the_bound_is_recorded_by_its_head_and_its_size() {
     let events = TestEvents::new();
@@ -813,8 +826,9 @@ async fn cids_that_are_not_a_list_of_strings_are_rejected_with_an_error() {
             "{{\"surface\":\"s1\",\"root\":\"/tmp\",\"cids\":{cids},\"body\":{{\"operation\":\"open\",\"shell\":\"/bin/sh\"}}}}\n"
         );
         let replies = serve_lines(&events, line.as_bytes()).await;
-        // The answer goes to the surface of the request and names the cids. It stated the parse error before, which named
-        // no surface, so the answer did not reach the surface that sent the request.
+        // The answer goes to the surface of the request and names the cids. It stated the parse
+        // error before, which named no surface, so the answer did not reach the surface that sent
+        // the request.
         assert!(
             replies
                 .iter()
@@ -833,8 +847,9 @@ fn parsed(replies: &[String]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-// A failed request is stated as `error` in the body, the reply line carries the `cids` of the request beside `surface` and
-// `body`, and the reply is the event `sidecar.vt.reply` in the result form of core (docs/spec/logging.md#result-form).
+// A failed request is stated as `error` in the body, the reply line carries the `cids` of the
+// request beside `surface` and `body`, and the reply is the event `sidecar.vt.reply` in the result
+// form of core (docs/spec/logging.md#result-form).
 #[tokio::test]
 async fn an_error_reply_carries_the_cids_of_its_request_and_is_the_event_reply() {
     let events = TestEvents::new();
@@ -864,8 +879,8 @@ async fn an_error_reply_carries_the_cids_of_its_request_and_is_the_event_reply()
     assert!(reply["fields"]["micros"].is_u64(), "{reply}");
 }
 
-// The reply of a command that the surface task answers carries the `cids` of the request that sent the command, and the
-// acknowledgement of an input is a reply with `ok` true.
+// The reply of a command that the surface task answers carries the `cids` of the request that sent
+// the command, and the acknowledgement of an input is a reply with `ok` true.
 #[tokio::test]
 async fn the_replies_of_the_surface_task_carry_the_cids_of_their_requests() {
     let events = TestEvents::new();
@@ -906,8 +921,8 @@ async fn the_replies_of_the_surface_task_carry_the_cids_of_their_requests() {
     assert!(acknowledged["fields"].get("error").is_none());
 }
 
-// A line that no request asks for (the state, the screen, an image) carries no `cids`, even when the request that caused it
-// had some.
+// A line that no request asks for (the state, the screen, an image) carries no `cids`, even when
+// the request that caused it had some.
 #[tokio::test]
 async fn an_event_that_a_request_does_not_ask_for_carries_no_cids() {
     let events = TestEvents::new();
@@ -959,8 +974,8 @@ impl SessionPort for FailingOpenPort {
     }
 }
 
-// The failure to open a headless session is answered on the surface that asked: a reply without `surface` is a message that
-// the host cannot deliver.
+// The failure to open a headless session is answered on the surface that asked: a reply without
+// `surface` is a message that the host cannot deliver.
 #[tokio::test]
 async fn the_failure_to_open_a_headless_session_names_the_surface() {
     let events = TestEvents::new();
@@ -986,7 +1001,8 @@ async fn the_failure_to_open_a_headless_session_names_the_surface() {
     );
 }
 
-// A terminal font family that is not installed is not an error of the request: the service records it.
+// A terminal font family that is not installed is not an error of the request: the service records
+// it.
 #[tokio::test]
 async fn a_font_family_that_is_not_installed_is_recorded_as_an_info_record() {
     let events = TestEvents::new();
@@ -1021,14 +1037,14 @@ async fn a_font_family_that_is_not_installed_is_recorded_as_an_info_record() {
     );
 }
 
-/// The correlation identifiers of a request reach the event of the write to the PTY that the request caused, through a
-/// real PTY service.
+/// The correlation identifiers of a request reach the event of the write to the PTY that the
+/// request caused, through a real PTY service.
 #[tokio::test]
 async fn the_cids_of_an_input_request_reach_the_pty_write_event() {
     let events = TestEvents::new();
     let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
     let factory = make_default_session_port_factory(events.handle());
-    // "한a\n" in base64.
+    // "\u{d55c}a\n" encoded in base64.
     serve_with(
         &events,
         engine_factory,
@@ -1051,7 +1067,8 @@ async fn the_cids_of_an_input_request_reach_the_pty_write_event() {
     assert!(write["fields"].get("cids").is_none());
 }
 
-// 요청 처리 기록의 작업 이름은 요청 종류를 밝힌다: 연결 operation, closed, body 의 operation, 또는 body 의 키와 그 하위 키.
+// The operation name in a request-processing record identifies the request kind: the connection
+// operation, closed, the body operation, or the body key and its sub-key.
 #[test]
 fn request_operation_names_the_kind_of_request() {
     use soksak_sidecar_vt_core::protocol::request_operation;
@@ -1081,8 +1098,8 @@ fn request_operation_names_the_kind_of_request() {
     assert_eq!(name(serde_json::json!({"surface": "s"})), "unknown");
 }
 
-// The events of a whole session through a real PTY satisfy the catalog of the service: each is declared, with its level and
-// its required fields.
+// The events of a whole session through a real PTY satisfy the catalog of the service: each is
+// declared, with its level and its required fields.
 #[tokio::test]
 async fn the_events_of_a_session_satisfy_the_catalog() {
     let events = TestEvents::new();
@@ -1120,8 +1137,9 @@ not json at all
     assert_eq!(catalog_test::findings(&lines), Vec::<String>::new());
 }
 
-// Each `open` and `image.configure` records the drawing mode of the surface that it leaves (core checklist item F192): a
-// surface opened with `image` draws, and a surface opened without `image` is headless.
+// Each `open` and `image.configure` records the drawing mode of the surface that it leaves (core
+// checklist item F192): a surface opened with `image` draws, and a surface opened without `image`
+// is headless.
 #[tokio::test]
 async fn each_open_and_configure_records_the_drawing_mode_of_the_surface() {
     let events = TestEvents::new();
@@ -1157,9 +1175,10 @@ async fn each_open_and_configure_records_the_drawing_mode_of_the_surface() {
     );
 }
 
-/// Waits until `count` events named `name` that `matches` accepts are in the file of `events`. The surface task records an event
-/// when it handles the request or the output, and nothing tells the test when, so it reads the file again after a short pause;
-/// the wait has a limit that ends a stalled test, and the result is judged by the events.
+/// Waits until `count` events named `name` that `matches` accepts are in the file of `events`. The
+/// surface task records an event when it handles the request or the output, and nothing tells the
+/// test when, so it reads the file again after a short pause; the wait has a limit that ends a
+/// stalled test, and the result is judged by the events.
 async fn wait_events(
     events: &TestEvents,
     name: &str,
@@ -1188,9 +1207,10 @@ async fn wait_events(
     })
 }
 
-// A surface that has an image keeps drawing the output of its session after an `open` without `image` for it, which the
-// background session of core sent for a terminal tab that another tab of its card hid while its surface stayed mounted (core
-// checklist item F192): the `open` is refused with an error that names the surface, and the next output is drawn.
+// A surface that has an image keeps drawing the output of its session after an `open` without
+// `image` for it, which the background session of core sent for a terminal tab that another tab of
+// its card hid while its surface stayed mounted (core checklist item F192): the `open` is refused
+// with an error that names the surface, and the next output is drawn.
 #[tokio::test]
 async fn an_open_without_image_for_a_surface_with_an_image_is_refused_and_its_output_is_drawn() {
     let events = TestEvents::new();
@@ -1213,11 +1233,12 @@ async fn an_open_without_image_for_a_surface_with_an_image_is_refused_and_its_ou
         }
         replies
     });
-    // An empty input is answered by the surface task after it handled every earlier request of the surface, so its reply marks
-    // the end of the step before it.
+    // An empty input is answered by the surface task after it handled every earlier request of the
+    // surface, so its reply marks the end of the step before it.
     let empty_input = b"{\"surface\":\"s1\",\"body\":{\"operation\":\"input\",\"actions\":[],\"preedit\":{\"text\":\"\",\"markedRange\":null,\"selectedRange\":null,\"replacementRange\":null,\"attributed\":false}}}\n";
     let input_replies = |events: &serde_json::Value| events["fields"]["operation"] == "input";
-    // The open with the image, the configure that opens the session and draws its first frame, and the answer to that frame.
+    // The open with the image, the configure that opens the session and draws its first frame, and
+    // the answer to that frame.
     to_serve
         .write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
@@ -1234,7 +1255,8 @@ async fn an_open_without_image_for_a_surface_with_an_image_is_refused_and_its_ou
         .unwrap();
     to_serve.write_all(empty_input).await.unwrap();
     wait_events(&events, "sidecar.vt.reply", 2, input_replies).await;
-    // The output of the program after the open, and an empty input whose reply marks the end of the handling of the output.
+    // The output of the program after the open, and an empty input whose reply marks the end of the
+    // handling of the output.
     sender
         .send(soksak_sidecar_vt_core::protocol::DaemonEvent::Output {
             session_id: "scripted-session".to_string(),

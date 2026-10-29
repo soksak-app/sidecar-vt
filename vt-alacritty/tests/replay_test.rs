@@ -27,7 +27,8 @@ fn all_levels_policy(directory: &std::path::Path) -> std::path::PathBuf {
     file
 }
 
-/// The events of one served session: a PTY running `cat` is opened, configured, and fed the line "한a" with a newline.
+/// The events of one served session: a PTY running `cat` is opened, configured, and fed the line
+/// "\u{d55c}a" with a newline.
 async fn served_session() -> Vec<Value> {
     let directory = tempfile::tempdir().expect("create the folder of the events");
     let mut options = Options::service(directory.path().join("logs"), "replay".to_string());
@@ -216,7 +217,7 @@ fn consumed(image: u64) -> String {
     )
 }
 
-/// The input line of the service that writes "한a" and a newline to the program.
+/// The input line of the service that writes "\u{d55c}a" and a newline to the program.
 const WRITE_LINE: &str = r#"{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"\ud55ca\n","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}"#;
 
 /// The highest sequence among the events of the session that are replay inputs.

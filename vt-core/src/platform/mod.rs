@@ -26,17 +26,21 @@ pub struct ImageState {
     pub scale: f32,
     pub theme: crate::palette::TerminalTheme,
     pub inline_images: Vec<crate::protocol::InlineImagePlacement>,
-    /// 다음 표시와 함께 보낼 페이지 이벤트. 인라인 그림의 상태는 그 그림을 그린 래스터와 함께 바뀐다.
+    /// The page events sent with the next presentation. The state of an inline image changes
+    /// together with the raster that drew it.
     pub presentation_events: Vec<String>,
-    /// 대기 중인 전송을 보낸 시각. consumed 대기 시간의 계기다(V5-104).
+    /// The time the pending transfer was sent. This is the instrument of the consumed wait time
+    /// (V5-104).
     pub sent_at: Option<std::time::Instant>,
-    /// 답을 기다리는 전송 이미지를 나른 연결의 보관소. 표면이 답 전에 이 상태를 놓으면 전송 이미지를 그곳에 맡긴다.
+    /// The store of the connection that carries a transfer image awaiting a reply. If the surface
+    /// releases this state before the reply, it hands the transfer image to that store.
     pub carrier: Option<std::sync::Arc<crate::protocol::TransferStore>>,
     /// The session whose screen this raster draws, which the event of a frame names.
     pub session: Option<String>,
 }
 
-/// 호스트가 configure 로 정한 래스터: 이름, 세대, 래스터 번호, 픽셀 크기, 배율.
+/// The raster that the host sets with configure: name, generation, raster number, pixel size, and
+/// scale.
 #[derive(Debug, Clone)]
 pub struct ImageConfiguration {
     pub name: String,
@@ -98,8 +102,9 @@ impl ImageState {
         }
         let width = f64::from(self.width_px) / f64::from(self.scale);
         let height = f64::from(self.height_px) / f64::from(self.scale);
-        // host 는 region 의 가장자리를 device pixel 에 맞추므로 region 은 page 의 view 보다 한 device pixel 미만
-        // 작을 수 있다. 그 띠의 point 는 region 의 여백처럼 마지막 열과 행이다.
+        // The host aligns the edges of the region to device pixels, so the region can be smaller
+        // than the page view by less than one device pixel. Points in that band are in the last
+        // column and row, like the margin of the region.
         let band = 1.0 / f64::from(self.scale);
         if x >= width + band || y >= height + band {
             return Err(format!(
@@ -111,14 +116,17 @@ impl ImageState {
         if cols == 0 || rows == 0 {
             return Err("the terminal region holds no whole cell".to_string());
         }
-        // 영역은 마지막 완전한 열과 행 뒤에 한 칸보다 작은 여백을 가진다. 여백의 점은 가장 가까운 칸이다.
+        // The region has a margin smaller than one cell after the last complete column and row. A
+        // point in the margin belongs to the nearest cell.
         let col = ((x / cell_width).floor() as u16).min(cols - 1);
         let row = ((y / cell_height).floor() as u16).min(rows - 1);
         Ok((col, row))
     }
 
-    /// 선택 점의 칸 경계와 행. 점은 그 행의 가장 가까운 칸 경계로 가므로, 포인터가 칸의 가로 가운데를 지나야
-    /// 그 칸이 선택에 든다. 경계는 0부터 열 수까지이고, 마지막 열 뒤의 여백은 마지막 열의 오른쪽 경계다.
+    /// The cell boundary and row of a selection point. The point moves to the nearest cell boundary
+    /// in its row, so the pointer must pass the horizontal middle of a cell for that cell to be
+    /// selected. Boundaries run from 0 to the column count, and the margin after the last column is
+    /// the right boundary of the last column.
     pub fn selection_edge(&self, x: f64, y: f64) -> Result<(u16, u16), String> {
         let (_, row) = self.selection_cell(x, y)?;
         let cell_width = f64::from(self.metrics.cell_width) / f64::from(self.scale);

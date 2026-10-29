@@ -242,13 +242,13 @@ pub struct CInlineImageRaster {
     pub visible: u8,
 }
 
-// 불투명 frame type
+// Opaque frame type
 #[repr(C)]
 pub struct CFrame {
     _private: [u8; 0],
 }
 
-// IOSurface는 thread-safe이므로 Frame을 thread 사이에 보내도 안전하다
+// IOSurface is thread-safe, so sending a Frame between threads is safe
 unsafe impl Send for CFrame {}
 unsafe impl Sync for CFrame {}
 
@@ -361,10 +361,12 @@ impl CursorRender {
         Self {
             visible: cursor.visible,
             focused: cursor.focused,
-            // 엔진의 blinking 값은 활성화 상태일 뿐이다. phase는 서비스 scheduler가 전달한다.
+            // The engine's blinking value only states that blinking is enabled. The service
+            // scheduler supplies the phase.
             blink_visible: cursor.blink_visible,
             shape: cursor.shape,
-            // 서비스가 포커스 없는 커서 정책을 화면의 커서 모양에 이미 적용했으므로 다시 바꾸지 않는다.
+            // The service has already applied the unfocused cursor policy to the cursor shape of
+            // the screen, so it is not changed again.
             unfocused: UnfocusedCursor::Unchanged,
         }
     }
@@ -382,7 +384,7 @@ impl Default for CursorRender {
     }
 }
 
-// CFrame(IOSurface)이 thread-safe이므로 Frame은 Send/Sync이다
+// CFrame (IOSurface) is thread-safe, so Frame is Send/Sync
 unsafe impl Send for Frame {}
 unsafe impl Sync for Frame {}
 
@@ -486,7 +488,8 @@ impl Frame {
         if fault::take_next_draw_failure() {
             return Err("frame draw failed by fault-injection".to_string());
         }
-        // 기본 배경은 화면의 현재 기본 배경(OSC 11 포함)이다. 칸 밖 여백도 이 색으로 채운다.
+        // The default background is the current default background of the screen (including OSC
+        // 11). The margin outside the cells is also filled with this color.
         let (default_background, valid) = parse_hex_color(&Some(render_screen.background.clone()));
         if !valid {
             return Err(format!(
@@ -494,9 +497,9 @@ impl Frame {
                 render_screen.background
             ));
         }
-        // render_screen과 CCell이 참조하는 문자열은 이 호출이 끝날 때까지 Rust가 소유한다.
-        // 네이티브 함수는 이 빌린 포인터를 저장하지 않는다.
-        // Rust Screen을 C Screen으로 변환한다.
+        // Rust owns the strings that render_screen and CCell refer to until this call ends. The
+        // native function does not store these borrowed pointers. Converts the Rust Screen to the C
+        // Screen.
         let mut cells = Vec::new();
         for row in &render_screen.lines {
             for cell in row {
@@ -504,8 +507,8 @@ impl Frame {
                 let (bg, has_bg) = parse_hex_color(&cell.bg);
 
                 cells.push(CCell {
-                    col: 0, // 셀별 위치를 아래에서 설정한다.
-                    row: 0, // 셀별 위치를 아래에서 설정한다.
+                    col: 0, // Set per cell below.
+                    row: 0, // Set per cell below.
                     width: cell.width as u32,
                     ch: cell
                         .ch
@@ -517,7 +520,7 @@ impl Frame {
                     has_fg: if has_fg { 1 } else { 0 },
                     has_bg: if has_bg { 1 } else { 0 },
                     inverse: if cell.inverse { 1 } else { 0 },
-                    // 링크 셀은 밑줄로 보인다.
+                    // A link cell is shown with an underline.
                     underline: if cell.underline || cell.link.is_some() {
                         1
                     } else {
@@ -527,7 +530,7 @@ impl Frame {
             }
         }
 
-        // 모든 셀의 행과 열을 설정한다.
+        // Sets the row and column of every cell.
         let mut cell_idx = 0;
         for row_idx in 0..render_screen.lines.len() {
             for col_idx in 0..render_screen.lines[row_idx].len() {
@@ -539,7 +542,8 @@ impl Frame {
             }
         }
 
-        // 커서는 그 위치 글자의 폭만큼, 화면 오른쪽 끝을 넘지 않게 덮는다. 줄에 셀이 없는 위치는 빈 셀 한 칸이다.
+        // The cursor covers the width of the character at its position, without passing the right
+        // end of the screen. A position with no cell in its line is one empty cell.
         let remaining = u32::from(render_screen.cols)
             .saturating_sub(u32::from(render_screen.cursor.col))
             .max(1);
@@ -801,8 +805,8 @@ fn apply_preedit(
     let length = utf16_length(&preedit.text);
     preedit.validate_marked_range()?;
     valid_json_range(preedit.selected_range, Some(length), "selectedRange")?;
-    // replacementRange는 호스트 문서의 marked range인 [location,length]다.
-    // 새 preedit 문자열의 범위가 아니므로 preedit UTF-16 길이로 제한하지 않는다.
+    // replacementRange is the marked range [location,length] of the host document. It is not the
+    // range of the new preedit string, so it is not limited to the preedit UTF-16 length.
     valid_json_range(preedit.replacement_range, None, "replacementRange")?;
     let cols = usize::from(screen.cols);
     let rows = usize::from(screen.rows);
@@ -982,17 +986,19 @@ impl Drop for Frame {
     }
 }
 
-/// 터미널 글꼴. 설치된 글꼴 이름이나 시스템 고정폭 글꼴로 만든 CoreText 글꼴 설명이다.
+/// Terminal font. A CoreText font description made from an installed font name or from the system
+/// fixed-pitch font.
 pub struct TerminalFont {
     ptr: *mut CFrameFont,
 }
 
-// CoreText 글꼴 설명은 만든 뒤 바뀌지 않으므로 스레드 사이에서 공유할 수 있다.
+// A CoreText font description does not change after it is made, so it can be shared between
+// threads.
 unsafe impl Send for TerminalFont {}
 unsafe impl Sync for TerminalFont {}
 
 impl TerminalFont {
-    /// 사용자의 시스템 고정폭 글꼴.
+    /// The user's system fixed-pitch font.
     pub fn system_monospace() -> Result<Self, String> {
         let ptr = unsafe { frame_font_system_monospace() };
         if ptr.is_null() {
@@ -1001,7 +1007,7 @@ impl TerminalFont {
         Ok(Self { ptr })
     }
 
-    /// 설치된 글꼴 가운데 family 이름이 정확히 같은 글꼴. 없으면 None 이다.
+    /// The installed font whose family name matches exactly. None if there is no such font.
     pub fn installed(family: &str) -> Option<Self> {
         // silent: a family name with a NUL byte names no installed font, and None says so.
         let name = std::ffi::CString::new(family).ok()?;
@@ -1009,7 +1015,7 @@ impl TerminalFont {
         (!ptr.is_null()).then_some(Self { ptr })
     }
 
-    /// 글꼴의 family 이름.
+    /// The family name of the font.
     pub fn family(&self) -> Result<String, String> {
         let pointer = unsafe { frame_font_family(self.ptr) };
         if pointer.is_null() {
@@ -1038,17 +1044,17 @@ impl Drop for TerminalFont {
     }
 }
 
-/// `;` 로 이은 family 우선순위 목록에서 고른 글꼴.
+/// The font selected from a family priority list joined with `;`.
 pub struct FontSelection {
     pub font: std::sync::Arc<TerminalFont>,
-    /// 설치되어 있지 않아 건너뛴 family.
+    /// A family that was skipped because it is not installed.
     pub skipped: Vec<String>,
-    /// 목록의 family 가 하나도 설치되어 있지 않아 시스템 고정폭 글꼴을 썼는지.
+    /// Whether no family in the list is installed, so the system fixed-pitch font was used.
     pub system: bool,
 }
 
-/// family 목록에서 설치된 첫 family 를 고른다. 하나도 없으면 시스템 고정폭 글꼴이다.
-/// 목록에 family 가 없으면 오류다.
+/// Selects the first installed family in the family list. If none is installed, the system
+/// fixed-pitch font is used. An error is returned when the list has no family.
 pub fn resolve_font_list(list: &str) -> Result<FontSelection, String> {
     let families = list
         .split(';')
@@ -1078,7 +1084,8 @@ pub fn resolve_font_list(list: &str) -> Result<FontSelection, String> {
 
 static DEFAULT_FONT: std::sync::OnceLock<std::sync::Arc<TerminalFont>> = std::sync::OnceLock::new();
 
-/// 시스템 고정폭 글꼴을 읽는다. 서비스는 시작할 때 호출하며, 읽지 못하면 시작하지 않는다.
+/// Reads the system fixed-pitch font. The service calls this at startup, and it does not start when
+/// the font cannot be read.
 pub fn load_default_font() -> Result<(), String> {
     if DEFAULT_FONT.get().is_none() {
         let font = std::sync::Arc::new(TerminalFont::system_monospace()?);
@@ -1087,7 +1094,8 @@ pub fn load_default_font() -> Result<(), String> {
     Ok(())
 }
 
-/// font 요청 전의 글꼴. 시스템 고정폭 글꼴이다. 서비스는 시작할 때 load_default_font 로 먼저 읽는다.
+/// The font before any font request. It is the system fixed-pitch font, which the service reads
+/// first at startup with load_default_font.
 pub fn default_font() -> std::sync::Arc<TerminalFont> {
     DEFAULT_FONT
         .get_or_init(|| {
@@ -1108,13 +1116,13 @@ pub struct Metrics {
     pub font: std::sync::Arc<TerminalFont>,
 }
 
-/// 기본 글꼴의 메트릭.
+/// The metrics of the default font.
 pub fn metrics(font_size: f32, scale: f32) -> Metrics {
     metrics_for(&default_font(), font_size, scale)
         .expect("the system fixed-pitch font has cell metrics")
 }
 
-/// font 의 메트릭. 셀 폭이나 높이를 잴 수 없는 글꼴은 오류다.
+/// The metrics of a font. A font whose cell width or height cannot be measured is an error.
 pub fn metrics_for(
     font: &std::sync::Arc<TerminalFont>,
     font_size: f32,

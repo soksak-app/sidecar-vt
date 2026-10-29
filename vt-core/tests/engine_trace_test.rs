@@ -1,4 +1,5 @@
-//! 진단 build 의 engine 입력 기록(engine_trace.rs). `--features diagnostics` 에서만 build 된다.
+//! The engine input record of the diagnostic build (engine_trace.rs). It is built only with
+//! `--features diagnostics`.
 #![cfg(feature = "diagnostics")]
 
 #[path = "support/events_test.rs"]
@@ -7,7 +8,8 @@ mod events_test;
 use events_test::TestEvents;
 use soksak_sidecar_vt_core::engine_trace::record;
 
-// 기록 폴더는 writer 의 설정이다. 폴더가 없는 writer, 폴더가 있는 writer, 쓸 수 없는 폴더의 writer 를 차례로 확인한다.
+// The record folder is a setting of the writer. The test checks, in order, a writer without a
+// folder, a writer with a folder, and a writer whose folder cannot be written.
 #[test]
 fn engine_inputs_are_appended_to_the_trace_of_their_surface_only_with_a_trace_folder() {
     let without_folder = TestEvents::new();
@@ -25,7 +27,8 @@ fn engine_inputs_are_appended_to_the_trace_of_their_surface_only_with_a_trace_fo
     assert_eq!(read("tab-a.trace"), "resize 80 24\nfeed YQ==\n");
     assert_eq!(read("tab-b.trace"), "reset\n");
     std::fs::remove_dir_all(&dir).expect("remove the trace folder");
-    // A trace folder that cannot be written is reported as an error record that names the file, not dropped.
+    // A trace folder that cannot be written is reported as an error record that names the file, not
+    // dropped.
     let unwritable = TestEvents::with_trace_dir(&dir);
     record(&unwritable.handle(), "tab-x", || "reset".to_string());
     let records = unwritable.named("sidecar.vt.record.error");
