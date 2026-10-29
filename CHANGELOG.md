@@ -1,5 +1,6 @@
 # Changelog
 
+- S105: The comments of the tracked sources are written in English, and `make test` fails a comment in another language.
 - F275-vt-sidecar: `make install` installs the locked dependencies; the tests, checks and builds no longer install.
 - F274-1-vt-sidecar: The make target test prints a recipe without the directory lines of a nested make.
 - S104: The recovery verifier sends the input transaction of `actions` and `preedit`.

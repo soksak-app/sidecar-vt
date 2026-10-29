@@ -6,7 +6,11 @@
   "type": "module",
   "packageManager": "pnpm@11.24.0",
   "devDependencies": {
-    "@soksak/plugin-api": "git+https://github.com/soksak-app/core.git#22d7c2429556bb4af0f742e34fb1949a0c6ba265&path:/packages/plugin-api"
+    "@soksak/plugin-api": "git+https://github.com/soksak-app/core.git#22d7c2429556bb4af0f742e34fb1949a0c6ba265&path:/packages/plugin-api",
+    "tree-sitter-bash": "0.25.1",
+    "tree-sitter-javascript": "0.25.0",
+    "tree-sitter-rust": "0.24.0",
+    "web-tree-sitter": "0.27.1"
   },
   "optionalDependencies": {
     "@soksak/native-process-identity-darwin": "git+https://github.com/soksak-app/core.git#22d7c2429556bb4af0f742e34fb1949a0c6ba265&path:/native/darwin/process-identity"

@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S105: 추적되는 source의 주석을 영어로 쓰고, `make test`는 다른 언어의 주석을 실패시킨다.
 - F275-vt-sidecar: `make install`이 고정된 의존성을 설치한다. 시험, 검사, build는 더 이상 설치하지 않는다.
 - F274-1-vt-sidecar: make target 시험은 중첩된 make의 directory 줄 없이 recipe를 출력한다.
 - S104: recovery verifier가 `actions`와 `preedit`의 input transaction을 보낸다.

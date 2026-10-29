@@ -1,6 +1,7 @@
-# soksak 터미널의 zsh 셸 통합. 사이드카가 ZDOTDIR 를 이 파일의 디렉터리로 지정하고 zsh 를 시작한다.
-# 원래 ZDOTDIR 를 되돌리고 사용자의 .zshenv 를 읽은 뒤, 대화형 셸에 OSC 133 표시를 보내는 훅을 설치한다.
-# zsh 는 나머지 시작 파일(.zprofile, .zshrc, .zlogin)을 되돌린 ZDOTDIR 에서 읽는다.
+# The zsh shell integration of the soksak terminal. The sidecar sets ZDOTDIR to the folder of this file and starts zsh.
+# This file restores the original ZDOTDIR, reads the .zshenv of the user, and then installs the hooks that send the
+# OSC 133 marks in an interactive shell. zsh reads the other startup files (.zprofile, .zshrc, .zlogin) from the
+# restored ZDOTDIR.
 
 if [[ -n "${SOKSAK_ZSH_ZDOTDIR+X}" ]]; then
     'builtin' 'export' ZDOTDIR="$SOKSAK_ZSH_ZDOTDIR"
@@ -10,13 +11,13 @@ else
 fi
 
 {
-    # ZDOTDIR 가 없으면 zsh 처럼 HOME 을 쓴다. 읽을 수 없는 파일은 zsh 처럼 건너뛴다.
+    # Without ZDOTDIR the file is read from HOME, as zsh does. A file that cannot be read is skipped, as zsh does.
     'builtin' 'typeset' _soksak_file="${ZDOTDIR-$HOME}/.zshenv"
     [[ ! -r "$_soksak_file" ]] || 'builtin' 'source' '--' "$_soksak_file"
 } always {
     'builtin' 'unset' '_soksak_file'
     if [[ -o 'interactive' ]]; then
-        # 작업 디렉터리(OSC 7). 예약되지 않은 문자와 / 밖의 바이트를 퍼센트 인코딩한다.
+        # The working directory (OSC 7). Every byte other than the unreserved characters and / is percent-encoded.
         _soksak_directory() {
             'builtin' 'emulate' -L zsh
             'builtin' 'local' LC_ALL=C encoded= char hex
@@ -28,7 +29,8 @@ fi
             done
             'builtin' 'print' -n "\e]7;file://${HOST}${encoded}\a"
         }
-        # 프롬프트 전: 앞 명령이 있었으면 그 종료 상태(D), 작업 디렉터리, 그리고 프롬프트 시작(A).
+        # Before the prompt: the exit status of the previous command when there was one (D), the working directory, and
+        # the prompt start (A).
         _soksak_precmd() {
             'builtin' 'local' ret=$?
             if (( ${+_soksak_running} )); then
@@ -38,7 +40,7 @@ fi
             _soksak_directory
             'builtin' 'print' -n '\e]133;A\a'
         }
-        # 명령 실행 전: 명령 시작(C).
+        # Before a command runs: the command start (C).
         _soksak_preexec() {
             _soksak_running=1
             'builtin' 'print' -n '\e]133;C\a'
