@@ -29,6 +29,12 @@ jobs:
       - name: Build sok
         run: go build -C core/packages/sok/wailsv3 -o "$RUNNER_TEMP/sok" ./src/cmd/sok
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - uses: pnpm/action-setup@v4
+      - name: Install
+        run: make install
       - name: Build and package
         run: make release PROFILE=release SOK="$RUNNER_TEMP/sok" OUT=dist
       - uses: softprops/action-gh-release@v2

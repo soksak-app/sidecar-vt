@@ -1,5 +1,5 @@
 # 터미널 engine sidecar repository 의 test, build, release(docs/features.md). release 는 core 의 sok 를 쓴다.
-.PHONY: test build release candidate-release repeat push-check hooks
+.PHONY: install test build release candidate-release repeat push-check hooks
 
 MACOS_MINIMUM = 14.4
 PROFILE ?= debug
@@ -17,19 +17,19 @@ ifeq ($(shell uname -s),Darwin)
 PROCESS_IDENTITY_PKGCONFIG = $(shell node -e 'const path=require("node:path");const {createRequire}=require("node:module");const r=createRequire(path.join(process.cwd(),"package.json"));process.stdout.write(path.join(path.dirname(r.resolve("@soksak/native-process-identity-darwin/package.json")),"lib/pkgconfig"))')
 PROCESS_IDENTITY_ENV = PKG_CONFIG_PATH="$(PROCESS_IDENTITY_PKGCONFIG)$(if $(PKG_CONFIG_PATH),:$(PKG_CONFIG_PATH))"
 .PHONY: process-identity-check
-process-identity-check: node_modules
+process-identity-check:
 	@node -e 'const fs=require("node:fs");const path=require("node:path");const {createRequire}=require("node:module");const r=createRequire(path.join(process.cwd(),"package.json"));const root=path.dirname(r.resolve("@soksak/native-process-identity-darwin/package.json"));for(const f of ["include/soksak_process_identity.h","lib/libsoksak-process-identity.a","lib/pkgconfig/soksak-process-identity.pc"]){if(!fs.existsSync(path.join(root,f)))throw new Error(`native process identity package is missing ${f}`)}'
-build: node_modules process-identity-check
+build: process-identity-check
 endif
 
-node_modules: package.json
-	pnpm install
-	touch node_modules
+# The installation stage (core docs/spec/plugins.md#repositories): it installs the locked dependencies; the tests, checks and packs consume them without installing.
+install:
+	pnpm install --frozen-lockfile
 
 # rustfmt, unit tests, the engine trace test of the diagnostics build and clippy without warnings run first; then
 # the built service checks connection recovery (scripts/verify-vt-recovery.mjs) and the protocol inventory is
 # compared with the engine (scripts/check-terminal-protocol-inventory.mjs).
-test: build node_modules
+test: build
 	cargo fmt --all --check
 	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test --workspace
 	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -p soksak-sidecar-vt-core --features diagnostics --test engine_trace_test

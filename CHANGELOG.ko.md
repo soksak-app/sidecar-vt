@@ -1,5 +1,6 @@
 # 변경 기록
 
+- F275-vt-sidecar: `make install`이 고정된 의존성을 설치한다. 시험, 검사, build는 더 이상 설치하지 않는다.
 - F274-1-vt-sidecar: make target 시험은 중첩된 make의 directory 줄 없이 recipe를 출력한다.
 - S104: recovery verifier가 `actions`와 `preedit`의 input transaction을 보낸다.
 - S103: core SDK, process identity package, `CORE_COMMIT`을 보고하는 lock 복구를 받아들이는 census의 core commit에 pin한다.

@@ -38,3 +38,10 @@ test("the pre-push hook runs make push-check on the pushed range (S72)", { timeo
   const hook = readFileSync(path.join(root, ".githooks", "pre-push"), "utf8");
   assert.match(hook, /make -C "\$root" push-check RANGE="\$base\.\.\$local_sha"/);
 });
+
+// The installation stage is make install (core docs/spec/plugins.md#repositories); the build and the tests consume what it installed.
+test("make install installs the locked dependencies, and no other target installs (F275-vt-sidecar)", { timeout: 30000 }, () => {
+  assert.deepEqual(recipe("install").trim().split("\n"), ["pnpm install --frozen-lockfile"]);
+  const makefile = readFileSync(path.join(root, "Makefile"), "utf8");
+  assert.deepEqual(makefile.split("\n").filter((line) => /^[^\t#][^:=]*:(?!=).*\bnode_modules\b/.test(line)), [], "a target depends on node_modules");
+});
