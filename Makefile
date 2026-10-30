@@ -30,9 +30,9 @@ install:
 # rustfmt, unit tests, the engine trace test of the diagnostics build and clippy without warnings run first; then
 # the built service checks connection recovery (scripts/verify-vt-recovery.mjs) and the protocol inventory is
 # compared with the engine (scripts/check-terminal-protocol-inventory.mjs).
-# Each Rust test runs under cargo-nextest, which reports its result and elapsed time and applies its own limit from
-# .config/nextest.toml (S76). cargo-nextest does not run doc tests, so cargo test --doc runs them.
-NEXTEST = $(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) CARGO_INCREMENTAL=0 cargo nextest run --config-file .config/nextest.toml --no-fail-fast
+# Each Rust test runs under cargo-nextest through scripts/nextest-run.mjs, which prints a running line before each result;
+# cargo-nextest reports the elapsed time and applies the limit of each test from .config/nextest.toml (S76, S76-1).
+NEXTEST = $(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) CARGO_INCREMENTAL=0 node scripts/nextest-run.mjs --config-file .config/nextest.toml --no-fail-fast
 test: build
 	cargo fmt --all --check
 	$(NEXTEST) --workspace

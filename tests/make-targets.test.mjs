@@ -44,7 +44,7 @@ test("make test runs each Rust test through cargo-nextest with the declared conf
   const commands = recipe("test");
   const harnessLines = commands.split("\n").filter((line) => /cargo test\b/.test(line));
   assert.deepEqual(harnessLines.filter((line) => !/--doc\b/.test(line)), [], "make test runs a Rust test through the default harness");
-  assert.match(commands, /cargo nextest run --config-file \.config\/nextest\.toml[^\n]*--workspace/);
+  assert.match(commands, /node scripts\/nextest-run\.mjs --config-file \.config\/nextest\.toml[^\n]*--workspace/);
   const config = readFileSync(path.join(root, ".config", "nextest.toml"), "utf8");
   assert.match(config, /terminate-after\s*=/, "the nextest config declares no per-test termination limit");
 });

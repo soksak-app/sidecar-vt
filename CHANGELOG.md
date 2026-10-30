@@ -22,6 +22,8 @@
 
 ## Unreleased
 
+- S76-1: `make test` prints a RUNNING line before the result of each Rust test. `scripts/nextest-run.mjs` runs cargo-nextest with its libtest JSON output, which emits a started event per test, because the human output of nextest 0.9.146 has no start line. Before the change, 488 Rust test results had no RUNNING line; after it, `make test` prints 488 RUNNING lines, each followed by its PASS line, and exits 0.
+
 - S76: `make test` runs the Rust tests through cargo-nextest 0.9.146 with `.config/nextest.toml`, which reports each test's result and elapsed time and terminates a test after 60 seconds; no suite-wide limit is set. The final run passes 488 Rust test runs, 29 of 30 node tests, with 1 skipped, and the records check. The doc test still runs through `cargo test --doc` without a per-test time (S76-2), and nextest prints no start line for a test that finishes within 10 seconds (S76-1). CI installs cargo-nextest with `taiki-e/install-action`.
 
 - S99: Allow the pinned Darwin process-identity Git dependency to run its pnpm 11.24.0 `prepare` script by exact repository identity. The clean-consumer owner fails without approval despite exit 0, then passes with a fresh isolated store and confirms the manifest, header, static library and pkg-config file after `prepare: make`. No core package or release change is included.
