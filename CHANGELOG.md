@@ -1,5 +1,6 @@
 # Changelog
 
+- S108: A `scroll` operation may carry an optional boolean `shift`; with Shift held, the wheel skips mouse reporting and moves the viewport or sends the alternate scroll keys. An absent `shift` keeps the scroll without Shift, so pages that send no `shift` keep working, and a non-boolean `shift` is refused with `invalidParams`.
 - S107: The service records each change of the mouse modes as `sidecar.vt.mouse_modes` and each scroll operation as `sidecar.vt.wheel` with its route and the modes in force, so the log shows whether the wheel reached the program or the viewport.
 - S45: The refusal `selection presentation is still pending` is absent from v0.0.9 and later, which carry the S43 correction; the item closes without a code change.
 - S18: `ci.yml` runs the tests of this repository on a macOS runner, and `release.yml` published the sidecar archive for each pushed tag from v0.0.3 through v0.0.11.

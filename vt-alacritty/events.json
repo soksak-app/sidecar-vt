@@ -865,6 +865,9 @@
           "row": {
             "type": "number"
           },
+          "shift": {
+            "type": "boolean"
+          },
           "route": {
             "type": "string"
           },
@@ -894,6 +897,7 @@
           "lines",
           "col",
           "row",
+          "shift",
           "route",
           "mouse_click",
           "mouse_drag",
@@ -904,7 +908,7 @@
           "alt_screen"
         ]
       },
-      "description": "A scroll operation of the page was routed. route is program (the wheel is written to the program), alternate_scroll (cursor keys are written) or viewport (the primary viewport moves); the modes are the modes in force when it was routed."
+      "description": "A scroll operation of the page was routed. route is program (the wheel is written to the program), alternate_scroll (cursor keys are written) or viewport (the primary viewport moves). shift is true when Shift was held, which skips the program route. The modes are the modes in force when it was routed."
     }
   }
 }

@@ -1173,11 +1173,12 @@ enum SurfaceCommand {
     /// The user's copy command. It sends the text of the current selection as a copy event.
     Copy,
     /// Wheel scroll. `lines` is not 0, and a positive value moves toward the older output. `col`
-    /// and `row` are the pointer cell.
+    /// and `row` are the pointer cell. `shift` is true while Shift is held, which skips mouse reporting.
     Scroll {
         lines: i32,
         col: u16,
         row: u16,
+        shift: bool,
         cids: Vec<String>,
     },
     /// Scrollbar drag. It moves the primary viewport to this offset, and it is not written to the
@@ -2127,8 +2128,8 @@ fn record_mouse_modes(log: &Events, surface_id: &str, recorded: &mut Value, mode
     }
 }
 
-/// Where a wheel operation goes under the modes in force: the mouse reporting of the program, the
-/// cursor keys of the alternate scroll, or the primary viewport (docs/spec/vt-core.md).
+/// Where a wheel operation goes under the modes in force and its Shift state: the mouse reporting of
+/// the program, the cursor keys of the alternate scroll, or the primary viewport (docs/spec/vt-core.md).
 #[derive(Clone, Copy)]
 enum WheelRoute {
     Program,
@@ -2137,8 +2138,8 @@ enum WheelRoute {
 }
 
 impl WheelRoute {
-    fn of(modes: &Modes) -> Self {
-        if modes.mouse_report() {
+    fn of(modes: &Modes, shift: bool) -> Self {
+        if modes.mouse_report() && !shift {
             WheelRoute::Program
         } else if modes.alt_screen && modes.alternate_scroll {
             WheelRoute::AlternateScroll
@@ -2156,20 +2157,23 @@ impl WheelRoute {
     }
 }
 
-/// Records the routing decision of a scroll operation with the modes in force.
+/// Records the routing decision of a scroll operation with the modes in force, and returns the route
+/// that the operation takes.
 fn record_wheel(
     log: &Events,
     surface_id: &str,
-    route: WheelRoute,
     lines: i32,
     col: u16,
     row: u16,
+    shift: bool,
     modes: &Modes,
-) {
+) -> WheelRoute {
+    let route = WheelRoute::of(modes, shift);
     let mut fields = wheel_modes(modes);
     fields["lines"] = json!(lines);
     fields["col"] = json!(col);
     fields["row"] = json!(row);
+    fields["shift"] = json!(shift);
     fields["route"] = json!(route.name());
     log.emit_for(
         Level::Info,
@@ -2177,6 +2181,7 @@ fn record_wheel(
         Subject::surface(surface_id),
         &fields,
     );
+    route
 }
 
 /// Whether the host is copying the previous raster. Screen changes in the meantime stay dirty, and
@@ -3936,12 +3941,11 @@ async fn surface_task(
                             if !present_screen(&surface_id, screen, state, &output_tx, "viewport", &log, inputs.sequence).await { return; }
                         } else if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, inputs.sequence, image_state.as_ref()).await { return; }
                     }
-                    SurfaceCommand::Scroll { lines, col, row, cids } => {
+                    SurfaceCommand::Scroll { lines, col, row, shift, cids } => {
                         let modes = engine.modes();
-                        // Applies, in this order: mouse reporting, the alternate scroll of the
-                        // alternate screen, and the viewport of the primary screen.
-                        let route = WheelRoute::of(&modes);
-                        record_wheel(&log, &surface_id, route, lines, col, row, &modes);
+                        // Applies, in this order: mouse reporting unless Shift is held, the alternate
+                        // scroll of the alternate screen, and the viewport of the primary screen.
+                        let route = record_wheel(&log, &surface_id, lines, col, row, shift, &modes);
                         let bytes = match route {
                             WheelRoute::Program => {
                             match encoding::encode_wheel(&modes, lines > 0, col, row) {
@@ -5260,8 +5264,15 @@ where
                                     // silent: a value that does not fit is refused by the
                                     // invalidParams reply that follows.
                                     .and_then(|v| u16::try_from(v).ok());
-                                let (Some(lines), Some(col), Some(row)) = (lines, col, row) else {
-                                    let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "scroll requires a nonzero integer lines and cell col and row"}});
+                                // An absent shift is a scroll without Shift; a present shift must be a boolean.
+                                let shift = match body.get("shift") {
+                                    None => Some(false),
+                                    Some(value) => value.as_bool(),
+                                };
+                                let (Some(lines), Some(col), Some(row), Some(shift)) =
+                                    (lines, col, row, shift)
+                                else {
+                                    let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "scroll requires a nonzero integer lines and cell col and row, and a boolean shift when it is present"}});
                                     if reply_tx.reply(response).await.is_err() {
                                         break;
                                     }
@@ -5272,6 +5283,7 @@ where
                                         lines: lines as i32,
                                         col,
                                         row,
+                                        shift,
                                         cids: cids.clone(),
                                     })
                                     .await

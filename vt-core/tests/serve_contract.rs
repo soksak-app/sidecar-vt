@@ -2253,6 +2253,73 @@ async fn an_invalid_scroll_is_rejected() {
 }
 
 #[tokio::test]
+async fn a_scroll_with_shift_moves_the_viewport_while_mouse_reporting_is_on() {
+    // Shift skips the mouse reporting rule, so the wheel moves the primary viewport instead of
+    // reaching the program.
+    let modes = Modes {
+        mouse_click: true,
+        sgr_mouse: true,
+        ..Modes::default()
+    };
+    let (output, viewport, writes) = serve_scroll(
+        Some(modes),
+        r#"{"surface":"s1","body":{"operation":"scroll","lines":2,"col":4,"row":6,"shift":true}}
+{"surface":"s1","body":{"operation":"scroll","lines":-1,"col":4,"row":6,"shift":true}}
+"#,
+    )
+    .await;
+    assert_eq!(
+        viewport,
+        vec!["viewport 2".to_string(), "viewport -1".to_string()],
+        "{output}"
+    );
+    assert!(
+        writes.is_empty(),
+        "a scroll with Shift was written to the program: {writes:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_scroll_without_shift_under_mouse_reporting_is_written_to_the_program() {
+    // An absent shift is a scroll without Shift (docs/spec/vt-core.md).
+    let modes = Modes {
+        mouse_click: true,
+        sgr_mouse: true,
+        ..Modes::default()
+    };
+    let (output, viewport, writes) = serve_scroll(
+        Some(modes),
+        r#"{"surface":"s1","body":{"operation":"scroll","lines":2,"col":4,"row":6}}
+"#,
+    )
+    .await;
+    assert!(viewport.is_empty(), "{output}");
+    assert_eq!(
+        writes,
+        vec![b"\x1b[<64;5;7M\x1b[<64;5;7M".to_vec()],
+        "{output}"
+    );
+}
+
+#[tokio::test]
+async fn a_scroll_with_a_non_boolean_shift_is_refused() {
+    let modes = Modes {
+        mouse_click: true,
+        sgr_mouse: true,
+        ..Modes::default()
+    };
+    let (output, viewport, writes) = serve_scroll(
+        Some(modes),
+        r#"{"surface":"s1","body":{"operation":"scroll","lines":2,"col":4,"row":6,"shift":1}}
+{"surface":"s1","body":{"operation":"scroll","lines":2,"col":4,"row":6,"shift":null}}
+"#,
+    )
+    .await;
+    assert_eq!(output.matches("invalidParams").count(), 2, "{output}");
+    assert!(viewport.is_empty() && writes.is_empty(), "{output}");
+}
+
+#[tokio::test]
 async fn test_selection_release_emits_one_user_copy_event() {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let input = r#"{"surface":"s1","body":{"operation":"open","shell":"/bin/sh"}}
