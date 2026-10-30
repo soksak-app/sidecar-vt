@@ -1,5 +1,6 @@
 # Changelog
 
+- S18: `ci.yml` runs the tests of this repository on a macOS runner, and `release.yml` published the sidecar archive for each pushed tag from v0.0.3 through v0.0.11.
 - S106: A detach refused as a stale attachment or as malformed, whose request is a nonempty string, is answered as `body.image.detached` with its request, name, generation and error, so the host no longer waits for the 10 second timeout.
 - S105: The comments of the tracked sources are written in English, and `make test` fails a comment in another language.
 - F275-vt-sidecar: `make install` installs the locked dependencies; the tests, checks and builds no longer install.
