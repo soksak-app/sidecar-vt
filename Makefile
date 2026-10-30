@@ -30,12 +30,16 @@ install:
 # rustfmt, unit tests, the engine trace test of the diagnostics build and clippy without warnings run first; then
 # the built service checks connection recovery (scripts/verify-vt-recovery.mjs) and the protocol inventory is
 # compared with the engine (scripts/check-terminal-protocol-inventory.mjs).
+# Each Rust test runs under cargo-nextest, which reports its result and elapsed time and applies its own limit from
+# .config/nextest.toml (S76). cargo-nextest does not run doc tests, so cargo test --doc runs them.
+NEXTEST = $(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) CARGO_INCREMENTAL=0 cargo nextest run --config-file .config/nextest.toml --no-fail-fast
 test: build
 	cargo fmt --all --check
-	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test --workspace
-	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -p soksak-sidecar-vt-core --features diagnostics --test engine_trace_test
-	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -p soksak-sidecar-vt-core --features fault-injection --test fault_injection
-	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -p soksak-sidecar-vt-core --features fault-injection --test serve_contract -- a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it --exact
+	$(NEXTEST) --workspace
+	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) CARGO_INCREMENTAL=0 cargo test --workspace --doc
+	$(NEXTEST) -p soksak-sidecar-vt-core --features diagnostics --test engine_trace_test
+	$(NEXTEST) -p soksak-sidecar-vt-core --features fault-injection --test fault_injection
+	$(NEXTEST) -p soksak-sidecar-vt-core --features fault-injection --test serve_contract -E 'test(=a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it)'
 	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo clippy --workspace --all-targets --features diagnostics -- -D warnings
 	$(SOKSAK_EVENTS) --census census.json --catalog vt-alacritty/events.json .
 	node --test tests/

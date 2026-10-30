@@ -1,0 +1,7 @@
+# Per-test runner settings of make test (S76). Each test has its own limit; no suite-wide limit is set.
+# A test still running after slow-timeout.period is reported as SLOW while it runs. cargo-nextest terminates it after
+# terminate-after periods, which is 60 seconds: the slowest test measured in the full run took 3.0 seconds under
+# the load of the full workspace, so the limit leaves about 20 times that margin and bounds a hung test to one minute.
+[profile.default]
+slow-timeout = { period = "10s", terminate-after = 6 }
+status-level = "all"

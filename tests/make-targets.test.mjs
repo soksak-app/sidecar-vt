@@ -39,6 +39,16 @@ test("the pre-push hook runs make push-check on the pushed range (S72)", { timeo
   assert.match(hook, /make -C "\$root" push-check RANGE="\$base\.\.\$local_sha"/);
 });
 
+// Each Rust test reports its own result, elapsed time and time limit through cargo-nextest with the declared config (S76).
+test("make test runs each Rust test through cargo-nextest with the declared config (S76)", { timeout: 30000 }, () => {
+  const commands = recipe("test");
+  const harnessLines = commands.split("\n").filter((line) => /cargo test\b/.test(line));
+  assert.deepEqual(harnessLines.filter((line) => !/--doc\b/.test(line)), [], "make test runs a Rust test through the default harness");
+  assert.match(commands, /cargo nextest run --config-file \.config\/nextest\.toml[^\n]*--workspace/);
+  const config = readFileSync(path.join(root, ".config", "nextest.toml"), "utf8");
+  assert.match(config, /terminate-after\s*=/, "the nextest config declares no per-test termination limit");
+});
+
 // The installation stage is make install (core docs/spec/plugins.md#repositories); the build and the tests consume what it installed.
 test("make install installs the locked dependencies, and no other target installs (F275-vt-sidecar)", { timeout: 30000 }, () => {
   assert.deepEqual(recipe("install").trim().split("\n"), ["pnpm install --frozen-lockfile"]);
