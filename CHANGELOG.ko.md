@@ -22,6 +22,8 @@
 
 ## 미배포
 
+- S76: `make test`는 Rust test를 `.config/nextest.toml`을 쓰는 cargo-nextest 0.9.146으로 실행하며, 각 test의 결과와 elapsed time을 보고하고 60초 뒤 test를 종료한다. 전체 suite 제한은 두지 않는다. 최종 실행은 Rust test 488회 실행, node test 30개 중 29개 통과(1개 건너뜀), records 검사를 통과했다. Doc test는 여전히 `cargo test --doc`으로 실행되어 test별 시간이 없고(S76-2), nextest는 10초 안에 끝나는 test의 시작 줄을 출력하지 않는다(S76-1). CI는 `taiki-e/install-action`으로 cargo-nextest를 설치한다.
+
 - S99: 정확한 repository identity로 pinned Darwin process-identity Git dependency의 pnpm 11.24.0 `prepare` script 실행을 허용한다. Clean-consumer owner는 approval 없이 exit 0 후 package 누락으로 실패하고, 새 isolated store에서 approval 적용 후 통과해 `prepare: make` 뒤 manifest, header, static library, pkg-config file을 확인한다. Core package 또는 release 변경은 포함하지 않는다.
 
 - S98: plugin SDK, Darwin process-identity dependency와 release build checkout을 0.0.21을 선언한 공개 core commit으로 맞춘다. Clean pnpm 11.24.0 lock-only resolution은 두 package를 0.0.21로 기록하며, 기존 developer link 환경에서 installed-package consumer가 통과한다. Clean frozen install은 exit 0이지만 optional native package를 resolve하지 못해 (`MODULE_NOT_FOUND`) S73-1은 열린 상태로 둔다. Release는 포함하지 않는다.
