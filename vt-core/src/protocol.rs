@@ -2098,6 +2098,87 @@ fn record_surface_mode(log: &Events, surface_id: &str, headless: bool, cause: &s
     );
 }
 
+/// The modes that decide the route of a wheel operation, as the fields of `sidecar.vt.mouse_modes`
+/// and `sidecar.vt.wheel` (docs/spec/vt-core.md).
+fn wheel_modes(modes: &Modes) -> Value {
+    json!({
+        "mouse_click": modes.mouse_click,
+        "mouse_drag": modes.mouse_drag,
+        "mouse_motion": modes.mouse_motion,
+        "sgr_mouse": modes.sgr_mouse,
+        "utf8_mouse": modes.utf8_mouse,
+        "alternate_scroll": modes.alternate_scroll,
+        "alt_screen": modes.alt_screen,
+    })
+}
+
+/// Records `sidecar.vt.mouse_modes` when the wheel modes of the engine differ from `recorded`, the
+/// modes of the last record of the surface.
+fn record_mouse_modes(log: &Events, surface_id: &str, recorded: &mut Value, modes: &Modes) {
+    let current = wheel_modes(modes);
+    if current != *recorded {
+        log.emit_for(
+            Level::Info,
+            "sidecar.vt.mouse_modes",
+            Subject::surface(surface_id),
+            &current,
+        );
+        *recorded = current;
+    }
+}
+
+/// Where a wheel operation goes under the modes in force: the mouse reporting of the program, the
+/// cursor keys of the alternate scroll, or the primary viewport (docs/spec/vt-core.md).
+#[derive(Clone, Copy)]
+enum WheelRoute {
+    Program,
+    AlternateScroll,
+    Viewport,
+}
+
+impl WheelRoute {
+    fn of(modes: &Modes) -> Self {
+        if modes.mouse_report() {
+            WheelRoute::Program
+        } else if modes.alt_screen && modes.alternate_scroll {
+            WheelRoute::AlternateScroll
+        } else {
+            WheelRoute::Viewport
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            WheelRoute::Program => "program",
+            WheelRoute::AlternateScroll => "alternate_scroll",
+            WheelRoute::Viewport => "viewport",
+        }
+    }
+}
+
+/// Records the routing decision of a scroll operation with the modes in force.
+fn record_wheel(
+    log: &Events,
+    surface_id: &str,
+    route: WheelRoute,
+    lines: i32,
+    col: u16,
+    row: u16,
+    modes: &Modes,
+) {
+    let mut fields = wheel_modes(modes);
+    fields["lines"] = json!(lines);
+    fields["col"] = json!(col);
+    fields["row"] = json!(row);
+    fields["route"] = json!(route.name());
+    log.emit_for(
+        Level::Info,
+        "sidecar.vt.wheel",
+        Subject::surface(surface_id),
+        &fields,
+    );
+}
+
 /// Whether the host is copying the previous raster. Screen changes in the meantime stay dirty, and
 /// the screen is neither drawn nor sent as JSON. If JSON is sent for every screen while output
 /// piles up, the page spends its time on past screens, and input and scrolling fall behind. When
@@ -3087,6 +3168,8 @@ async fn surface_task(
     let mut image_state: Option<ImageState> = None;
     let mut preserved_inline_images = Vec::new();
     let mut multipart: Option<MultipartAssembly> = None;
+    // The wheel modes of the last `sidecar.vt.mouse_modes` record of this surface.
+    let mut recorded_mouse_modes = wheel_modes(&Modes::default());
     let mut open_requested = false;
     let mut requested_image: Option<String> = None;
     let mut requested_shell = ShellRequest::default();
@@ -3560,6 +3643,7 @@ async fn surface_task(
                                         crate::engine_trace::record(&log, &surface_id, || format!("feed {}", base64_encode(&data)));
                                         inputs.output(received, &data);
                                         engine.feed(&data);
+                                        record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
                                         if !send_engine_events(
                                             SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs },
                                             session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart,
@@ -3856,7 +3940,10 @@ async fn surface_task(
                         let modes = engine.modes();
                         // Applies, in this order: mouse reporting, the alternate scroll of the
                         // alternate screen, and the viewport of the primary screen.
-                        let bytes = if modes.mouse_report() {
+                        let route = WheelRoute::of(&modes);
+                        record_wheel(&log, &surface_id, route, lines, col, row, &modes);
+                        let bytes = match route {
+                            WheelRoute::Program => {
                             match encoding::encode_wheel(&modes, lines > 0, col, row) {
                                 Ok(event) => Some(event.repeat(lines.unsigned_abs() as usize)),
                                 Err(error) => {
@@ -3865,7 +3952,8 @@ async fn surface_task(
                                     continue;
                                 }
                             }
-                        } else if modes.alt_screen && modes.alternate_scroll {
+                            }
+                            WheelRoute::AlternateScroll => {
                             let key = if lines > 0 { "Up" } else { "Down" };
                             let keys = vec![InputKey { key: key.to_string(), text: String::new(), shift: false, alt: false, ctrl: false }; lines.unsigned_abs() as usize];
                             match encode_keys(&keys, &modes) {
@@ -3876,8 +3964,8 @@ async fn surface_task(
                                     continue;
                                 }
                             }
-                        } else {
-                            None
+                            }
+                            WheelRoute::Viewport => None,
                         };
                         match bytes {
                             Some(bytes) => {
@@ -4249,6 +4337,7 @@ async fn surface_task(
                                 crate::engine_trace::record(&log, &surface_id, || format!("feed {}", base64_encode(&data)));
                                 inputs.output(sid, &data);
                                 engine.feed(&data);
+                                record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
                                 if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart).await { return; }
                                 if headless || hold_while_presenting(&mut image_state) { continue; }
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);

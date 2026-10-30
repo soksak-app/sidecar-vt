@@ -25,6 +25,12 @@ struct TraceEngine {
     cols: u16,
     rows: u16,
     runtime_error: Option<String>,
+    // The modes that the output of the program sets with `?1000h`, `?1000l` and `?1006h`.
+    modes: Modes,
+}
+
+fn contains(bytes: &[u8], needle: &[u8]) -> bool {
+    bytes.windows(needle.len()).any(|window| window == needle)
 }
 
 #[async_trait::async_trait]
@@ -37,7 +43,17 @@ impl Engine for TraceEngine {
     fn set_cell_metrics(&mut self, _width: u16, _height: u16) -> Result<(), String> {
         Ok(())
     }
-    fn feed(&mut self, _bytes: &[u8]) {}
+    fn feed(&mut self, bytes: &[u8]) {
+        if contains(bytes, b"\x1b[?1000h") {
+            self.modes.mouse_click = true;
+        }
+        if contains(bytes, b"\x1b[?1000l") {
+            self.modes.mouse_click = false;
+        }
+        if contains(bytes, b"\x1b[?1006h") {
+            self.modes.sgr_mouse = true;
+        }
+    }
     fn drain_events(&mut self) -> Vec<EngineEvent> {
         self.runtime_error
             .take()
@@ -102,7 +118,7 @@ impl Engine for TraceEngine {
         }
     }
     fn modes(&self) -> Modes {
-        Modes::default()
+        self.modes.clone()
     }
     fn reset(&mut self) {}
 }
@@ -1330,4 +1346,84 @@ async fn an_engine_runtime_error_is_logged_instead_of_a_sequence_rejection() {
             .any(|line| line.contains("sequence.rejected")),
         "an internal engine failure is not a program sequence rejection"
     );
+}
+
+fn daemon_output(data: &[u8]) -> soksak_sidecar_vt_core::protocol::DaemonEvent {
+    soksak_sidecar_vt_core::protocol::DaemonEvent::Output {
+        session_id: "scripted-session".to_string(),
+        data: data.to_vec(),
+        sequence: 0,
+        truncated: false,
+    }
+}
+
+// A change of the mouse reporting modes is one event with the modes in force, and each wheel
+// operation is one event that names its route and the modes it was routed by (core checklist
+// item of the terminal wheel records, terminal P38).
+#[tokio::test]
+async fn each_mouse_mode_change_and_each_wheel_route_is_recorded_with_the_modes_in_force() {
+    let events = TestEvents::new();
+    let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
+    let (sender, receiver) = mpsc::channel(16);
+    let port = Arc::new(OutputPort(std::sync::Mutex::new(Some(receiver))));
+    let factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync> =
+        Arc::new(move || port.clone() as Arc<dyn SessionPort>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
+    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let handle = events.handle();
+    let task = tokio::spawn(async move {
+        let _ = serve(engine_factory, serve_in, serve_out, factory, handle).await;
+    });
+    let reader = tokio::spawn(async move {
+        let mut lines = BufReader::new(from_serve).lines();
+        while lines.next_line().await.unwrap().is_some() {}
+    });
+    to_serve
+        .write_all(b"{\"surface\":\"s1\",\"root\":\"/tmp\",\"body\":{\"operation\":\"open\",\"shell\":\"/bin/sh\"}}\n")
+        .await
+        .unwrap();
+    // The program enables mouse click reporting with SGR encoding. The output is ignored until the
+    // session exists, so it is sent again until the change is recorded.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            sender
+                .send(daemon_output(b"\x1b[?1000h\x1b[?1006h"))
+                .await
+                .unwrap();
+            if !events.named("sidecar.vt.mouse_modes").is_empty() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the mouse mode change was not recorded");
+    let enabled = wait_events(&events, "sidecar.vt.mouse_modes", 1, |_| true).await;
+    assert_eq!(enabled[0]["fields"]["mouse_click"], true, "{enabled:?}");
+    assert_eq!(enabled[0]["fields"]["sgr_mouse"], true, "{enabled:?}");
+    assert_eq!(enabled[0]["fields"]["mouse_drag"], false, "{enabled:?}");
+    to_serve
+        .write_all(b"{\"surface\":\"s1\",\"body\":{\"operation\":\"scroll\",\"lines\":2,\"col\":4,\"row\":6}}\n")
+        .await
+        .unwrap();
+    let routed = wait_events(&events, "sidecar.vt.wheel", 1, |_| true).await;
+    assert_eq!(routed[0]["fields"]["route"], "program", "{routed:?}");
+    assert_eq!(routed[0]["fields"]["lines"], 2, "{routed:?}");
+    assert_eq!(routed[0]["fields"]["col"], 4, "{routed:?}");
+    assert_eq!(routed[0]["fields"]["row"], 6, "{routed:?}");
+    assert_eq!(routed[0]["fields"]["mouse_click"], true, "{routed:?}");
+    // The program disables mouse click reporting; the next wheel operation scrolls the viewport.
+    sender.send(daemon_output(b"\x1b[?1000l")).await.unwrap();
+    let disabled = wait_events(&events, "sidecar.vt.mouse_modes", 2, |_| true).await;
+    assert_eq!(disabled[1]["fields"]["mouse_click"], false, "{disabled:?}");
+    to_serve
+        .write_all(b"{\"surface\":\"s1\",\"body\":{\"operation\":\"scroll\",\"lines\":-1,\"col\":0,\"row\":0}}\n")
+        .await
+        .unwrap();
+    let viewport = wait_events(&events, "sidecar.vt.wheel", 2, |_| true).await;
+    assert_eq!(viewport[1]["fields"]["route"], "viewport", "{viewport:?}");
+    assert_eq!(viewport[1]["fields"]["mouse_click"], false, "{viewport:?}");
+    drop(to_serve);
+    reader.await.unwrap();
+    task.await.unwrap();
 }

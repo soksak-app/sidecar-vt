@@ -805,6 +805,106 @@
         ]
       },
       "description": "The theme of the engine of a session was put in force; the first input of every session is the theme in force. colors is the complete set of colors that the service resolves through the theme: foreground, background, cursor, selection and ansi0 to ansi255, each as #rrggbb in lowercase. A replay input (core docs/spec/replay.md#view-state)."
+    },
+    "sidecar.vt.mouse_modes": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "mouse_click": {
+            "type": "boolean"
+          },
+          "mouse_drag": {
+            "type": "boolean"
+          },
+          "mouse_motion": {
+            "type": "boolean"
+          },
+          "sgr_mouse": {
+            "type": "boolean"
+          },
+          "utf8_mouse": {
+            "type": "boolean"
+          },
+          "alternate_scroll": {
+            "type": "boolean"
+          },
+          "alt_screen": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mouse_click",
+          "mouse_drag",
+          "mouse_motion",
+          "sgr_mouse",
+          "utf8_mouse",
+          "alternate_scroll",
+          "alt_screen"
+        ]
+      },
+      "description": "The mouse reporting, SGR, UTF-8 and alternate scroll modes of a surface changed. The fields are the modes in force after the change; the route of each wheel operation is decided by them (sidecar.vt.wheel)."
+    },
+    "sidecar.vt.wheel": {
+      "layer": "sidecar",
+      "class": "input",
+      "level": "info",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "number"
+          },
+          "col": {
+            "type": "number"
+          },
+          "row": {
+            "type": "number"
+          },
+          "route": {
+            "type": "string"
+          },
+          "mouse_click": {
+            "type": "boolean"
+          },
+          "mouse_drag": {
+            "type": "boolean"
+          },
+          "mouse_motion": {
+            "type": "boolean"
+          },
+          "sgr_mouse": {
+            "type": "boolean"
+          },
+          "utf8_mouse": {
+            "type": "boolean"
+          },
+          "alternate_scroll": {
+            "type": "boolean"
+          },
+          "alt_screen": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "lines",
+          "col",
+          "row",
+          "route",
+          "mouse_click",
+          "mouse_drag",
+          "mouse_motion",
+          "sgr_mouse",
+          "utf8_mouse",
+          "alternate_scroll",
+          "alt_screen"
+        ]
+      },
+      "description": "A scroll operation of the page was routed. route is program (the wheel is written to the program), alternate_scroll (cursor keys are written) or viewport (the primary viewport moves); the modes are the modes in force when it was routed."
     }
   }
 }

@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S107: 서비스는 마우스 모드가 바뀔 때마다 `sidecar.vt.mouse_modes`를, scroll operation마다 `sidecar.vt.wheel`을 경로와 그 시점의 모드와 함께 기록하므로, wheel이 프로그램에 갔는지 viewport로 갔는지 로그에서 확인된다.
 - S45: 거부 `selection presentation is still pending`은 S43 수정을 담은 v0.0.9 이후에 없다. 이 항목은 code 변경 없이 닫힌다.
 - S18: `ci.yml`이 macOS runner에서 이 저장소의 테스트를 실행하고, `release.yml`이 push된 tag v0.0.3부터 v0.0.11까지 각 tag의 sidecar archive를 게시했다.
 - S106: Stale attachment 또는 malformed로 거부된 detach도 비어 있지 않은 string request가 있으면 request, name, generation, error를 담은 `body.image.detached`로 답하므로, host가 10초 timeout까지 답을 기다리지 않는다.
