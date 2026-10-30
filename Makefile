@@ -32,11 +32,12 @@ install:
 # compared with the engine (scripts/check-terminal-protocol-inventory.mjs).
 # Each Rust test runs under cargo-nextest through scripts/nextest-run.mjs, which prints a running line before each result;
 # cargo-nextest reports the elapsed time and applies the limit of each test from .config/nextest.toml (S76, S76-1).
+# make test runs no doc test: cargo-nextest does not run them and cargo test --doc has no per-test time or limit, so
+# the usage of a Rust type is a unit test (S76-2).
 NEXTEST = $(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) CARGO_INCREMENTAL=0 node scripts/nextest-run.mjs --config-file .config/nextest.toml --no-fail-fast
 test: build
 	cargo fmt --all --check
 	$(NEXTEST) --workspace
-	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) CARGO_INCREMENTAL=0 cargo test --workspace --doc
 	$(NEXTEST) -p soksak-sidecar-vt-core --features diagnostics --test engine_trace_test
 	$(NEXTEST) -p soksak-sidecar-vt-core --features fault-injection --test fault_injection
 	$(NEXTEST) -p soksak-sidecar-vt-core --features fault-injection --test serve_contract -E 'test(=a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it)'

@@ -22,6 +22,8 @@
 
 ## 미배포
 
+- S76-2: `make test`는 doc test를 실행하지 않는다. `CompositionState`의 doc 예제는 `test_composition_state_not_composing` unit test와 중복되었고, 이 unit test는 cargo-nextest로 자체 elapsed time과 60초 제한을 받아 실행되므로 doc 예제를 설명 문장으로 바꾸었다. 변경 전에는 doc test가 test별 시간 없이 끝났고, 변경 후에는 Rust test 488개가 각각 RUNNING 줄과 elapsed time이 있는 PASS 줄을 출력하며 `make test`가 exit 0으로 끝난다.
+
 - S76-1: `make test`는 Rust test 각 결과 앞에 RUNNING 줄을 출력한다. nextest 0.9.146의 human output에는 시작 줄이 없으므로 `scripts/nextest-run.mjs`가 test마다 started event를 내는 cargo-nextest의 libtest JSON 출력을 읽는다. 변경 전에는 Rust test 결과 488개에 RUNNING 줄이 없었고, 변경 후에는 `make test`가 RUNNING 줄 488개를 출력하며 각 줄 뒤에 PASS 줄이 있고 exit 0으로 끝난다.
 
 - S76: `make test`는 Rust test를 `.config/nextest.toml`을 쓰는 cargo-nextest 0.9.146으로 실행하며, 각 test의 결과와 elapsed time을 보고하고 60초 뒤 test를 종료한다. 전체 suite 제한은 두지 않는다. 최종 실행은 Rust test 488회 실행, node test 30개 중 29개 통과(1개 건너뜀), records 검사를 통과했다. Doc test는 여전히 `cargo test --doc`으로 실행되어 test별 시간이 없고(S76-2), nextest는 10초 안에 끝나는 test의 시작 줄을 출력하지 않는다(S76-1). CI는 `taiki-e/install-action`으로 cargo-nextest를 설치한다.

@@ -491,19 +491,10 @@ pub fn encode_paste(text: &str, modes: &Modes) -> Result<Vec<u8>, String> {
 }
 
 /// A simple state machine that tracks composition (IME) state. It holds the composing string and
-/// returns bytes only at the confirmation point.
+/// returns bytes only at the confirmation point: `add_char` returns `None` while composing, and
+/// `confirm` returns the composed bytes once and ends the composition.
 ///
-/// # Usage
-/// ```
-/// use soksak_sidecar_vt_core::encoding::CompositionState;
-/// let mut composer = CompositionState::new();
-/// // While composing, no bytes are sent to the PTY.
-/// assert_eq!(composer.add_char('\u{d55c}'), None);
-/// assert!(composer.is_composing());
-/// // The bytes are sent once, at confirmation.
-/// assert_eq!(composer.confirm(), Some("\u{d55c}".as_bytes().to_vec()));
-/// assert!(!composer.is_composing());
-/// ```
+/// The usage is covered by the unit test `test_composition_state_not_composing`.
 #[derive(Debug, Clone, Default)]
 pub struct CompositionState {
     buffer: String,

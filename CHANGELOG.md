@@ -22,6 +22,8 @@
 
 ## Unreleased
 
+- S76-2: `make test` runs no doc test. The doc example of `CompositionState` repeated the unit test `test_composition_state_not_composing`, which runs through cargo-nextest with its own elapsed time and 60-second limit, so the example became prose. Before the change, the doc test finished without a per-test time; after it, 488 Rust tests each print RUNNING and a PASS line with elapsed time, and `make test` exits 0.
+
 - S76-1: `make test` prints a RUNNING line before the result of each Rust test. `scripts/nextest-run.mjs` runs cargo-nextest with its libtest JSON output, which emits a started event per test, because the human output of nextest 0.9.146 has no start line. Before the change, 488 Rust test results had no RUNNING line; after it, `make test` prints 488 RUNNING lines, each followed by its PASS line, and exits 0.
 
 - S76: `make test` runs the Rust tests through cargo-nextest 0.9.146 with `.config/nextest.toml`, which reports each test's result and elapsed time and terminates a test after 60 seconds; no suite-wide limit is set. The final run passes 488 Rust test runs, 29 of 30 node tests, with 1 skipped, and the records check. The doc test still runs through `cargo test --doc` without a per-test time (S76-2), and nextest prints no start line for a test that finishes within 10 seconds (S76-1). CI installs cargo-nextest with `taiki-e/install-action`.

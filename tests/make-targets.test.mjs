@@ -49,6 +49,13 @@ test("make test runs each Rust test through cargo-nextest with the declared conf
   assert.match(config, /terminate-after\s*=/, "the nextest config declares no per-test termination limit");
 });
 
+// cargo-nextest does not run doc tests, and the doc-test output of cargo has no per-test time or limit, so make test runs no
+// doc test: the usage examples of the Rust sources are unit tests that run through cargo-nextest (S76-2).
+test("make test runs no doc test, so every Rust test has a nextest time and limit (S76-2)", { timeout: 30000 }, () => {
+  const commands = recipe("test");
+  assert.deepEqual(commands.split("\n").filter((line) => /cargo test\b.*--doc\b/.test(line)), [], "make test runs a doc test");
+});
+
 // The installation stage is make install (core docs/spec/plugins.md#repositories); the build and the tests consume what it installed.
 test("make install installs the locked dependencies, and no other target installs (F275-vt-sidecar)", { timeout: 30000 }, () => {
   assert.deepEqual(recipe("install").trim().split("\n"), ["pnpm install --frozen-lockfile"]);
