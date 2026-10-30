@@ -2927,9 +2927,17 @@ async fn an_image_detach_request_id_cannot_be_reused_with_another_tuple() {
 
     to_serve.write_all(br#"{"surface":"first","body":{"image":{"detach":{"request":"invalid","name":"view","generation":0}}}}
 "#).await.unwrap();
+    // A malformed detach with a readable request answers that request.
     let invalid_line = next_line_except_screen(&mut lines).await;
     let invalid: serde_json::Value = serde_json::from_str(&invalid_line).unwrap();
-    assert_eq!(invalid["body"]["error"], "invalidParams", "{invalid_line}");
+    assert_eq!(
+        invalid["body"]["image"]["detached"]["request"], "invalid",
+        "{invalid_line}"
+    );
+    assert_eq!(
+        invalid["body"]["image"]["detached"]["error"], "invalidParams",
+        "{invalid_line}"
+    );
 
     to_serve.write_all(br#"{"surface":"first","body":{"image":{"detach":{"request":"global-request","name":"view","generation":1}}}}
 "#).await.unwrap();
@@ -6786,6 +6794,182 @@ async fn next_image_detach_reply<R: tokio::io::AsyncBufRead + Unpin>(
             return message;
         }
     }
+}
+
+/// An empty input transaction whose reply carries the `attached` barrier, so the answer shows that
+/// the connection has processed its open.
+const ATTACH_BARRIER: &[u8] = br#"{"surface":"s1","cids":["attached"],"body":{"operation":"input","actions":[],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+"#;
+
+/// Waits for the reply that carries the `cids` barrier.
+async fn wait_for_cids_reply<R: tokio::io::AsyncBufRead + Unpin>(
+    lines: &mut tokio::io::Lines<R>,
+    cid: &str,
+) {
+    loop {
+        let line = tokio::time::timeout(std::time::Duration::from_secs(2), lines.next_line())
+            .await
+            .expect("timeout waiting for the barrier reply")
+            .expect("failed to read a sidecar line")
+            .expect("the sidecar closed its output");
+        if line.contains(&format!(r#""cids":["{cid}"]"#)) {
+            return;
+        }
+    }
+}
+
+/// A detach refused as a stale attachment answers its request. A second connection of the same owner
+/// attaches the surface, which replaces the epoch of the first connection, so the detach of the first
+/// connection is refused. The refusal carries the request, name and generation of the detach.
+#[tokio::test]
+async fn a_detach_refused_as_a_stale_attachment_answers_its_request() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new("stale-epoch".into(), calls.clone()));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let registry = PersistentRegistry::new();
+    let owner = || PersistentOwner {
+        close: Arc::new(|| Ok(())),
+        registry: registry.clone(),
+        owner: "stale-owner".to_string(),
+        log: events_test::TestEvents::new().handle(),
+    };
+
+    let (mut first_in, first_serve_in) = tokio::io::duplex(1 << 20);
+    let (first_serve_out, first_from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let first_task = tokio::spawn(serve_with_registry(
+        engine_factory.clone(),
+        first_serve_in,
+        first_serve_out,
+        factory.clone(),
+        owner(),
+    ));
+    let mut first_lines = tokio::io::BufReader::new(first_from_serve).lines();
+    first_in
+        .write_all(
+            br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
+"#,
+        )
+        .await
+        .unwrap();
+    first_in.write_all(ATTACH_BARRIER).await.unwrap();
+    wait_for_cids_reply(&mut first_lines, "attached").await;
+
+    let (mut second_in, second_serve_in) = tokio::io::duplex(1 << 20);
+    let (second_serve_out, second_from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let second_task = tokio::spawn(serve_with_registry(
+        engine_factory,
+        second_serve_in,
+        second_serve_out,
+        factory,
+        owner(),
+    ));
+    let mut second_lines = tokio::io::BufReader::new(second_from_serve).lines();
+    second_in
+        .write_all(
+            br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
+"#,
+        )
+        .await
+        .unwrap();
+    second_in.write_all(ATTACH_BARRIER).await.unwrap();
+    wait_for_cids_reply(&mut second_lines, "attached").await;
+
+    first_in
+        .write_all(br#"{"surface":"s1","body":{"image":{"detach":{"request":"stale-detach","name":"view","generation":1}}}}
+"#)
+        .await
+        .unwrap();
+    // The output of a surface goes to the connection that is attached to it, so the refusal of the
+    // first connection is read from the second connection.
+    let line = next_line_except_screen(&mut second_lines).await;
+    let reply: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(
+        reply["body"]["image"]["detached"]["request"], "stale-detach",
+        "the stale attachment refusal does not answer the detach request: {line}"
+    );
+    assert_eq!(reply["body"]["image"]["detached"]["name"], "view", "{line}");
+    assert_eq!(
+        reply["body"]["image"]["detached"]["generation"], 1,
+        "{line}"
+    );
+    assert_eq!(reply["body"]["image"]["detached"]["ok"], false, "{line}");
+    assert_eq!(
+        reply["body"]["image"]["detached"]["error"], "stale attachment",
+        "{line}"
+    );
+
+    // The surface is closed through the attached connection, so both connections end.
+    second_in
+        .write_all(
+            br#"{"surface":"s1","body":{"operation":"close"}}
+"#,
+        )
+        .await
+        .unwrap();
+    // The answer to close is an empty body.
+    loop {
+        let line = next_line_except_screen(&mut second_lines).await;
+        let message: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if message["body"] == serde_json::json!({}) {
+            break;
+        }
+    }
+    drop(first_in);
+    drop(second_in);
+    tokio::time::timeout(std::time::Duration::from_secs(5), first_task)
+        .await
+        .expect("the first connection did not end within 5 s")
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), second_task)
+        .await
+        .expect("the second connection did not end within 5 s")
+        .unwrap()
+        .unwrap();
+}
+
+/// A malformed detach whose request is a nonempty string answers its request with the name and
+/// generation as received and an invalidParams error. The detach has generation 0, which is refused.
+#[tokio::test]
+async fn a_malformed_detach_with_a_readable_request_answers_its_request() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new(
+        "malformed-detach".into(),
+        calls.clone(),
+    ));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
+{"surface":"s1","body":{"image":{"detach":{"request":"malformed-detach","name":"view","generation":0}}}}
+"#).await.unwrap();
+    let line = next_line_except_screen(&mut lines).await;
+    let reply: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(
+        reply["body"]["image"]["detached"]["request"], "malformed-detach",
+        "the malformed detach does not answer its request: {line}"
+    );
+    assert_eq!(reply["surface"], "s1", "{line}");
+    assert_eq!(reply["body"]["image"]["detached"]["name"], "view", "{line}");
+    assert_eq!(
+        reply["body"]["image"]["detached"]["generation"], 0,
+        "{line}"
+    );
+    assert_eq!(reply["body"]["image"]["detached"]["ok"], false, "{line}");
+    assert_eq!(
+        reply["body"]["image"]["detached"]["error"], "invalidParams",
+        "{line}"
+    );
+
+    drop(to_serve);
+    task.await.unwrap().unwrap();
 }
 
 /// A transfer image left by reconnect and a presentation request of a new raster can have the same

@@ -2226,6 +2226,32 @@ fn image_detach_response(
     json!({"surface": surface, "body": {"image": {"detached": detached}}})
 }
 
+/// Answers a detach that is refused before it reaches the surface. The answer echoes the request and
+/// the name and generation that were received, so the host correlates it with its detach. A detach
+/// without a nonempty string request has no answer, and the caller keeps its error envelope.
+fn image_detach_refusal(
+    surface: &str,
+    detach: &Value,
+    error: &str,
+    reason: Option<&str>,
+) -> Option<Value> {
+    let object = detach.as_object()?;
+    let request = object
+        .get("request")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())?;
+    let mut detached = json!({"request": request, "ok": false, "error": error});
+    for field in ["name", "generation"] {
+        if let Some(value) = object.get(field) {
+            detached[field] = value.clone();
+        }
+    }
+    if let Some(reason) = reason {
+        detached["reason"] = json!(reason);
+    }
+    Some(json!({"surface": surface, "body": {"image": {"detached": detached}}}))
+}
+
 async fn send_state(
     surface_id: &str,
     session_id: &str,
@@ -4664,7 +4690,13 @@ where
                             // attachment.
                             let epoch = surface_epochs.get(&registry_key).copied().unwrap_or(0);
                             if registry.current_epoch(&registry_key, &owner).await != Some(epoch) {
-                                let response = json!({"surface": surface_id, "body": {"error": "stale attachment"}});
+                                let response = body
+                                    .get("image")
+                                    .and_then(|image| image.get("detach"))
+                                    .and_then(|detach| {
+                                        image_detach_refusal(&surface_id, detach, "stale attachment", None)
+                                    })
+                                    .unwrap_or_else(|| json!({"surface": surface_id, "body": {"error": "stale attachment"}}));
                                 if reply_tx.reply(response).await.is_err() {
                                     break;
                                 }
@@ -5302,8 +5334,20 @@ where
                                     }
                                 }
                                 Err(reason) => {
-                                    let response = json!({"surface": surface_id,
-                                        "body": {"error": "invalidParams", "reason": reason}});
+                                    let response = image
+                                        .get("detach")
+                                        .and_then(|detach| {
+                                            image_detach_refusal(
+                                                &surface_id,
+                                                detach,
+                                                "invalidParams",
+                                                Some(&reason),
+                                            )
+                                        })
+                                        .unwrap_or_else(|| {
+                                            json!({"surface": surface_id,
+                                            "body": {"error": "invalidParams", "reason": reason}})
+                                        });
                                     if reply_tx.reply(response).await.is_err() {
                                         break;
                                     }

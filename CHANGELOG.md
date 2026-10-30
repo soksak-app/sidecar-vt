@@ -1,5 +1,6 @@
 # Changelog
 
+- S106: A detach refused as a stale attachment or as malformed, whose request is a nonempty string, is answered as `body.image.detached` with its request, name, generation and error, so the host no longer waits for the 10 second timeout.
 - S105: The comments of the tracked sources are written in English, and `make test` fails a comment in another language.
 - F275-vt-sidecar: `make install` installs the locked dependencies; the tests, checks and builds no longer install.
 - F274-1-vt-sidecar: The make target test prints a recipe without the directory lines of a nested make.
