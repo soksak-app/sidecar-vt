@@ -27,6 +27,7 @@
 
 ## Unreleased
 
+- S112: `pnpm-workspace.yaml` no longer allows the build script of a git source of core, because the dependency is the packed release file of core v0.0.21, which has no install script.
 - S97.1, S75.2 and S86-3: v0.0.17 is published and the registry lists it.
 - S76-2: `make test` runs no doc test. The doc example of `CompositionState` repeated the unit test `test_composition_state_not_composing`, which runs through cargo-nextest with its own elapsed time and 60-second limit, so the example became prose. Before the change, the doc test finished without a per-test time; after it, 488 Rust tests each print RUNNING and a PASS line with elapsed time, and `make test` exits 0.
 

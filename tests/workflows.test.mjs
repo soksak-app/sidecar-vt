@@ -47,3 +47,8 @@ test("the dependencies on core are the packed release files of the declared core
   assert.equal(manifest.optionalDependencies["@soksak/native-process-identity-darwin"],
     `${base}/soksak-native-process-identity-darwin-${version}.tgz`);
 });
+
+test("pnpm-workspace.yaml names no git source of core", { timeout: 1000 }, () => {
+  assert.doesNotMatch(read("pnpm-workspace.yaml"), /github\.com\/soksak-app\/core\.git/,
+    "the dependencies on core are packed release files, so no setting names a git source of core");
+});

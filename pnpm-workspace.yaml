@@ -1,5 +1,4 @@
 allowBuilds:
-  '@soksak/native-process-identity-darwin@git+https://github.com/soksak-app/core.git': true
   # The comment language check loads the WebAssembly grammar of each package with web-tree-sitter; their native
   # addons are not used, so their build scripts do not run.
   tree-sitter-bash: false
