@@ -1,5 +1,6 @@
 # Changelog
 
+- F272-vt-sidecar: A push to `main` releases the declared version through `soksak-release-gate` when its tag is absent, with the `sok` of the core release `v0.0.21`, and the dependencies on core are the packed release files of that release; no workflow checks out core.
 - S111-1: The service records each request still in progress 10 seconds after it arrived as the error event `sidecar.vt.request_waiting` with its operation, surface and the stage it waits in, so a stop of the input loop or of a surface actor names the waiting request.
 - S109: After an owner close or a retain, a message of a surface whose session ended is handled as the message of a new surface instead of being refused as a stale attachment, because the connection clears the sender and the attachment epoch of that surface.
 - S108: A `scroll` operation may carry an optional boolean `shift`; with Shift held, the wheel skips mouse reporting and moves the viewport or sends the alternate scroll keys. An absent `shift` keeps the scroll without Shift, so pages that send no `shift` keep working, and a non-boolean `shift` is refused with `invalidParams`.

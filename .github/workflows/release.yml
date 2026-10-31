@@ -1,33 +1,68 @@
 name: release
-# build-machine: skip test reason=the ci workflow tests the tagged commit on main before the tag is pushed
 # build-machine: skip smoke reason=the sidecar has no application to start; its recovery test runs the built service
 
+# A push to main runs the checks once (ci.yml), and the release gate releases the version that vt-alacritty/package.json
+# declares when the remote has no tag of it (core docs/spec/plugins.md).
 on:
   push:
-    tags: ['v*']
+    branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
-# Core release that builds the sok sidecar release. It is unrelated to the version this repository releases.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+# Core release whose sok builds the sidecar release. It is unrelated to the version this repository releases.
 env:
-  CORE_COMMIT: 22d7c2429556bb4af0f742e34fb1949a0c6ba265
+  CORE_RELEASE: v0.0.21
 
 jobs:
-  release:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  gate:
+    needs: checks
     runs-on: macos-15
+    outputs:
+      release: ${{ steps.gate.outputs.release }}
+      version: ${{ steps.gate.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - uses: pnpm/action-setup@v4
+      - name: Install
+        run: make install
+      - name: Decide the release
+        id: gate
+        run: pnpm exec soksak-release-gate vt-alacritty/package.json docs/features.md
+
+  release:
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
       - uses: actions/checkout@v4
-        with:
-          repository: soksak-app/core
-          ref: ${{ env.CORE_COMMIT }}
-          path: core
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: core/packages/sok/wailsv3/go.mod
-      - name: Build sok
-        run: go build -C core/packages/sok/wailsv3 -o "$RUNNER_TEMP/sok" ./src/cmd/sok
+      # A later push or a tag of the version that appeared while the run built makes this run stale, so it releases nothing.
+      - name: Require the commit to be the head of main and the tag to be absent
+        env:
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          head="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test "$head" = "$GITHUB_SHA" || { echo "main is at $head, not at $GITHUB_SHA" >&2; exit 1; }
+          test -z "$(git ls-remote --tags origin "refs/tags/v$VERSION")" || { echo "the tag v$VERSION exists" >&2; exit 1; }
+      - name: Download sok
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$CORE_RELEASE" --repo soksak-app/core --pattern 'sok-*-darwin-arm64' --dir "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP"/sok-*-darwin-arm64 "$RUNNER_TEMP/sok"
+          chmod +x "$RUNNER_TEMP/sok"
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v4
         with:
@@ -39,4 +74,6 @@ jobs:
         run: make release PROFILE=release SOK="$RUNNER_TEMP/sok" OUT=dist
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.gate.outputs.version }}
+          target_commitish: ${{ github.sha }}
           files: dist/*

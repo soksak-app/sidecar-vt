@@ -9,8 +9,8 @@ importers:
   .:
     devDependencies:
       '@soksak/plugin-api':
-        specifier: git+https://github.com/soksak-app/core.git#22d7c2429556bb4af0f742e34fb1949a0c6ba265&path:/packages/plugin-api
-        version: https://codeload.github.com/soksak-app/core/tar.gz/22d7c2429556bb4af0f742e34fb1949a0c6ba265#path:/packages/plugin-api
+        specifier: https://github.com/soksak-app/core/releases/download/v0.0.21/soksak-plugin-api-0.0.21.tgz
+        version: https://github.com/soksak-app/core/releases/download/v0.0.21/soksak-plugin-api-0.0.21.tgz
       tree-sitter-bash:
         specifier: 0.25.1
         version: 0.25.1
@@ -25,18 +25,18 @@ importers:
         version: 0.27.1
     optionalDependencies:
       '@soksak/native-process-identity-darwin':
-        specifier: git+https://github.com/soksak-app/core.git#22d7c2429556bb4af0f742e34fb1949a0c6ba265&path:/native/darwin/process-identity
-        version: https://codeload.github.com/soksak-app/core/tar.gz/22d7c2429556bb4af0f742e34fb1949a0c6ba265#path:/native/darwin/process-identity
+        specifier: https://github.com/soksak-app/core/releases/download/v0.0.21/soksak-native-process-identity-darwin-0.0.21.tgz
+        version: https://github.com/soksak-app/core/releases/download/v0.0.21/soksak-native-process-identity-darwin-0.0.21.tgz
 
 packages:
 
-  '@soksak/native-process-identity-darwin@https://codeload.github.com/soksak-app/core/tar.gz/22d7c2429556bb4af0f742e34fb1949a0c6ba265#path:/native/darwin/process-identity':
-    resolution: {gitHosted: true, integrity: sha512-y0HkBcu2+9GsrjWNZI++pRA6iGp105V8vuWodW0OLUN5F2s1hE3RUFGlVo5Q9RO0UvGdHa+HvtZ70j8fp8KBFA==, path: /native/darwin/process-identity, tarball: https://codeload.github.com/soksak-app/core/tar.gz/22d7c2429556bb4af0f742e34fb1949a0c6ba265}
+  '@soksak/native-process-identity-darwin@https://github.com/soksak-app/core/releases/download/v0.0.21/soksak-native-process-identity-darwin-0.0.21.tgz':
+    resolution: {integrity: sha512-YOQRur6ZhZoNQoyG8i+ON1YfMMjbtjmmTfpUFnw6QLS5tdQxox1bRQ/MvS5pSwK/8NN4ODp/eN/s8cZyIdZesQ==, tarball: https://github.com/soksak-app/core/releases/download/v0.0.21/soksak-native-process-identity-darwin-0.0.21.tgz}
     version: 0.0.21
     os: [darwin]
 
-  '@soksak/plugin-api@https://codeload.github.com/soksak-app/core/tar.gz/22d7c2429556bb4af0f742e34fb1949a0c6ba265#path:/packages/plugin-api':
-    resolution: {gitHosted: true, path: /packages/plugin-api, tarball: https://codeload.github.com/soksak-app/core/tar.gz/22d7c2429556bb4af0f742e34fb1949a0c6ba265}
+  '@soksak/plugin-api@https://github.com/soksak-app/core/releases/download/v0.0.21/soksak-plugin-api-0.0.21.tgz':
+    resolution: {integrity: sha512-OfeTSUeN1Cnmwl9221XHr1wSOM8/0Im3ZMllETp0zplape2y2QT+mozrcKNPLVqOs8bPJxr5j3SW6u+DL5YMwg==, tarball: https://github.com/soksak-app/core/releases/download/v0.0.21/soksak-plugin-api-0.0.21.tgz}
     version: 0.0.21
     hasBin: true
 
@@ -96,10 +96,10 @@ packages:
 
 snapshots:
 
-  '@soksak/native-process-identity-darwin@https://codeload.github.com/soksak-app/core/tar.gz/22d7c2429556bb4af0f742e34fb1949a0c6ba265#path:/native/darwin/process-identity':
+  '@soksak/native-process-identity-darwin@https://github.com/soksak-app/core/releases/download/v0.0.21/soksak-native-process-identity-darwin-0.0.21.tgz':
     optional: true
 
-  '@soksak/plugin-api@https://codeload.github.com/soksak-app/core/tar.gz/22d7c2429556bb4af0f742e34fb1949a0c6ba265#path:/packages/plugin-api':
+  '@soksak/plugin-api@https://github.com/soksak-app/core/releases/download/v0.0.21/soksak-plugin-api-0.0.21.tgz':
     dependencies:
       ajv: 8.20.0
       es-module-lexer: 3.0.4

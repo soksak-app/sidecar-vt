@@ -1,5 +1,6 @@
 # 변경 기록
 
+- F272-vt-sidecar: `main`에 push하면 tag가 없을 때 `soksak-release-gate`로 선언된 version을 core release `v0.0.21`의 `sok`와 함께 release한다. core에 대한 의존은 그 release의 pack된 release 파일이다. 어떤 workflow도 core를 checkout하지 않는다.
 - S111-1: 서비스는 도착한 지 10초 뒤에도 진행 중인 요청을 operation, surface, 기다리는 단계와 함께 오류 event `sidecar.vt.request_waiting`으로 기록한다. 그래서 input loop나 surface actor의 멈춤이 기다리는 요청을 밝힌다.
 - S109: owner close나 retain 뒤에, session이 끝난 surface의 메시지는 stale attachment로 거부되지 않고 새 surface의 메시지로 처리된다. 연결이 그 surface의 송신기와 부착 판을 지우기 때문이다.
 - S108: `scroll` operation은 선택적 boolean `shift`를 담을 수 있다. Shift를 누른 채 wheel을 쓰면 마우스 보고를 건너뛰고 viewport를 움직이거나 alternate scroll 키를 보낸다. `shift`가 없으면 Shift가 없는 scroll이므로 `shift`를 보내지 않는 page가 계속 동작하며, boolean이 아닌 `shift`는 `invalidParams`로 거부된다.

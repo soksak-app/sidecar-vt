@@ -1,9 +1,9 @@
 name: ci
 # build-machine: skip smoke reason=the sidecar has no application to start; its recovery test runs the built service
 
+# release.yml calls this workflow on each push to main, so a push runs the checks once.
 on:
-  push:
-    branches: [main]
+  workflow_call:
   pull_request:
 
 jobs:
