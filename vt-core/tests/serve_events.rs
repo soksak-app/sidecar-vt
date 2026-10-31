@@ -1427,3 +1427,95 @@ async fn each_mouse_mode_change_and_each_wheel_route_is_recorded_with_the_modes_
     reader.await.unwrap();
     task.await.unwrap();
 }
+
+/// A port whose session opens only after the test releases it: each open waits until the test
+/// closes the semaphore and then fails.
+struct HeldOpenPort(Arc<tokio::sync::Semaphore>);
+
+#[async_trait::async_trait]
+impl SessionPort for HeldOpenPort {
+    async fn open(
+        &self,
+        _request: &ShellRequest,
+        _cols: u16,
+        _rows: u16,
+    ) -> Result<String, String> {
+        match self.0.acquire().await {
+            Ok(_) => Err("the held open received a permit".to_string()),
+            Err(_) => Err("released".to_string()),
+        }
+    }
+    async fn write(&self, _session_id: &str, _data: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
+    async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
+        Ok(())
+    }
+    async fn detach(&self, _session_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+    async fn close(&self, _session_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+    async fn get_events(&self) -> mpsc::Receiver<soksak_sidecar_vt_core::protocol::DaemonEvent> {
+        mpsc::channel(1).1
+    }
+}
+
+// A surface actor that does not end a request holds the next requests of its surface in its queue,
+// and the input loop waits for room in that queue. Each request still in progress 10 seconds after
+// it arrived is the error event `request_waiting` with the stage it waits in.
+#[tokio::test(start_paused = true)]
+async fn a_request_in_progress_after_the_bound_is_the_event_request_waiting_with_its_stage() {
+    let events = TestEvents::new();
+    let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let port = Arc::new(HeldOpenPort(Arc::clone(&release)));
+    let factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync> =
+        Arc::new(move || port.clone() as Arc<dyn SessionPort>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
+    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let handle = events.handle();
+    let task = tokio::spawn(async move {
+        let _ = serve(engine_factory, serve_in, serve_out, factory, handle).await;
+    });
+    // The first open holds the actor, the next ten fill its queue, and the last one waits for room.
+    let open = br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
+"#;
+    for _ in 0..12 {
+        to_serve.write_all(open).await.unwrap();
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while events.named("sidecar.vt.request_waiting").len() < 12 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "12 requests in progress were not each recorded: {:?}",
+            events.named("sidecar.vt.request_waiting")
+        )
+    });
+    release.close();
+    drop(to_serve);
+    let mut lines = BufReader::new(from_serve).lines();
+    while lines.next_line().await.unwrap().is_some() {}
+    task.await.unwrap();
+
+    let waiting = events.named("sidecar.vt.request_waiting");
+    let stages: Vec<&str> = waiting
+        .iter()
+        .map(|event| event["fields"]["stage"].as_str().unwrap())
+        .collect();
+    let mut expected = vec!["actor"];
+    expected.extend(["actor queue"; 10]);
+    expected.push("surface queue");
+    assert_eq!(stages, expected, "{waiting:?}");
+    for event in &waiting {
+        assert_eq!(event["level"], "error", "{event}");
+        assert_eq!(event["surface"], "s1", "{event}");
+        assert_eq!(event["fields"]["operation"], "open", "{event}");
+        assert!(event["fields"]["ms"].as_u64().unwrap() >= 10_000, "{event}");
+    }
+}

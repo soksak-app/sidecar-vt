@@ -22,7 +22,55 @@ pub(crate) struct Request {
     surface: Option<String>,
     started: std::time::Instant,
     log: Events,
+    /// The wait that the request is in, as a `RequestStage` number.
+    stage: std::sync::atomic::AtomicU8,
 }
+
+/// The wait that a request in progress is in. The event `sidecar.vt.request_waiting` names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum RequestStage {
+    /// The input loop handles the request.
+    InputLoop,
+    /// The input loop waits for room in the queue of the surface actor.
+    SurfaceQueue,
+    /// The request is in the queue of the surface actor.
+    ActorQueue,
+    /// The surface actor handles the request.
+    Actor,
+    /// A reply of the request waits for room in the output queue of the connection.
+    OutputQueue,
+    /// The request was answered.
+    Answered,
+}
+
+impl RequestStage {
+    const ALL: [RequestStage; 6] = [
+        RequestStage::InputLoop,
+        RequestStage::SurfaceQueue,
+        RequestStage::ActorQueue,
+        RequestStage::Actor,
+        RequestStage::OutputQueue,
+        RequestStage::Answered,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            RequestStage::InputLoop => "input loop",
+            RequestStage::SurfaceQueue => "surface queue",
+            RequestStage::ActorQueue => "actor queue",
+            RequestStage::Actor => "actor",
+            RequestStage::OutputQueue => "output queue",
+            RequestStage::Answered => "answered",
+        }
+    }
+}
+
+/// A request still in progress this long after it arrived is the error event
+/// `sidecar.vt.request_waiting`. The host waits 10 seconds for the answer to a `retain` and to an
+/// image detach (core docs/spec/sidecars.md), so a request in progress at that time has already
+/// failed there.
+const REQUEST_WAIT_BOUND: Duration = Duration::from_secs(10);
 
 /// The error of a reply line, as `<code>: <text>`, or None for an answer. `-32603` is the internal
 /// code of the entrance (docs/spec/logging.md#result-form). The text is the member `error` of the
@@ -46,6 +94,14 @@ fn reply_error(line: &Value) -> Option<String> {
 }
 
 impl Request {
+    fn enter(&self, stage: RequestStage) {
+        self.stage.store(stage as u8, Ordering::Release);
+    }
+
+    fn stage(&self) -> RequestStage {
+        RequestStage::ALL[usize::from(self.stage.load(Ordering::Acquire))]
+    }
+
     /// Writes the `cids` of the request into the reply line and records the reply.
     fn answer(&self, line: &mut Value) {
         let error = reply_error(line);
@@ -157,10 +213,69 @@ impl RequestSender {
         &self,
         command: SurfaceCommand,
     ) -> Result<(), Box<mpsc::error::SendError<Dispatch>>> {
+        self.request.enter(RequestStage::SurfaceQueue);
         self.tx
             .send(Dispatch::of(command, &self.request))
             .await
-            .map_err(Box::new)
+            .map_err(Box::new)?;
+        self.request.enter(RequestStage::ActorQueue);
+        Ok(())
+    }
+}
+
+/// Watches the requests of one connection in the order they arrived, and records each request that
+/// is still in progress `REQUEST_WAIT_BOUND` after it arrived as the error event
+/// `sidecar.vt.request_waiting`. A request is in progress while the input loop, a surface actor or
+/// a reply sink holds it. A request that does not end produces no event, so the watch sleeps until
+/// the bound of the oldest request. It ends when the input loop drops the sender of `arrived`.
+async fn watch_requests(
+    mut arrived: mpsc::UnboundedReceiver<std::sync::Weak<Request>>,
+    connection: u64,
+) {
+    let mut waiting = std::collections::VecDeque::<std::sync::Weak<Request>>::new();
+    loop {
+        while waiting
+            .front()
+            .is_some_and(|request| request.strong_count() == 0)
+        {
+            waiting.pop_front();
+        }
+        let due = waiting
+            .front()
+            .and_then(std::sync::Weak::upgrade)
+            .map(|request| Instant::from_std(request.started) + REQUEST_WAIT_BOUND);
+        tokio::select! {
+            next = arrived.recv() => match next {
+                Some(request) => waiting.push_back(request),
+                None => return,
+            },
+            _ = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
+                let Some(request) = waiting.pop_front().and_then(|request| request.upgrade()) else {
+                    continue;
+                };
+                let stage = request.stage();
+                if stage == RequestStage::Answered {
+                    continue;
+                }
+                request.log.emit_for(
+                    Level::Error,
+                    "sidecar.vt.request_waiting",
+                    Subject {
+                        surface: request.surface.as_deref(),
+                        session: None,
+                        cids: &request.cids,
+                    },
+                    &json!({
+                        "operation": request.operation,
+                        "stage": stage.name(),
+                        "ms": Instant::now()
+                            .saturating_duration_since(Instant::from_std(request.started))
+                            .as_millis() as u64,
+                        "connection": connection,
+                    }),
+                );
+            }
+        }
     }
 }
 
@@ -327,7 +442,11 @@ impl OutputSink {
         if let Some(request) = &self.request {
             request.answer(&mut line);
         }
-        self.send(line.to_string()).await
+        self.send(line.to_string()).await?;
+        if let Some(request) = &self.request {
+            request.enter(RequestStage::Answered);
+        }
+        Ok(())
     }
 
     async fn send(&self, message: String) -> Result<(), ()> {
@@ -344,7 +463,16 @@ impl OutputSink {
                 if let Some(observer) = &self.submission_observer {
                     observer(OutputSubmissionStage::Attempt, &message);
                 }
-                match connection.sender.send(message).await {
+                let stage = self.request.as_ref().map(|request| {
+                    let stage = request.stage();
+                    request.enter(RequestStage::OutputQueue);
+                    stage
+                });
+                let sent = connection.sender.send(message).await;
+                if let (Some(request), Some(stage)) = (&self.request, stage) {
+                    request.enter(stage);
+                }
+                match sent {
                     Ok(()) => {
                         if let Some(observer) = &self.submission_observer {
                             observer(
@@ -3280,7 +3408,10 @@ async fn surface_task(
             Some(Dispatch { command: cmd, request }) = cmd_rx.recv() => {
                 // The replies of this command answer the request that sent it.
                 let output_tx = match request {
-                    Some(request) => output_tx.bound(request),
+                    Some(request) => {
+                        request.enter(RequestStage::Actor);
+                        output_tx.bound(request)
+                    }
                     None => output_tx.clone(),
                 };
                 match cmd {
@@ -4577,6 +4708,8 @@ where
     // Connection sequence number. It distinguishes the connections of the same owner in the trace.
     static CONNECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let connection = CONNECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let (watched, arrived) = mpsc::unbounded_channel();
+    tokio::spawn(watch_requests(arrived, connection));
     let mut surface_txs: HashMap<String, mpsc::Sender<Dispatch>> = HashMap::new();
     let mut surface_epochs: HashMap<String, u64> = HashMap::new();
     let mut tasks = tokio::task::JoinSet::new();
@@ -4646,7 +4779,15 @@ where
                 .unwrap_or_default(),
             started: std::time::Instant::now(),
             log: log.clone(),
+            stage: std::sync::atomic::AtomicU8::new(RequestStage::InputLoop as u8),
         });
+        // The watch ends with the input loop, so it is gone only when this loop has ended.
+        if watched.send(Arc::downgrade(&request)).is_err() {
+            log.record_error(
+                "request watch",
+                "the watch of the requests ended before the input loop",
+            );
+        }
         let _trace = RequestTrace {
             request: Arc::clone(&request),
             body: RequestBody::of(trimmed, parsed.is_some()),

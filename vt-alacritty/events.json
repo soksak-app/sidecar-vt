@@ -461,6 +461,43 @@
       },
       "description": "Writing a line to a client took 10 milliseconds or more."
     },
+    "sidecar.vt.request_waiting": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "error",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "input loop",
+              "surface queue",
+              "actor queue",
+              "actor",
+              "output queue"
+            ]
+          },
+          "ms": {
+            "type": "number"
+          },
+          "connection": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "operation",
+          "stage",
+          "ms",
+          "connection"
+        ]
+      },
+      "description": "A request was still in progress 10 seconds after it arrived; the stage names the wait it was in."
+    },
     "sidecar.vt.policy.watch_started": {
       "layer": "sidecar",
       "class": "lifecycle",

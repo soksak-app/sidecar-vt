@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S111-1: 서비스는 도착한 지 10초 뒤에도 진행 중인 요청을 operation, surface, 기다리는 단계와 함께 오류 event `sidecar.vt.request_waiting`으로 기록한다. 그래서 input loop나 surface actor의 멈춤이 기다리는 요청을 밝힌다.
 - S109: owner close나 retain 뒤에, session이 끝난 surface의 메시지는 stale attachment로 거부되지 않고 새 surface의 메시지로 처리된다. 연결이 그 surface의 송신기와 부착 판을 지우기 때문이다.
 - S108: `scroll` operation은 선택적 boolean `shift`를 담을 수 있다. Shift를 누른 채 wheel을 쓰면 마우스 보고를 건너뛰고 viewport를 움직이거나 alternate scroll 키를 보낸다. `shift`가 없으면 Shift가 없는 scroll이므로 `shift`를 보내지 않는 page가 계속 동작하며, boolean이 아닌 `shift`는 `invalidParams`로 거부된다.
 - S107: 서비스는 마우스 모드가 바뀔 때마다 `sidecar.vt.mouse_modes`를, scroll operation마다 `sidecar.vt.wheel`을 경로와 그 시점의 모드와 함께 기록하므로, wheel이 프로그램에 갔는지 viewport로 갔는지 로그에서 확인된다.

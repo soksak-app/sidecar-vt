@@ -1,5 +1,6 @@
 # Changelog
 
+- S111-1: The service records each request still in progress 10 seconds after it arrived as the error event `sidecar.vt.request_waiting` with its operation, surface and the stage it waits in, so a stop of the input loop or of a surface actor names the waiting request.
 - S109: After an owner close or a retain, a message of a surface whose session ended is handled as the message of a new surface instead of being refused as a stale attachment, because the connection clears the sender and the attachment epoch of that surface.
 - S108: A `scroll` operation may carry an optional boolean `shift`; with Shift held, the wheel skips mouse reporting and moves the viewport or sends the alternate scroll keys. An absent `shift` keeps the scroll without Shift, so pages that send no `shift` keep working, and a non-boolean `shift` is refused with `invalidParams`.
 - S107: The service records each change of the mouse modes as `sidecar.vt.mouse_modes` and each scroll operation as `sidecar.vt.wheel` with its route and the modes in force, so the log shows whether the wheel reached the program or the viewport.
