@@ -818,6 +818,56 @@ async fn a_surface_reopened_after_its_close_request_is_not_a_stale_attachment() 
     );
 }
 
+#[tokio::test]
+async fn a_surface_message_after_its_owner_close_is_not_a_stale_attachment() {
+    // An owner close ends every session of the owner, as the replacement of a service does. A
+    // message of a surface of that owner that arrives after the owner close finds no registry entry;
+    // if the owner close leaves the surface channel and the attachment epoch of the connection, the
+    // message is refused as a stale attachment, although no other attachment took the surface
+    // (core F292-74).
+    let (sender, mut receiver) = mpsc::channel(64);
+    let output = OutputSink::direct(test_connection(sender));
+    let input = format!(
+        "{}\n{}\n{}\n",
+        r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}"#,
+        r#"{"operation":"close-owner","request":"replace-1"}"#,
+        r#"{"surface":"s1","root":"/tmp","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}"#,
+    );
+    run_input_loop(
+        BufReader::new(input.as_bytes()),
+        output,
+        ServeOptions {
+            engine_factory: Arc::new(|| Box::new(FakeEngine::new())),
+            session_port_factory: Arc::new(|| Arc::new(FakeSessionPort::new())),
+            owner_close: Some(Arc::new(|| Ok(()))),
+            registry: Some(PersistentRegistry::new()),
+            owner: "test-owner".to_string(),
+            log: crate::events::test_support::TestEvents::new().handle(),
+            detach_requests: Arc::new(ImageDetachRequestLedger::default()),
+            submission_observer: None,
+        },
+    )
+    .await
+    .expect("input loop failed");
+    let mut replies = Vec::new();
+    while let Ok(line) = receiver.try_recv() {
+        replies.push(line);
+    }
+    assert!(
+        replies
+            .iter()
+            .any(|line| line.contains(r#""operation":"closed-owner""#)
+                && line.contains(r#""ok":true"#)),
+        "the owner close did not succeed: {replies:?}"
+    );
+    assert!(
+        replies
+            .iter()
+            .all(|line| !line.contains("stale attachment")),
+        "a surface message after the owner close was refused as a stale attachment: {replies:?}"
+    );
+}
+
 /// Opens one surface and sends a closed envelope, then checks that the session of that surface has
 /// already closed when the closed answer arrives. The current thread runtime runs the input loop
 /// inside this action, so the only path by which a surface action runs before the loop writes the

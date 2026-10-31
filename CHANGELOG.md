@@ -1,5 +1,6 @@
 # Changelog
 
+- S109: After an owner close or a retain, a message of a surface whose session ended is handled as the message of a new surface instead of being refused as a stale attachment, because the connection clears the sender and the attachment epoch of that surface.
 - S108: A `scroll` operation may carry an optional boolean `shift`; with Shift held, the wheel skips mouse reporting and moves the viewport or sends the alternate scroll keys. An absent `shift` keeps the scroll without Shift, so pages that send no `shift` keep working, and a non-boolean `shift` is refused with `invalidParams`.
 - S107: The service records each change of the mouse modes as `sidecar.vt.mouse_modes` and each scroll operation as `sidecar.vt.wheel` with its route and the modes in force, so the log shows whether the wheel reached the program or the viewport.
 - S45: The refusal `selection presentation is still pending` is absent from v0.0.9 and later, which carry the S43 correction; the item closes without a code change.

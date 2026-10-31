@@ -3139,6 +3139,27 @@ async fn close_connection_surface(
     }
 }
 
+/// Clears the sender and the attachment epoch of each surface of this connection whose registry
+/// entry an owner close or a retain removed. If they stay, the next message of the surface compares
+/// its epoch with the removed entry and is refused as a stale attachment, although no other
+/// attachment took the surface.
+async fn forget_closed_surfaces(
+    registry: &Arc<PersistentRegistry>,
+    surface_txs: &mut HashMap<String, mpsc::Sender<Dispatch>>,
+    surface_epochs: &mut HashMap<String, u64>,
+) {
+    let mut closed = Vec::new();
+    for key in surface_txs.keys() {
+        if !registry.contains(key).await {
+            closed.push(key.clone());
+        }
+    }
+    for key in closed {
+        surface_txs.remove(&key);
+        surface_epochs.remove(&key);
+    }
+}
+
 fn local_surface_key(
     surface_txs: &HashMap<String, mpsc::Sender<Dispatch>>,
     root: Option<&str>,
@@ -4648,7 +4669,12 @@ where
                 // reply to the close (core F98). The owner close then closes the sessions that
                 // remain.
                 let closed = match registry.as_ref() {
-                    Some(registry) => registry.close_owner(&owner).await,
+                    Some(registry) => {
+                        let closed = registry.close_owner(&owner).await;
+                        forget_closed_surfaces(registry, &mut surface_txs, &mut surface_epochs)
+                            .await;
+                        closed
+                    }
                     None => Ok(()),
                 };
                 // The owner close waits for each child to be reaped, so it runs outside the runtime
@@ -4686,7 +4712,12 @@ where
                     continue;
                 };
                 let result = match (registry.as_ref(), retain_keys(&value)) {
-                    (Some(registry), Ok(keep)) => registry.retain(&owner, &keep).await,
+                    (Some(registry), Ok(keep)) => {
+                        let closed = registry.retain(&owner, &keep).await;
+                        forget_closed_surfaces(registry, &mut surface_txs, &mut surface_epochs)
+                            .await;
+                        closed
+                    }
                     (None, _) => Err("retain is unavailable".to_string()),
                     (_, Err(error)) => Err(error),
                 };
