@@ -27,6 +27,7 @@
 
 ## Unreleased
 
+- S97.1, S75.2 and S86-3: v0.0.17 is published and the registry lists it.
 - S76-2: `make test` runs no doc test. The doc example of `CompositionState` repeated the unit test `test_composition_state_not_composing`, which runs through cargo-nextest with its own elapsed time and 60-second limit, so the example became prose. Before the change, the doc test finished without a per-test time; after it, 488 Rust tests each print RUNNING and a PASS line with elapsed time, and `make test` exits 0.
 
 - S76-1: `make test` prints a RUNNING line before the result of each Rust test. `scripts/nextest-run.mjs` runs cargo-nextest with its libtest JSON output, which emits a started event per test, because the human output of nextest 0.9.146 has no start line. Before the change, 488 Rust test results had no RUNNING line; after it, `make test` prints 488 RUNNING lines, each followed by its PASS line, and exits 0.
