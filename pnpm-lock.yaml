@@ -8,9 +8,12 @@ importers:
 
   .:
     devDependencies:
-      '@soksak/plugin-api':
-        specifier: https://github.com/soksak-app/core/releases/download/v0.0.25/soksak-plugin-api-0.0.25.tgz
-        version: https://github.com/soksak-app/core/releases/download/v0.0.25/soksak-plugin-api-0.0.25.tgz
+      '@soksak/kit-events':
+        specifier: https://github.com/soksak-app/kit-events/releases/download/v0.0.1/soksak-kit-events-0.0.1.tgz
+        version: https://github.com/soksak-app/kit-events/releases/download/v0.0.1/soksak-kit-events-0.0.1.tgz
+      '@soksak/kit-records':
+        specifier: https://github.com/soksak-app/kit-records/releases/download/v0.0.1/soksak-kit-records-0.0.1.tgz
+        version: https://github.com/soksak-app/kit-records/releases/download/v0.0.1/soksak-kit-records-0.0.1.tgz
       tree-sitter-bash:
         specifier: 0.25.1
         version: 0.25.1
@@ -30,21 +33,23 @@ importers:
 
 packages:
 
+  '@soksak/kit-events@https://github.com/soksak-app/kit-events/releases/download/v0.0.1/soksak-kit-events-0.0.1.tgz':
+    resolution: {integrity: sha512-ozuCebor/xbblmKqk+XIkoAE37ANoK4SLVSZmN/TMfWQ5pkyNIfz7ri2vLlG+cawcX9J8rLYjO13rWCSPiXqTg==, tarball: https://github.com/soksak-app/kit-events/releases/download/v0.0.1/soksak-kit-events-0.0.1.tgz}
+    version: 0.0.1
+    hasBin: true
+
+  '@soksak/kit-records@https://github.com/soksak-app/kit-records/releases/download/v0.0.1/soksak-kit-records-0.0.1.tgz':
+    resolution: {integrity: sha512-Otp1aORvqozSgInZEahjajshJo99SQzKXGdZbDkMDDnCkUgARvXbch9N05Sdd6Li5qL6FIH3RT1LQvO5b7cpXQ==, tarball: https://github.com/soksak-app/kit-records/releases/download/v0.0.1/soksak-kit-records-0.0.1.tgz}
+    version: 0.0.1
+    hasBin: true
+
   '@soksak/native-process-identity-darwin@https://github.com/soksak-app/core/releases/download/v0.0.25/soksak-native-process-identity-darwin-0.0.25.tgz':
     resolution: {integrity: sha512-W7c7jxBjPfyqMlVzLzofbg91L0zwMz5sBiebYfNlNvYFQv8DgffrY/kDP7uFHbvzVNDd26cWLPrI5SOvXRfd9Q==, tarball: https://github.com/soksak-app/core/releases/download/v0.0.25/soksak-native-process-identity-darwin-0.0.25.tgz}
     version: 0.0.25
     os: [darwin]
 
-  '@soksak/plugin-api@https://github.com/soksak-app/core/releases/download/v0.0.25/soksak-plugin-api-0.0.25.tgz':
-    resolution: {integrity: sha512-ZiiRNnfTWlteEW1J4Q6tET40SvkNR800UvNyVo25042eCKII/HCncgOqz9iEX0JWGzQbH9oYMILl9/AAqRckEg==, tarball: https://github.com/soksak-app/core/releases/download/v0.0.25/soksak-plugin-api-0.0.25.tgz}
-    version: 0.0.25
-    hasBin: true
-
   ajv@8.20.0:
     resolution: {integrity: sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA==}
-
-  es-module-lexer@3.0.4:
-    resolution: {integrity: sha512-BldNY5mwkVu+cQ5Ymn3e6hB9Sx8XHx4ZevWbiUyZbfKxJxYO27Hf0wfzkxIaD5CAJMaGl3YspKELj0ff/7nCMA==}
 
   fast-deep-equal@3.1.3:
     resolution: {integrity: sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==}
@@ -96,13 +101,14 @@ packages:
 
 snapshots:
 
-  '@soksak/native-process-identity-darwin@https://github.com/soksak-app/core/releases/download/v0.0.25/soksak-native-process-identity-darwin-0.0.25.tgz':
-    optional: true
-
-  '@soksak/plugin-api@https://github.com/soksak-app/core/releases/download/v0.0.25/soksak-plugin-api-0.0.25.tgz':
+  '@soksak/kit-events@https://github.com/soksak-app/kit-events/releases/download/v0.0.1/soksak-kit-events-0.0.1.tgz':
     dependencies:
       ajv: 8.20.0
-      es-module-lexer: 3.0.4
+
+  '@soksak/kit-records@https://github.com/soksak-app/kit-records/releases/download/v0.0.1/soksak-kit-records-0.0.1.tgz': {}
+
+  '@soksak/native-process-identity-darwin@https://github.com/soksak-app/core/releases/download/v0.0.25/soksak-native-process-identity-darwin-0.0.25.tgz':
+    optional: true
 
   ajv@8.20.0:
     dependencies:
@@ -110,8 +116,6 @@ snapshots:
       fast-uri: 3.1.9
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
-
-  es-module-lexer@3.0.4: {}
 
   fast-deep-equal@3.1.3: {}
 

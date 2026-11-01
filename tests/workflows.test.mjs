@@ -42,10 +42,19 @@ test("no workflow checks out another repository", { timeout: 1000 }, () => {
   }
 });
 
-test("the dependencies on core are the packed release files of the core release that package.json pins", { timeout: 1000 }, () => {
+test("the checks come from the kit releases, and no check takes a command or the plugin API of core", { timeout: 1000 }, () => {
+  const manifest = JSON.parse(read("package.json"));
+  assert.equal(manifest.devDependencies["@soksak/plugin-api"], undefined);
+  assert.equal(manifest.devDependencies["@soksak/kit-records"], "https://github.com/soksak-app/kit-records/releases/download/v0.0.1/soksak-kit-records-0.0.1.tgz");
+  assert.equal(manifest.devDependencies["@soksak/kit-events"], "https://github.com/soksak-app/kit-events/releases/download/v0.0.1/soksak-kit-events-0.0.1.tgz");
+  for (const file of ["Makefile", ...readdirSync(new URL("../tests/", import.meta.url)).filter((name) => name.endsWith(".mjs")).map((name) => `tests/${name}`)]) {
+    assert.doesNotMatch(read(file), /\bSOKSAK_EVENTS\b|(?:\bfrom\s+|\bimport\s*\(\s*)["']@soksak\/plugin-api/, `${file} takes a command or the plugin API of core`);
+  }
+});
+
+test("the native process identity is the packed release file of the core release that package.json pins", { timeout: 1000 }, () => {
   const manifest = JSON.parse(read("package.json"));
   const base = "https://github.com/soksak-app/core/releases/download/v0.0.25";
-  assert.equal(manifest.devDependencies["@soksak/plugin-api"], `${base}/soksak-plugin-api-0.0.25.tgz`);
   assert.equal(manifest.optionalDependencies["@soksak/native-process-identity-darwin"],
     `${base}/soksak-native-process-identity-darwin-0.0.25.tgz`);
 });

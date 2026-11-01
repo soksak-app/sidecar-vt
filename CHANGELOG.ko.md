@@ -28,6 +28,7 @@
 
 ## 미배포
 
+- F355-3-4-vt: 검사는 core의 plugin API 대신 records kit과 events kit release에서 오고, core checkout의 census 검사를 실행하던 `SOKSAK_EVENTS`는 지웠다. Red: `the checks come from the kit releases, and no check takes a command or the plugin API of core`가 실패했다. Green: 통과하고, workflow, events, census test가 통과한다.
 - S112: `pnpm-workspace.yaml`이 core git source의 build script를 더는 허용하지 않는다. 의존이 install script가 없는 core v0.0.21의 packed release 파일이기 때문이다.
 - S97.1, S75.2, S86-3: v0.0.17이 게시되었고 registry가 이를 올린다.
 - S76-2: `make test`는 doc test를 실행하지 않는다. `CompositionState`의 doc 예제는 `test_composition_state_not_composing` unit test와 중복되었고, 이 unit test는 cargo-nextest로 자체 elapsed time과 60초 제한을 받아 실행되므로 doc 예제를 설명 문장으로 바꾸었다. 변경 전에는 doc test가 test별 시간 없이 끝났고, 변경 후에는 Rust test 488개가 각각 RUNNING 줄과 elapsed time이 있는 PASS 줄을 출력하며 `make test`가 exit 0으로 끝난다.

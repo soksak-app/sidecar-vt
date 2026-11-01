@@ -10,10 +10,9 @@ CARGO_FEATURE_ARGS = $(if $(strip $(FEATURES)),--features $(FEATURES))
 # The platform key of the release (core docs/spec/installation.md#sidecar-release).
 PLATFORM := $(shell node -p '(process.platform === "win32" ? "windows" : process.platform) + "-" + process.arch')
 
-# soksak-events of the @soksak/plugin-api that package.json names applies the census of core to the sources
+# soksak-events of the events kit release that package.json pins applies the census to the sources
 # (docs/spec/logging.md#census with census.json) and checks the emit sites that the emitters of census.json declare against
 # the catalog vt-alacritty/events.json.
-SOKSAK_EVENTS ?= pnpm exec soksak-events
 
 ifeq ($(shell uname -s),Darwin)
 PROCESS_IDENTITY_PKGCONFIG = $(shell node -e 'const path=require("node:path");const {createRequire}=require("node:module");const r=createRequire(path.join(process.cwd(),"package.json"));process.stdout.write(path.join(path.dirname(r.resolve("@soksak/native-process-identity-darwin/package.json")),"lib/pkgconfig"))')
@@ -43,7 +42,7 @@ test: build
 	$(NEXTEST) -p soksak-sidecar-vt-core --features fault-injection --test fault_injection
 	$(NEXTEST) -p soksak-sidecar-vt-core --features fault-injection --test serve_contract -E 'test(=a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it)'
 	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo clippy --workspace --all-targets --features diagnostics -- -D warnings
-	$(SOKSAK_EVENTS) --census census.json --catalog vt-alacritty/events.json .
+	pnpm exec soksak-events --census census.json --catalog vt-alacritty/events.json .
 	node --test tests/
 	pnpm exec soksak-records
 
