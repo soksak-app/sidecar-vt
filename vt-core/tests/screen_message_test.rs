@@ -4,6 +4,7 @@
 use serde_json::{Value, json};
 use soksak_sidecar_vt_core::protocol::{Cell, Cursor, JsonRange, Preedit, Screen, screen_message};
 use soksak_sidecar_vt_core::screen_hash::{screen_hash, screen_hash_json};
+use soksak_sidecar_vt_core::screen_stream::ScreenStream;
 
 fn golden(name: &str) -> Value {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -98,8 +99,17 @@ fn screen_message_reports_the_same_wrapped_preedit_caret_without_mutating_engine
     };
     let engine_cursor = (screen.cursor.row, screen.cursor.col);
 
-    let message = screen_message("boot", 1, accepted_frame(1), Value::Null, &screen, true)
-        .expect("screen message");
+    let message = screen_message(
+        "boot",
+        1,
+        ScreenStream::default().order(),
+        accepted_frame(1),
+        Value::Null,
+        &screen,
+        true,
+    )
+    .map(|(message, _)| message)
+    .expect("screen message");
 
     assert_eq!(
         (
@@ -117,8 +127,17 @@ fn screen_message_reports_the_same_wrapped_preedit_caret_without_mutating_engine
 
     let mut cleared = screen.clone();
     cleared.cursor.preedit = None;
-    let cleared_message = screen_message("boot", 2, accepted_frame(2), Value::Null, &cleared, true)
-        .expect("cleared screen");
+    let cleared_message = screen_message(
+        "boot",
+        2,
+        ScreenStream::default().order(),
+        accepted_frame(2),
+        Value::Null,
+        &cleared,
+        true,
+    )
+    .map(|(message, _)| message)
+    .expect("cleared screen");
     assert_eq!(
         cleared_message["cursor"]["caret"],
         json!({"row": cleared.cursor.row, "col": cleared.cursor.col})
@@ -161,8 +180,17 @@ fn screen_message_reports_caret_in_the_cropped_preedit_viewport() {
         lines: vec![vec![Cell::default(); 4]; 2],
     };
 
-    let message = screen_message("boot", 1, accepted_frame(1), Value::Null, &screen, true)
-        .expect("cropped preedit screen message");
+    let message = screen_message(
+        "boot",
+        1,
+        ScreenStream::default().order(),
+        accepted_frame(1),
+        Value::Null,
+        &screen,
+        true,
+    )
+    .map(|(message, _)| message)
+    .expect("cropped preedit screen message");
 
     assert_eq!((screen.cursor.row, screen.cursor.col), (0, 3));
     assert_eq!(
@@ -213,8 +241,17 @@ fn an_end_boundary_after_a_full_row_paints_on_the_last_occupied_cell() {
         lines: vec![vec![Cell::default(); 4]; 2],
     };
 
-    let message = screen_message("boot", 1, accepted_frame(1), Value::Null, &screen, true)
-        .expect("screen message at a wrapped boundary");
+    let message = screen_message(
+        "boot",
+        1,
+        ScreenStream::default().order(),
+        accepted_frame(1),
+        Value::Null,
+        &screen,
+        true,
+    )
+    .map(|(message, _)| message)
+    .expect("screen message at a wrapped boundary");
 
     assert_eq!(message["cursor"]["row"], json!(0));
     assert_eq!(message["cursor"]["col"], json!(0));
@@ -254,8 +291,17 @@ fn a_boundary_inside_preedit_maps_to_the_next_grapheme_row() {
         lines: vec![vec![Cell::default(); 4]; 2],
     };
 
-    let message = screen_message("boot", 1, accepted_frame(1), Value::Null, &screen, true)
-        .expect("screen message at an internal wrap boundary");
+    let message = screen_message(
+        "boot",
+        1,
+        ScreenStream::default().order(),
+        accepted_frame(1),
+        Value::Null,
+        &screen,
+        true,
+    )
+    .map(|(message, _)| message)
+    .expect("screen message at an internal wrap boundary");
 
     assert_eq!(message["cursor"]["caret"], json!({"row": 1, "col": 0}));
 }
@@ -292,8 +338,17 @@ fn a_one_row_wrap_pending_wide_end_boundary_keeps_raw_cursor_and_hash() {
         lines: vec![vec![Cell::default(); 1]],
     };
 
-    let message = screen_message("boot", 1, accepted_frame(1), Value::Null, &screen, true)
-        .expect("one-cell wrap-pending screen message");
+    let message = screen_message(
+        "boot",
+        1,
+        ScreenStream::default().order(),
+        accepted_frame(1),
+        Value::Null,
+        &screen,
+        true,
+    )
+    .map(|(message, _)| message)
+    .expect("one-cell wrap-pending screen message");
 
     assert_eq!(
         (
@@ -314,8 +369,17 @@ fn a_one_row_wrap_pending_wide_end_boundary_keeps_raw_cursor_and_hash() {
 fn a_screen_without_an_accepted_frame_has_no_native_caret() {
     let screen = screen_of(&golden("screen-message.json")["vectors"][0]["message"]).unwrap();
 
-    let message = screen_message("boot", 1, Value::Null, Value::Null, &screen, false)
-        .expect("headless screen message");
+    let message = screen_message(
+        "boot",
+        1,
+        ScreenStream::default().order(),
+        Value::Null,
+        Value::Null,
+        &screen,
+        false,
+    )
+    .map(|(message, _)| message)
+    .expect("headless screen message");
 
     assert!(message["frame"].is_null());
     assert!(message["cursor"]["caret"].is_null());
@@ -330,8 +394,17 @@ fn a_dirty_future_frame_keeps_its_identity_without_a_native_caret() {
     let screen = screen_of(&golden("screen-message.json")["vectors"][0]["message"]).unwrap();
     let future_frame = accepted_frame(2);
 
-    let message = screen_message("boot", 2, future_frame.clone(), Value::Null, &screen, false)
-        .expect("dirty future frame message");
+    let message = screen_message(
+        "boot",
+        2,
+        ScreenStream::default().order(),
+        future_frame.clone(),
+        Value::Null,
+        &screen,
+        false,
+    )
+    .map(|(message, _)| message)
+    .expect("dirty future frame message");
 
     assert_eq!(message["frame"], future_frame);
     assert!(message["cursor"]["caret"].is_null());
@@ -370,11 +443,13 @@ fn the_message_for_the_screen_of_each_vector_has_its_members_and_its_hash() {
         let message = screen_message(
             expected["segment"].as_str().unwrap(),
             expected["sequence"].as_u64().unwrap(),
+            ScreenStream::default().order(),
             expected["frame"].clone(),
             serde_json::Value::Null,
             &screen,
             !expected["frame"].is_null(),
         )
+        .map(|(message, _)| message)
         .unwrap_or_else(|error| panic!("{name}: {error}"));
         assert_eq!(message["event"], "screen", "{name}");
         assert!(
@@ -434,11 +509,13 @@ fn a_screen_that_the_hash_refuses_gets_no_message() {
     let error = screen_message(
         "b1",
         3,
+        ScreenStream::default().order(),
         serde_json::Value::Null,
         serde_json::Value::Null,
         &screen,
         false,
     )
+    .map(|(message, _)| message)
     .unwrap_err();
     assert!(error.contains("outside the screen"), "{error}");
 }
@@ -451,8 +528,70 @@ fn a_render_record_for_another_frame_is_rejected() {
         "frame": { "generation": 1, "raster": 2, "sequence": 2 },
         "glyphs": []
     });
-    let error =
-        soksak_sidecar_vt_core::protocol::screen_message("boot", 1, frame, render, &screen, true)
-            .unwrap_err();
+    let error = soksak_sidecar_vt_core::protocol::screen_message(
+        "boot",
+        1,
+        ScreenStream::default().order(),
+        frame,
+        render,
+        &screen,
+        true,
+    )
+    .map(|(message, _)| message)
+    .unwrap_err();
     assert!(error.contains("render.frame must match frame"), "{error}");
+}
+
+// The service reproduces each change sequence of the core fixture: the screens of the messages, given to one stream, give the same
+// members of the full and the change form (core docs/spec/persistent-services.md#screen-message).
+#[test]
+fn the_messages_of_each_change_sequence_are_reproduced_by_one_stream() {
+    let fixture = golden("screen-message.json");
+    let sequences = fixture["changes"].as_array().expect("change sequences");
+    assert!(!sequences.is_empty(), "the fixture has change sequences");
+    for sequence in sequences {
+        let name = sequence["name"].as_str().unwrap();
+        let messages = sequence["messages"].as_array().unwrap();
+        let mut stream = ScreenStream::default();
+        let mut cells = messages[0]["cells"].as_array().unwrap().clone();
+        let cols = messages[0]["cols"].as_u64().unwrap() as usize;
+        for (index, expected) in messages.iter().enumerate() {
+            for change in expected["changed"].as_array().into_iter().flatten() {
+                let row = change["row"].as_u64().unwrap() as usize;
+                for (col, cell) in change["cells"].as_array().unwrap().iter().enumerate() {
+                    cells[row * cols + col] = cell.clone();
+                }
+            }
+            let mut full = expected.clone();
+            full["cells"] = Value::Array(cells.clone());
+            let screen = screen_of(&full)
+                .unwrap_or_else(|| panic!("{name}: message {index} is a screen of the engine"));
+            let (message, sent) = screen_message(
+                expected["segment"].as_str().unwrap(),
+                expected["sequence"].as_u64().unwrap(),
+                stream.order(),
+                Value::Null,
+                Value::Null,
+                &screen,
+                false,
+            )
+            .unwrap_or_else(|error| panic!("{name}: message {index}: {error}"));
+            stream.sent(sent);
+            for member in [
+                "number", "base", "previous", "changed", "cells", "rows", "cols", "sequence",
+                "segment",
+            ] {
+                assert_eq!(
+                    message.get(member),
+                    expected.get(member),
+                    "{name}: message {index}: {member}"
+                );
+            }
+            assert_eq!(
+                screen_hash(&screen).unwrap(),
+                sequence["hashes"][index].as_str().unwrap(),
+                "{name}: message {index}: hash"
+            );
+        }
+    }
 }

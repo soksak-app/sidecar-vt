@@ -881,6 +881,7 @@ async fn each_native_preedit_update_presents_a_fresh_terminal_frame() {
 
 #[tokio::test]
 async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo() {
+    let mut grid = ScreenGrid::default();
     let engine_factory =
         Arc::new(|| Box::new(MockEngine::new().with_cursor_at_end()) as Box<dyn Engine>);
 
@@ -914,6 +915,7 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
         sequence,
         &mut acknowledgements,
         &calls,
+        &mut grid,
     )
     .await;
     {
@@ -940,6 +942,7 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
         sequence,
         &mut acknowledgements,
         &calls,
+        &mut grid,
     )
     .await;
     assert_eq!(
@@ -960,6 +963,7 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
         sequence,
         &mut acknowledgements,
         &calls,
+        &mut grid,
     )
     .await;
     assert_eq!(
@@ -973,6 +977,7 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
         split_sequence,
         &mut acknowledgements,
         &calls,
+        &mut grid,
     )
     .await;
     assert_eq!(
@@ -988,9 +993,24 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
     let factory_port = port.clone();
     let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
     let observer_calls = calls.clone();
+    // The observer sees each message at each submission stage, so the grid applies a message once and the later stages of the
+    // same message take that result.
+    let observer_grid = Mutex::new((ScreenGrid::default(), None::<(String, serde_json::Value)>));
     let observer: OutputSubmissionObserver = Arc::new(move |stage, message| {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(message) else {
+        if serde_json::from_str::<serde_json::Value>(message).is_err() {
             return;
+        }
+        let value = {
+            let mut state = observer_grid.lock().unwrap();
+            let (grid, last) = &mut *state;
+            match last {
+                Some((line, value)) if line == message => value.clone(),
+                _ => {
+                    let value = grid.apply_line(message);
+                    *last = Some((message.to_string(), value.clone()));
+                    value
+                }
+            }
         };
         let body = &value["body"];
         let is_frame = body["event"] == "screen";
@@ -1062,6 +1082,7 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
         sequence,
         &mut acknowledgements,
         &calls,
+        &mut grid,
     )
     .await;
     assert_eq!(
@@ -1076,6 +1097,7 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
         sequence,
         &mut acknowledgements,
         &calls,
+        &mut grid,
     )
     .await;
     assert_eq!(
@@ -1097,6 +1119,7 @@ async fn one_input_request_applies_resulting_preedit_before_immediate_pty_echo()
                 sequence,
                 &mut acknowledgements,
                 &calls,
+                &mut grid,
             )
             .await;
         frames.push((
@@ -1375,6 +1398,7 @@ async fn one_ordered_input_transaction_writes_actions_once_and_applies_final_pre
 
 #[tokio::test]
 async fn ready_pty_echo_is_presented_with_the_transaction_preedit() {
+    let mut grid = ScreenGrid::default();
     let calls = Arc::new(Mutex::new(Calls::default()));
     let port =
         Arc::new(FakeSessionPort::new("ready-echo".to_string(), calls.clone()).with_ready_echo());
@@ -1432,6 +1456,7 @@ async fn ready_pty_echo_is_presented_with_the_transaction_preedit() {
         sequence,
         &mut acknowledgements,
         &calls,
+        &mut grid,
     )
     .await;
     assert_eq!(
@@ -1452,6 +1477,7 @@ async fn ready_pty_echo_is_presented_with_the_transaction_preedit() {
         sequence,
         &mut acknowledgements,
         &calls,
+        &mut grid,
     )
     .await;
     assert_eq!(
@@ -1475,6 +1501,7 @@ async fn ready_pty_echo_is_presented_with_the_transaction_preedit() {
         sequence,
         &mut acknowledgements,
         &calls,
+        &mut grid,
     )
     .await;
     assert_eq!(
@@ -3230,6 +3257,7 @@ async fn test_a2_pushed_output_reaches_screen() {
 
     // Waits for a screen event (it must contain "hi")
     let mut found_hi = false;
+    let mut grid = ScreenGrid::default();
     let mut observed = vec![state_line];
     let mut last_consumed = 1;
     loop {
@@ -3246,8 +3274,7 @@ async fn test_a2_pushed_output_reaches_screen() {
                 .expect("screen line is empty");
         observed.push(screen_line.clone());
 
-        let screen_json: serde_json::Value =
-            serde_json::from_str(&screen_line).expect("failed to parse screen JSON");
+        let screen_json = grid.apply_line(&screen_line);
 
         // A cursor state change can also produce a frame. As the real host does, the next frame
         // must be consumed so that the PTY output that arrives after it advances to the screen.
@@ -5826,8 +5853,46 @@ async fn test_font_size_sets_the_cell_size() {
 
 /// Joins the cell characters of one line of a screen event. In JSON each character is a cell
 /// object, so a string search cannot find it.
-fn screen_text(line: &str) -> String {
-    let value: serde_json::Value = serde_json::from_str(line).expect("screen event JSON");
+/// The full screen that a page holds after each screen message: a full form replaces it and a change replaces the rows it
+/// carries (core docs/spec/persistent-services.md#screen-message).
+#[derive(Default)]
+struct ScreenGrid {
+    number: Option<u64>,
+    cells: Vec<serde_json::Value>,
+}
+
+impl ScreenGrid {
+    /// Parses a line and returns it; a screen message is returned with every cell of the screen in `cells`.
+    fn apply_line(&mut self, line: &str) -> serde_json::Value {
+        let mut message: serde_json::Value = serde_json::from_str(line).expect("sidecar line JSON");
+        let body = &mut message["body"];
+        if body["event"] != "screen" {
+            return message;
+        }
+        if body["base"] == true {
+            self.cells = body["cells"].as_array().expect("full form cells").clone();
+        } else {
+            assert_eq!(
+                body["previous"].as_u64(),
+                self.number,
+                "a change follows the held screen: {body}"
+            );
+            let cols = body["cols"].as_u64().unwrap() as usize;
+            for change in body["changed"].as_array().expect("change form rows") {
+                let row = change["row"].as_u64().unwrap() as usize;
+                for (col, cell) in change["cells"].as_array().unwrap().iter().enumerate() {
+                    self.cells[row * cols + col] = cell.clone();
+                }
+            }
+            body["cells"] = serde_json::Value::Array(self.cells.clone());
+        }
+        self.number = body["number"].as_u64();
+        message
+    }
+}
+
+fn screen_text(grid: &mut ScreenGrid, line: &str) -> String {
+    let value = grid.apply_line(line);
     value["body"]["cells"]
         .as_array()
         .into_iter()
@@ -5875,6 +5940,8 @@ async fn output_while_the_host_holds_a_raster_sends_one_screen_with_the_next_pre
         opened.contains(r#""event":"screen""#),
         "the first presentation came without its screen: {opened}"
     );
+    let mut grid = ScreenGrid::default();
+    grid.apply_line(&opened);
     for index in 0..50 {
         port.push_event(DaemonEvent::Output {
             session_id: session_id.clone(),
@@ -5907,7 +5974,7 @@ async fn output_while_the_host_holds_a_raster_sends_one_screen_with_the_next_pre
             }
             if line.contains(r#""event":"screen""#) {
                 screens_before += 1;
-                if screen_text(&line).contains("line49") {
+                if screen_text(&mut grid, &line).contains("line49") {
                     break 'fed;
                 }
                 break;
@@ -5951,7 +6018,7 @@ async fn output_while_the_host_holds_a_raster_sends_one_screen_with_the_next_pre
         screens.len()
     );
     assert!(
-        screen_text(&screens[0]).contains("line49"),
+        screen_text(&mut grid, &screens[0]).contains("line49"),
         "the screen after the presentation is not the latest output: {}",
         screens[0]
     );
@@ -5982,6 +6049,7 @@ async fn the_page_screen_event_carries_only_text_width_links_and_set_attributes(
         truncated: false,
     });
     let mut screen = None;
+    let mut grid = ScreenGrid::default();
     for _ in 0..200 {
         to_serve
             .write_all(b"{\"surface\":\"s1\",\"body\":{\"operation\":\"screen.read\"}}\n")
@@ -5997,7 +6065,7 @@ async fn the_page_screen_event_carries_only_text_width_links_and_set_attributes(
                 break line;
             }
         };
-        if screen_text(&line).contains("text") {
+        if screen_text(&mut grid, &line).contains("text") {
             screen = Some(line);
             break;
         }
@@ -7132,6 +7200,7 @@ async fn next_measured_frame_after(
     after: u64,
     acknowledgements: &mut usize,
     calls: &Arc<Mutex<Calls>>,
+    grid: &mut ScreenGrid,
 ) -> (u64, usize, usize, usize, usize, usize, serde_json::Value) {
     let mut screens = std::collections::HashMap::new();
     let mut images = std::collections::HashMap::new();
@@ -7148,7 +7217,7 @@ async fn next_measured_frame_after(
             })
             .expect("output read succeeds")
             .expect("sidecar output remains open");
-        let message: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let message = grid.apply_line(&line);
         recent_messages.push(message.clone());
         if recent_messages.len() > 8 {
             recent_messages.remove(0);
@@ -7579,4 +7648,137 @@ async fn an_envelope_with_invalid_cids_is_answered_on_its_surface() {
             .is_some_and(|reason| reason.contains("cids")),
         "the reason does not name the cids: {output}"
     );
+}
+
+// A screen after output of one row carries that row in the change form, and the reply of a screen read is the full form (core
+// docs/spec/persistent-services.md#screen-message).
+#[tokio::test]
+async fn a_screen_after_output_of_one_row_carries_that_row_and_a_screen_read_the_full_form() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let session_id = "change-form".to_string();
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let port = Arc::new(FakeSessionPort::new(session_id.clone(), calls.clone()));
+    let port_for_factory = port.clone();
+    let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1024 * 1024);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let envelope = next_image_envelope(&mut lines).await;
+    let first = next_screen_line(&mut lines).await;
+    assert_eq!(
+        first["body"]["base"], true,
+        "the first screen of the surface: {first}"
+    );
+    assert_eq!(first["body"]["number"], 1);
+    assert!(first["body"]["cells"].is_array());
+    acknowledge_image(&mut to_serve, &envelope).await;
+    port.push_event(DaemonEvent::Output {
+        session_id: session_id.clone(),
+        data: b"abc".to_vec(),
+        sequence: 0,
+        truncated: false,
+    });
+    let mut previous = first["body"]["number"].as_u64().unwrap();
+    let changed = 'changed: {
+        for _ in 0..20 {
+            let envelope = next_image_envelope(&mut lines).await;
+            let screen = next_screen_line(&mut lines).await;
+            acknowledge_image(&mut to_serve, &envelope).await;
+            let body = &screen["body"];
+            assert_eq!(
+                body["base"], false,
+                "a screen after one changed row: {screen}"
+            );
+            assert_eq!(
+                body["previous"].as_u64(),
+                Some(previous),
+                "the change names the sent message: {screen}"
+            );
+            assert!(body.get("cells").is_none(), "a change carries no full grid");
+            previous = body["number"].as_u64().unwrap();
+            let rows = body["changed"].as_array().unwrap();
+            if !rows.is_empty() {
+                break 'changed rows.clone();
+            }
+        }
+        panic!("no screen carried the output");
+    };
+    assert_eq!(
+        changed.len(),
+        1,
+        "only the row of the output changed: {changed:?}"
+    );
+    let graphemes: Vec<&str> = changed[0]["cells"].as_array().unwrap()[..3]
+        .iter()
+        .map(|cell| cell["grapheme"].as_str().unwrap())
+        .collect();
+    assert_eq!(graphemes, ["a", "b", "c"]);
+    assert_eq!(
+        changed[0]["cells"].as_array().unwrap().len() as u64,
+        first["body"]["cols"].as_u64().unwrap(),
+        "a changed row holds every cell of the row"
+    );
+    to_serve
+        .write_all(b"{\"surface\":\"s1\",\"body\":{\"operation\":\"screen.read\"}}\n")
+        .await
+        .unwrap();
+    let read = next_screen_line(&mut lines).await;
+    assert_eq!(
+        read["body"]["base"], true,
+        "the reply of a screen read: {read}"
+    );
+    assert!(read["body"]["number"].as_u64().unwrap() > previous);
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+}
+
+// A client that reconnects to a persistent surface holds no screen of it, so the first screen after the reconnection is the full
+// form (core docs/spec/persistent-services.md#screen-message).
+#[tokio::test]
+async fn the_first_screen_after_a_reconnection_is_the_full_form() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","body":{"operation":"reconnect"}}
+{"surface":"s1","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":2,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#;
+    let reader = std::io::Cursor::new(input.as_bytes());
+    let mut writer = Vec::new();
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let calls_for_factory = calls.clone();
+    let session_port_factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "reconnect-screen".to_string(),
+            calls_for_factory.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+    let _ = serve(engine_factory, reader, &mut writer, session_port_factory).await;
+    let output = String::from_utf8(writer).unwrap();
+    let messages: Vec<serde_json::Value> = output
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let reconnected = messages
+        .iter()
+        .position(|message| message["body"]["event"] == "session")
+        .expect("the reconnection answers the session");
+    let first = messages[..reconnected]
+        .iter()
+        .find(|message| message["body"]["event"] == "screen")
+        .expect("a screen before the reconnection");
+    assert_eq!(first["body"]["base"], true);
+    let after = messages[reconnected..]
+        .iter()
+        .find(|message| message["body"]["event"] == "screen")
+        .expect("a screen after the reconnection");
+    assert_eq!(
+        after["body"]["base"], true,
+        "the first screen after the reconnection: {after}"
+    );
+    assert!(after["body"]["number"].as_u64() > first["body"]["number"].as_u64());
 }

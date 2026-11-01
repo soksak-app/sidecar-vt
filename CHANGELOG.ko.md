@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S114: 모든 `screen` 메시지는 `number`를 담고, resize 뒤, 재연결 뒤, 보내지 못한 메시지 뒤, `screen.read`, 행의 절반 넘게 바뀐 경우의 전체 형식을 빼면 그것이 가리키는 보낸 메시지 뒤에 바뀐 행만 담는다(`base: false`, `previous`, `changed`). 줄은 칸을 복사하지 않고 가진 행에서 쓴다.
 - F355-4-vt: 0.0.18판. `make release OUT=<folder>`는 실행 비트를 보존하는 `vt-alacritty`의 `npm pack`으로 release를 쓰고, release.yml은 더 이상 core release의 sok를 내려받지 않는다. core가 sidecar의 `npm pack` 파일을 설치하고 `sok sidecar release`가 없기 때문이다. core 의존은 core release `v0.0.25`에 pin된다.
 - F272-vt-sidecar: `main`에 push하면 tag가 없을 때 `soksak-release-gate`로 선언된 version을 core release `v0.0.21`의 `sok`와 함께 release한다. core에 대한 의존은 그 release의 pack된 release 파일이다. 어떤 workflow도 core를 checkout하지 않는다.
 - S111-1: 서비스는 도착한 지 10초 뒤에도 진행 중인 요청을 operation, surface, 기다리는 단계와 함께 오류 event `sidecar.vt.request_waiting`으로 기록한다. 그래서 input loop나 surface actor의 멈춤이 기다리는 요청을 밝힌다.

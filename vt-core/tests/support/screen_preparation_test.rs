@@ -2,6 +2,7 @@ use super::{
     Cell, Cursor, CursorShape, Screen, Scrollback, prepare_screen_line, screen_message_with_layout,
     screen_message_work,
 };
+use crate::screen_stream::ScreenStream;
 use serde_json::{Value, json};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell as ThreadCell;
@@ -71,6 +72,7 @@ fn screen_message_work_does_not_clone_the_original_cells() {
         "s1".to_string(),
         "boot".to_string(),
         1,
+        ScreenStream::default().order(),
         frame,
         Value::Null,
         screen,
@@ -83,7 +85,7 @@ fn screen_message_work_does_not_clone_the_original_cells() {
         allocations <= 64,
         "{allocations} allocations copied an already owned 8,192-cell screen"
     );
-    let line = work().expect("prepare screen message");
+    let (line, _) = work().expect("prepare screen message");
     let message: Value = serde_json::from_str(&line).expect("decode screen message");
     assert_eq!(message["surface"], "s1");
     assert_eq!(message["body"]["event"], "screen");
@@ -113,6 +115,7 @@ fn screen_message_body_does_not_copy_normalized_cells() {
     let body = screen_message_with_layout(
         "boot",
         1,
+        ScreenStream::default().order(),
         frame.clone(),
         Value::Null,
         &screen,
@@ -120,7 +123,7 @@ fn screen_message_body_does_not_copy_normalized_cells() {
         true,
     );
     COUNT_ALLOCATIONS.with(|counting| counting.set(false));
-    let body = body.expect("build screen message");
+    let (body, cells) = body.expect("build screen message");
     let body_allocations = ALLOCATIONS.with(ThreadCell::get);
     let metadata_allocations = body_allocations
         .checked_sub(normalization_allocations)
@@ -142,7 +145,15 @@ fn screen_message_body_does_not_copy_normalized_cells() {
     assert_eq!(body["cursor"]["row"], 0);
     assert_eq!(body["cursor"]["col"], 0);
     assert_eq!(body["cursor"]["caret"], json!({"row": 0, "col": 0}));
-    assert_eq!(body["cells"], Value::Array(normalized_cells));
+    assert!(
+        !body.contains_key("cells"),
+        "the members other than the cells hold no cell"
+    );
+    let line: Value =
+        serde_json::from_str(&cells.line("s1", &body).expect("encode screen")).unwrap();
+    assert_eq!(line["body"]["cells"], Value::Array(normalized_cells));
+    assert_eq!(line["body"]["base"], true);
+    assert_eq!(line["body"]["number"], 1);
     assert_eq!(body["scrollback"]["offset"], 0);
     assert_eq!(body["scrollback"]["history"], 0);
     assert_eq!(body["background"], "#000000");
@@ -170,7 +181,7 @@ async fn screen_preparation_runs_outside_the_runtime_worker() {
 
 #[tokio::test]
 async fn screen_preparation_preserves_the_error() {
-    let error = prepare_screen_line(|| Err("screen cell is invalid".to_string()))
+    let error = prepare_screen_line(|| Err::<String, _>("screen cell is invalid".to_string()))
         .await
         .expect_err("reject invalid screen");
     assert_eq!(error, "screen cell is invalid");
@@ -178,9 +189,11 @@ async fn screen_preparation_preserves_the_error() {
 
 #[tokio::test]
 async fn screen_preparation_reports_a_failed_task() {
-    let error = prepare_screen_line(|| panic!("fixture screen preparation panic"))
-        .await
-        .expect_err("report failed preparation task");
+    let error = prepare_screen_line(|| -> Result<String, String> {
+        panic!("fixture screen preparation panic")
+    })
+    .await
+    .expect_err("report failed preparation task");
     assert!(
         error.starts_with("screen preparation task failed:"),
         "{error}"

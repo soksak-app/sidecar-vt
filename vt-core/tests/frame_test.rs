@@ -319,9 +319,17 @@ fn preedit_metadata_reports_effective_overlay_and_inverse_colors() {
     assert_eq!(inverse["foreground"], "#0000ff");
     assert_eq!(inverse["background"], "#ff0000");
 
-    let message =
-        soksak_sidecar_vt_core::protocol::screen_message("boot", 1, identity, render, &state, true)
-            .expect("screen message");
+    let message = soksak_sidecar_vt_core::protocol::screen_message(
+        "boot",
+        1,
+        soksak_sidecar_vt_core::screen_stream::ScreenStream::default().order(),
+        identity,
+        render,
+        &state,
+        true,
+    )
+    .map(|(message, _)| message)
+    .expect("screen message");
     assert_eq!(message["cells"][0]["grapheme"], "!");
     assert_eq!(message["cells"][0]["fg"], "#ff0000");
     assert_eq!(message["cells"][0]["bg"], "#0000ff");

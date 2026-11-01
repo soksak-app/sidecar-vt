@@ -7,5 +7,6 @@ replaces the three files with the new fixtures.
 
 `policy-cases.json` is the copy of `packages/log-contract/fixtures/policy/cases.json`, `replay-inputs.json` the copy of
 `packages/log-contract/fixtures/replay/inputs.json`, and `screen-hash.json` the copy of
-`packages/log-contract/fixtures/replay/screen-hash.json`. Core owns all three; a change of the contract replaces the
-copies.
+`packages/log-contract/fixtures/replay/screen-hash.json`. `screen-message.json` is the copy of core
+`docs/spec/cases/log-contract/replay/screen-message.json`, whose change sequences `vt-core/tests/screen_message_test.rs`
+reproduces. Core owns all four; a change of the contract replaces the copies.

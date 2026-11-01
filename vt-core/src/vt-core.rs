@@ -12,6 +12,7 @@ pub mod policy;
 pub mod protocol;
 pub mod pty;
 pub mod screen_hash;
+pub mod screen_stream;
 pub mod service;
 pub mod shell_integration;
 pub mod stall;

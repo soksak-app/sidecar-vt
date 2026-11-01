@@ -74,6 +74,8 @@ const lineClient = async (endpoint, clientName, { root = null } = {}) => {
   let buffered = "";
   const queued = [];
   const waiters = [];
+  // The screen that this connection holds for each surface, to which each screen message applies.
+  const screens = new Map();
   let socketError;
   socket.on("data", (chunk) => {
     buffered += chunk;
@@ -83,6 +85,7 @@ const lineClient = async (endpoint, clientName, { root = null } = {}) => {
       const line = buffered.slice(0, newline);
       buffered = buffered.slice(newline + 1);
       const value = JSON.parse(line);
+      if (value.body?.event === "screen") applyScreen(screens, value);
       const image = value.body?.image;
       if (root && value.surface && image?.token) {
         socket.write(`${JSON.stringify({ surface: value.surface, root, body: { image: { consumed: {
@@ -116,7 +119,25 @@ const lineClient = async (endpoint, clientName, { root = null } = {}) => {
   return { socket, next, write };
 };
 
-// The screen message holds rows x cols cells in row-major order (core docs/spec/terminal-runtime.md#screen-message).
+// Applies a screen message to the screen of its surface and gives the message every cell of that screen: a full form replaces the
+// screen, and a change replaces the rows it carries in the screen of the message it names (core
+// docs/spec/persistent-services.md#screen-message).
+const applyScreen = (screens, value) => {
+  const body = value.body;
+  if (body.base === true) {
+    screens.set(value.surface, { number: body.number, cells: body.cells.slice() });
+    return;
+  }
+  const held = screens.get(value.surface);
+  if (body.base !== false || held === undefined || body.previous !== held.number) {
+    fail(`screen change of ${value.surface} does not follow the held screen ${held?.number}: ${JSON.stringify(body)}`);
+  }
+  for (const { row, cells } of body.changed) held.cells.splice(row * body.cols, body.cols, ...cells);
+  held.number = body.number;
+  body.cells = held.cells.slice();
+};
+
+// The screen message holds rows x cols cells in row-major order once applied.
 const screenText = (value) => {
   const { cells, cols } = value.body;
   if (!Array.isArray(cells) || !Number.isInteger(cols)) fail(`screen event without cells and cols: ${JSON.stringify(value.body)}`);
