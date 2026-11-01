@@ -1,5 +1,5 @@
 # Test, build, and release of the terminal engine sidecar repository (docs/features.md).
-# The release uses sok from core.
+# The release is the npm pack file of vt-alacritty.
 .PHONY: install test build release candidate-release repeat push-check hooks
 
 MACOS_MINIMUM = 14.4
@@ -7,7 +7,8 @@ PROFILE ?= debug
 CARGO_PROFILE = $(if $(filter release,$(PROFILE)),--release,)
 FEATURES ?=
 CARGO_FEATURE_ARGS = $(if $(strip $(FEATURES)),--features $(FEATURES))
-SOK ?= sok
+# The platform key of the release (core docs/spec/installation.md#sidecar-release).
+PLATFORM := $(shell node -p '(process.platform === "win32" ? "windows" : process.platform) + "-" + process.arch')
 
 # soksak-events of the @soksak/plugin-api that package.json names applies the census of core to the sources
 # (docs/spec/logging.md#census with census.json) and checks the emit sites that the emitters of census.json declare against
@@ -56,16 +57,18 @@ build:
 
 release: build
 	@test -n "$(OUT)" || { echo "make release OUT=<folder>" >&2; exit 2; }
-	$(SOK) sidecar release vt-alacritty $(OUT)
+	@mkdir -p $(OUT)
+	@# npm pack keeps the execute bit of the executables, which pnpm pack drops.
+	file="$$(npm pack --silent --pack-destination $(OUT) ./vt-alacritty)" && mv "$(OUT)/$$file" "$(OUT)/$${file%.tgz}-$(PLATFORM).tgz"
 
 # Build and verify the local diagnostic candidate as one operation. Ordinary release stays non-diagnostic.
 candidate-release:
 	@test -n "$(OUT)" || { echo "make candidate-release OUT=<folder>" >&2; exit 2; }
 	@test "$(shell uname -s)" = Darwin || { echo "candidate-release requires macOS" >&2; exit 2; }
 	@mkdir -p "$(OUT)"
-	@test -z "$$(find "$(OUT)" -maxdepth 1 -type f -name 'soksak-sidecar-vt-alacritty-*.tar.gz' -print -quit)" || { echo "candidate-release requires an output folder without an existing VT release" >&2; exit 2; }
-	$(MAKE) release PROFILE=$(PROFILE) FEATURES=diagnostics OUT="$(OUT)" SOK="$(SOK)"
-	@release="$$(find "$(OUT)" -maxdepth 1 -type f -name 'soksak-sidecar-vt-alacritty-*.tar.gz' -print)"; \
+	@test -z "$$(find "$(OUT)" -maxdepth 1 -type f -name 'soksak-sidecar-vt-alacritty-*.tgz' -print -quit)" || { echo "candidate-release requires an output folder without an existing VT release" >&2; exit 2; }
+	$(MAKE) release PROFILE=$(PROFILE) FEATURES=diagnostics OUT="$(OUT)"
+	@release="$$(find "$(OUT)" -maxdepth 1 -type f -name 'soksak-sidecar-vt-alacritty-*.tgz' -print)"; \
 	  test -n "$$release" || { echo "candidate-release found no VT release in $(OUT)" >&2; exit 2; }; \
 	  test "$$(printf '%s\n' "$$release" | wc -l | tr -d ' ')" = 1 || { echo "candidate-release found multiple VT releases in $(OUT)" >&2; exit 2; }; \
 	  SOKSAK_DIAGNOSTIC_PACKAGE_RELEASE="$$release" node --test --test-concurrency=1 tests/versions.test.mjs tests/diagnostic_package.test.mjs

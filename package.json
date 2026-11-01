@@ -6,13 +6,13 @@
   "type": "module",
   "packageManager": "pnpm@11.24.0",
   "devDependencies": {
-    "@soksak/plugin-api": "https://github.com/soksak-app/core/releases/download/v0.0.21/soksak-plugin-api-0.0.21.tgz",
+    "@soksak/plugin-api": "https://github.com/soksak-app/core/releases/download/v0.0.25/soksak-plugin-api-0.0.25.tgz",
     "tree-sitter-bash": "0.25.1",
     "tree-sitter-javascript": "0.25.0",
     "tree-sitter-rust": "0.24.0",
     "web-tree-sitter": "0.27.1"
   },
   "optionalDependencies": {
-    "@soksak/native-process-identity-darwin": "https://github.com/soksak-app/core/releases/download/v0.0.21/soksak-native-process-identity-darwin-0.0.21.tgz"
+    "@soksak/native-process-identity-darwin": "https://github.com/soksak-app/core/releases/download/v0.0.25/soksak-native-process-identity-darwin-0.0.25.tgz"
   }
 }

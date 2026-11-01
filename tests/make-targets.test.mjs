@@ -31,7 +31,7 @@ test("make build and release pass an explicit diagnostics feature to Cargo (S78)
   const release = recipe("release", ["FEATURES=diagnostics", "OUT=/tmp/vt-s78-dry-run"]);
   assert.match(build, /cargo build\s+--features diagnostics\s+-p soksak-sidecar-vt-alacritty/);
   assert.match(release, /cargo build\s+--features diagnostics\s+-p soksak-sidecar-vt-alacritty/);
-  assert.match(release, /sok sidecar release vt-alacritty \/tmp\/vt-s78-dry-run/);
+  assert.match(release, /npm pack --silent --pack-destination \/tmp\/vt-s78-dry-run \.\/vt-alacritty/);
 });
 
 test("the pre-push hook runs make push-check on the pushed range (S72)", { timeout: 30000 }, () => {

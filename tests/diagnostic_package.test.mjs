@@ -36,7 +36,7 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
   const serviceDir = join(root, "service");
   const logsDir = join(root, "logs");
   const traceDir = join(root, "trace");
-  const assetPath = join(root, "candidate.tar.gz");
+  const assetPath = join(root, "candidate.tgz");
   await Promise.all([
     mkdir(extracted, { recursive: true }), mkdir(serviceDir, { recursive: true }),
     mkdir(logsDir, { recursive: true }), mkdir(traceDir, { recursive: true }),
@@ -47,7 +47,8 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
     classes: Object.fromEntries(["lifecycle", "input", "call", "io", "frame"].map((name) => [name, "trace"])),
   }));
   if (release) execFileSync("tar", ["-xzf", assetPath, "-C", extracted], { stdio: "pipe" });
-  const packageRoot = installed ?? extracted;
+  // npm pack writes every file of the release under package/.
+  const packageRoot = installed ?? join(extracted, "package");
   const packageInfo = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
   assert.equal(packageInfo.name, "@soksak/sidecar-vt-alacritty", "release package identity differs");
   assert.match(packageInfo.version, /^0\.0\.\d+$/, "release package version is invalid");
@@ -154,7 +155,7 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
     assert.ok(initialScreen.body.render && typeof initialScreen.body.render === "object",
       `diagnostics build omitted matching render metadata (frame ${JSON.stringify(frame)}, version ${packageInfo.version})`);
     assert.deepEqual(initialScreen.body.render.frame, frame, "render metadata names a different frame");
-    assert.equal(packageInfo.version, "0.0.17", "candidate release package version differs");
+    assert.equal(packageInfo.version, "0.0.18", "candidate release package version differs");
     t.diagnostic(`PASS rendered_frame=${JSON.stringify(frame)}`);
 
     const payload = "printf 'S85_TRACE\\n'";
