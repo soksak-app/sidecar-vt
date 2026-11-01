@@ -28,6 +28,7 @@
 
 ## Unreleased
 
+- S113: The version is 0.0.19.
 - F355-3-4-vt: The checks come from the records kit and events kit releases instead of the plugin API of core, and `SOKSAK_EVENTS`, which ran the census check of a core checkout, is removed. Red: `the checks come from the kit releases, and no check takes a command or the plugin API of core` failed. Green: it passes, and the workflow, events and census tests pass.
 - S112: `pnpm-workspace.yaml` no longer allows the build script of a git source of core, because the dependency is the packed release file of core v0.0.21, which has no install script.
 - S97.1, S75.2 and S86-3: v0.0.17 is published and the registry lists it.
