@@ -134,6 +134,10 @@ The page also sends every left-button press, movement while pressed, and release
 
 The `sidecar` and `native image` sources also report the surface error that the card shows. Neither is resolved, so the card indicator and `terminal.session.error` show the error until the surface closes.
 
+### Lease answers
+
+A frame keeps a pool of target surfaces and draws only into a surface that the host does not hold and that the window server does not mark in use; when none is free it creates one, so a draw never waits for a surface. The host answers a frame of a region in the copy mode of core with `consumed` and of a region in the lease mode with `leased` ([native surfaces](https://github.com/soksak-app/core/blob/main/docs/spec/native-surfaces.md#image-regions)). Both answers end the wait for the frame in flight; `leased` also holds its surface. `{"image":{"released":{name, generation, raster, sequence}}}` returns the surface of that leased frame. A release of a frame of the current raster that is not leased is answered with `invalidParams` and `released names no leased frame`; a release of a frame of an earlier raster or generation, whose surfaces were dropped with it, changes nothing. The event `sidecar.vt.released` records each release with `held`.
+
 ### GPU frame
 
 A frame created by `Frame::new_gpu` draws through a Metal render pass into its IOSurface. Its pixels equal those of the CoreGraphics frame for the same screen, so the CoreGraphics frame is the single reference of both draws.

@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S121-4: service는 core lease 방식의 `leased`와 `released` 응답을 처리하므로, frame이 host가 보이는 surface에 그리지 않는다.
 - S121-4-1: frame은 목표 surface pool을 두고, host가 쥐지 않았고 in use가 아닌 surface에만 그린다.
 - S121-3: GPU frame은 overlay surface로 CoreGraphics frame과 같은 pixel의 inline image를 합성한다.
 - S121-2: GPU frame은 CoreGraphics 칸 loop가 그린 행 strip으로 글자, 넓은 글자, 밑줄, preedit을 그리고, 바뀐 행의 strip만 다시 그린다.

@@ -136,6 +136,10 @@ Native IME는 marked text를 소유한다. 각 native input report는 순서 있
 
 `sidecar`와 `native image` 원천은 카드가 보여 주는 표면 오류도 보고한다. 둘 다 해결되지 않으므로, 카드 표시와 `terminal.session.error`는 표면이 닫힐 때까지 그 오류를 보여 준다.
 
+### Lease 응답
+
+frame은 목표 surface pool을 두고, host가 쥐지 않았고 window server가 in use로 표시하지 않은 surface에만 그린다. 그런 surface가 없으면 새로 만들므로 그리기는 surface를 기다리지 않는다. host는 core의 copy 방식 region의 frame에 `consumed`로, lease 방식 region의 frame에 `leased`로 답한다([native surfaces](https://github.com/soksak-app/core/blob/main/docs/spec/native-surfaces.ko.md#그림-영역)). 두 응답 모두 보낸 frame의 기다림을 끝내고, `leased`는 그 surface를 hold한다. `{"image":{"released":{name, generation, raster, sequence}}}`는 그 leased frame의 surface를 돌려준다. 현재 raster의 frame 가운데 lease되지 않은 frame의 release에는 `invalidParams`와 `released names no leased frame`으로 답한다. 이전 raster나 generation의 frame은 그 surface를 raster와 함께 버렸으므로, 그 release는 아무것도 바꾸지 않는다. event `sidecar.vt.released`가 각 release를 `held`와 함께 기록한다.
+
 ### GPU frame
 
 `Frame::new_gpu`가 만든 frame은 Metal render pass로 자기 IOSurface에 그린다. 그 pixel은 같은 화면의 CoreGraphics frame과 같으므로, CoreGraphics frame이 두 그리기의 유일한 기준이다.

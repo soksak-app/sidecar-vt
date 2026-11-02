@@ -1,5 +1,6 @@
 # Changelog
 
+- S121-4: The service handles the `leased` and `released` answers of the lease mode of core, so a frame never draws into a surface that the host shows.
 - S121-4-1: A frame keeps a pool of target surfaces and draws only into a surface that the host does not hold and that is not in use.
 - S121-3: The GPU frame composites inline images through an overlay surface with the pixels of the CoreGraphics frame.
 - S121-2: The GPU frame draws text, wide characters, underlines and the preedit from row strips that the CoreGraphics cell loop draws, and redraws only the strips of rows that changed.
