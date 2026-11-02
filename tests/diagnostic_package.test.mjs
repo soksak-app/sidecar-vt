@@ -22,9 +22,28 @@ function within(promise, label, timeoutMs = STEP_TIMEOUT_MS) {
   ]).finally(() => clearTimeout(timer));
 }
 
+// The text of the screen that a screen message gives after it is applied to the screen of the message it follows.
 function screenText(body) {
-  assert.ok(Array.isArray(body.cells), "screen cells are required");
-  return body.cells.map((cell) => cell.grapheme ?? " ".repeat(cell.width)).join("");
+  assert.ok(Array.isArray(body.screen), "screen cells are required");
+  return body.screen.map((cell) => cell.grapheme ?? " ".repeat(cell.width)).join("");
+}
+
+/**
+ * Applies a screen message to the held screen of its surface, in the order of the messages: the full form gives every cell, and a
+ * change form replaces its rows in the screen of the message that it names (core docs/spec/persistent-services.md#screen-message).
+ * The body receives the cells of the whole screen as `screen`.
+ */
+function applyScreen(held, body) {
+  if (body.base === true) {
+    held.number = body.number;
+    held.cols = body.cols;
+    held.cells = body.cells.slice();
+  } else {
+    assert.equal(body.previous, held.number, `screen ${body.number} changes ${body.previous}, but the held screen is ${held.number}`);
+    for (const change of body.changed) held.cells.splice(change.row * held.cols, held.cols, ...change.cells);
+    held.number = body.number;
+  }
+  body.screen = held.cells.slice();
 }
 
 test("packaged diagnostics binary reports matching render metadata and engine trace", {
@@ -82,7 +101,9 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
       waiter.resolve = (value) => { clearTimeout(timer); resolve(value); };
     }), label, STEP_TIMEOUT_MS);
   };
+  const held = { number: null, cols: 0, cells: [] };
   const deliver = (message) => {
+    if (message.surface === surface && message.body?.event === "screen") applyScreen(held, message.body);
     const image = message.body?.image;
     if (message.surface === surface && image?.token) {
       images.push({ generation: image.generation, raster: image.raster, sequence: image.sequence });

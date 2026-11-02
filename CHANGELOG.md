@@ -1,5 +1,6 @@
 # Changelog
 
+- S116: The diagnostic package test applies each screen message to the screen of the message it follows, so a change form without `cells` no longer fails the candidate release. Red: the candidate release failed with `screen cells are required`. Green: it passes.
 - S114: Every `screen` message carries `number`, and a message carries only the rows that changed since the sent message that it names (`base: false`, `previous`, `changed`) except the full form after a resize, after a reconnection, after an unsent message, for `screen.read` and when more than half of the rows changed; the line is written from the held rows without a copy of the cells.
 - F355-4-vt: Version 0.0.18. `make release OUT=<folder>` writes the release with `npm pack` of `vt-alacritty`, which keeps the execute bit, and release.yml no longer downloads the sok of a core release, because core installs the `npm pack` file of a sidecar and has no `sok sidecar release`. The dependencies on core are pinned to the core release `v0.0.25`.
 - F272-vt-sidecar: A push to `main` releases the declared version through `soksak-release-gate` when its tag is absent, with the `sok` of the core release `v0.0.21`, and the dependencies on core are the packed release files of that release; no workflow checks out core.
