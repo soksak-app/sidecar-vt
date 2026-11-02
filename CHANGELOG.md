@@ -1,5 +1,6 @@
 # Changelog
 
+- S120: Version 0.0.22, which carries S119.
 - S119: While the host reports that its image region is not drawing, a surface draws no frame and sends no `screen` event; when the region draws again it draws and sends the changed screen once. A drawing state of an earlier generation is ignored, and an invalid drawing message is answered with `invalidParams`.
 - S118: Version 0.0.21, which carries S117.
 - S117: Sessions that start at the same time each write the shell integration files through a temporary file of their own, so opening several terminals at once no longer fails with `install shell integration file ...: No such file or directory`. Red: the concurrent install test failed with that error. Green: it passes.
