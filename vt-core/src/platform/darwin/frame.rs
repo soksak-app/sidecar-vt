@@ -254,12 +254,6 @@ unsafe impl Sync for CFrame {}
 
 unsafe extern "C" {
     fn frame_new(width_px: u32, height_px: u32) -> *mut CFrame;
-    fn frame_new_gpu(width_px: u32, height_px: u32) -> *mut CFrame;
-    fn frame_gpu_error() -> *const std::ffi::c_char;
-    fn frame_hold(frame: *mut CFrame, id: u32) -> i32;
-    fn frame_release(frame: *mut CFrame, id: u32) -> i32;
-    #[cfg(feature = "diagnostics")]
-    fn frame_gpu_strips_drawn(frame: *mut CFrame) -> u32;
     fn frame_id(frame: *mut CFrame) -> u32;
     fn frame_nonce(frame: *mut CFrame, buf: *mut u8);
     fn frame_draw_with_inline_images(
@@ -407,45 +401,6 @@ impl Frame {
                     height: height_px,
                 })
             }
-        }
-    }
-
-    /// A frame whose draws run through a Metal render pass into its IOSurface.
-    pub fn new_gpu(width_px: u32, height_px: u32) -> Result<Frame, String> {
-        let ptr = unsafe { frame_new_gpu(width_px, height_px) };
-        if ptr.is_null() {
-            let cause = unsafe { std::ffi::CStr::from_ptr(frame_gpu_error()) };
-            return Err(format!(
-                "the GPU frame is not created: {}",
-                cause.to_string_lossy()
-            ));
-        }
-        Ok(Frame {
-            ptr,
-            width: width_px,
-            height: height_px,
-        })
-    }
-
-    /// The count of strips that the last draw of a GPU frame drew.
-    #[cfg(feature = "diagnostics")]
-    pub fn strips_drawn(&self) -> u32 {
-        unsafe { frame_gpu_strips_drawn(self.ptr) }
-    }
-
-    /// Marks the target surface `id` as held by the host, so no draw writes it until it is released.
-    pub fn hold(&self, id: u32) -> Result<(), String> {
-        match unsafe { frame_hold(self.ptr, id) } {
-            0 => Ok(()),
-            _ => Err(format!("the frame has no surface {id}")),
-        }
-    }
-
-    /// Releases the target surface `id` that the host held.
-    pub fn release(&self, id: u32) -> Result<(), String> {
-        match unsafe { frame_release(self.ptr, id) } {
-            0 => Ok(()),
-            _ => Err(format!("the frame holds no surface {id}")),
         }
     }
 
@@ -687,14 +642,8 @@ impl Frame {
             )
         };
 
-        match result {
-            0 => {}
-            -3 => return Err("the GPU frame collects no render metadata".to_string()),
-            -4 => {
-                let cause = unsafe { std::ffi::CStr::from_ptr(frame_gpu_error()) };
-                return Err(cause.to_string_lossy().into_owned());
-            }
-            _ => return Err("Frame draw failed".to_string()),
+        if result != 0 {
+            return Err("Frame draw failed".to_string());
         }
         if !collect_metadata {
             return Ok(None);

@@ -946,40 +946,6 @@
         ]
       },
       "description": "A scroll operation of the page was routed. route is program (the wheel is written to the program), alternate_scroll (cursor keys are written) or viewport (the primary viewport moves). shift is true when Shift was held, which skips the program route. The modes are the modes in force when it was routed."
-    },
-    "sidecar.vt.released": {
-      "layer": "sidecar",
-      "class": "frame",
-      "level": "debug",
-      "fields": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "generation": {
-            "type": "number"
-          },
-          "raster": {
-            "type": "number"
-          },
-          "sequence": {
-            "type": "number"
-          },
-          "held": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "name",
-          "generation",
-          "raster",
-          "sequence",
-          "held"
-        ]
-      },
-      "description": "The host released a frame that it held in the lease mode. held is true when the current raster held the frame and its surface can be drawn again, and false when the frame belongs to an earlier raster or generation whose surfaces were dropped with it."
     }
   }
 }

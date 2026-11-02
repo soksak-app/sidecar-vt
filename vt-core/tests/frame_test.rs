@@ -1886,35 +1886,3 @@ fn the_padding_outside_the_cell_grid_uses_the_screen_default_background() {
         "the empty cell keeps the theme background instead of the screen's"
     );
 }
-
-#[test]
-fn a_glyph_that_crosses_its_row_box_leaves_no_ink_outside_its_row() {
-    let metrics = metrics(13.0, 2.0);
-    let cell_height = metrics.cell_height as u32;
-    let width = metrics.cell_width as u32 * 4;
-    let height = cell_height * 3;
-    let mut screen = screen(4, 3);
-    screen.cursor.visible = false;
-    // Stacked combining marks above and below a letter reach past the ascent and the descent of the font.
-    screen.lines[1][1].ch =
-        Some("e\u{301}\u{301}\u{301}\u{301}\u{301}\u{316}\u{316}\u{316}\u{316}\u{316}".to_string());
-    let frame = Frame::new(width, height).expect("frame");
-    frame.draw(&screen, &metrics).expect("draw");
-    let background = frame.read_pixel(0, 0).expect("pixel");
-    let inside = (cell_height..cell_height * 2)
-        .flat_map(|y| (0..width).map(move |x| (x, y)))
-        .filter(|&(x, y)| frame.read_pixel(x, y).expect("pixel") != background)
-        .count();
-    let outside: Vec<(u32, u32)> = (0..height)
-        .filter(|y| !(cell_height..cell_height * 2).contains(y))
-        .flat_map(|y| (0..width).map(move |x| (x, y)))
-        .filter(|&(x, y)| frame.read_pixel(x, y).expect("pixel") != background)
-        .collect();
-    assert!(inside > 0, "the glyph left no ink in its row");
-    assert!(
-        outside.is_empty(),
-        "{} pixels outside row 1 carry ink, first {:?}",
-        outside.len(),
-        &outside[..outside.len().min(6)]
-    );
-}

@@ -39,7 +39,6 @@ test: build
 	cargo fmt --all --check
 	$(NEXTEST) --workspace
 	$(NEXTEST) -p soksak-sidecar-vt-core --features diagnostics --test engine_trace_test
-	$(NEXTEST) -p soksak-sidecar-vt-core --features diagnostics --test frame_gpu_test -E 'test(=the_gpu_frame_draws_only_the_strips_of_changed_rows)'
 	$(NEXTEST) -p soksak-sidecar-vt-core --features fault-injection --test fault_injection
 	$(NEXTEST) -p soksak-sidecar-vt-core --features fault-injection --test serve_contract -E 'test(=a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it)'
 	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo clippy --workspace --all-targets --features diagnostics -- -D warnings

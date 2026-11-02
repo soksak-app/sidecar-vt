@@ -109,21 +109,6 @@ typedef struct Frame Frame;
 // 실패하면 NULL 을 반환한다
 Frame* frame_new(uint32_t width_px, uint32_t height_px);
 
-// Creates a frame of the given pixel size whose draws run through a Metal render pass into its IOSurface.
-// Returns NULL on failure, and frame_gpu_error names the cause.
-Frame* frame_new_gpu(uint32_t width_px, uint32_t height_px);
-const char *frame_gpu_error(void);
-
-// A frame keeps a pool of target surfaces. frame_hold marks the target with the surface id as held by the host, and
-// frame_release returns it; a draw writes only a target that is neither held nor in use, and creates one otherwise.
-// Both return -1 for an id that the frame does not have, and frame_release also for a target that is not held.
-int frame_hold(Frame *frame, uint32_t id);
-int frame_release(Frame *frame, uint32_t id);
-#ifdef SOKSAK_DIAGNOSTICS
-// The count of strips that the last draw of a GPU frame drew.
-uint32_t frame_gpu_strips_drawn(Frame *frame);
-#endif
-
 // IOSurface ID (u32) 를 가져온다
 uint32_t frame_id(Frame *frame);
 

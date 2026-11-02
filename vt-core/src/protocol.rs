@@ -2174,7 +2174,6 @@ async fn present_screen(
     });
     state.render = render.map(|render| render.value(frame));
     state.pending_draw = true;
-    state.sent_surface = state.frame.id();
     state.sent_at = Some(std::time::Instant::now());
     state.dirty = false;
     let nonce = state.frame.nonce();
@@ -2397,7 +2396,7 @@ fn release_image_state(surface_id: &str, state: ImageState) -> Vec<InlineImagePl
     inline_images
 }
 
-/// The transfer image that the host's answer (consumed, leased or error) to a display request refers to.
+/// The transfer image that the host's answer (consumed or error) to a display request refers to.
 struct ImageAnswer<'a> {
     name: &'a str,
     generation: u64,
@@ -2405,19 +2404,14 @@ struct ImageAnswer<'a> {
     sequence: u64,
 }
 
-/// The name, generation, raster, and sequence number of the host's answer (consumed, leased or error)
-/// to a display request.
+/// The name, generation, raster, and sequence number of the host's answer (consumed or error) to a
+/// display request.
 fn image_answer(image: &serde_json::Map<String, Value>) -> Option<ImageAnswer<'_>> {
-    let answer = match image.get("consumed").or_else(|| image.get("leased")) {
-        Some(answer) => answer.as_object()?,
+    let answer = match image.get("consumed") {
+        Some(consumed) => consumed.as_object()?,
         None if image.contains_key("error") => image,
         None => return None,
     };
-    frame_identity(answer)
-}
-
-/// The name, generation, raster, and sequence number of a frame that an image message names.
-fn frame_identity(answer: &serde_json::Map<String, Value>) -> Option<ImageAnswer<'_>> {
     Some(ImageAnswer {
         name: answer.get("name")?.as_str()?,
         generation: answer.get("generation")?.as_u64()?,
@@ -4461,49 +4455,7 @@ async fn surface_task(
                     }
                     SurfaceCommand::ImageResponse { body, dispatched_at } => {
                         let image_obj = body.get("image").and_then(|v| v.as_object());
-                        // In the lease mode of core the host releases a frame that it held (core
-                        // docs/spec/native-surfaces.md#image-regions), so its surface can be drawn again.
-                        if let Some(released) = image_obj.and_then(|o| o.get("released")) {
-                            let Some(answer) = released.as_object().and_then(frame_identity) else {
-                                let response = json!({"surface": surface_id,
-                                    "body": {"error": "invalidParams", "reason": "invalid image released"}});
-                                if output_tx.reply(response).await.is_err() { return; }
-                                continue;
-                            };
-                            let current = image_state.as_mut().filter(|state| answer.name == state.name
-                                && answer.generation == state.generation && answer.raster == state.raster);
-                            let held = match current {
-                                Some(state) => {
-                                    let Some(index) = state.leases.iter().position(|(sequence, _)| u64::from(*sequence) == answer.sequence) else {
-                                        let response = json!({"surface": surface_id,
-                                            "body": {"error": "invalidParams", "reason": "released names no leased frame"}});
-                                        if output_tx.reply(response).await.is_err() { return; }
-                                        continue;
-                                    };
-                                    let (_, surface) = state.leases.remove(index);
-                                    if let Err(reason) = state.frame.release(surface) {
-                                        let response = json!({"surface": surface_id,
-                                            "body": {"error": "invalidParams", "reason": reason}});
-                                        if output_tx.reply(response).await.is_err() { return; }
-                                        continue;
-                                    }
-                                    true
-                                }
-                                // The frame belongs to an earlier raster or generation, whose surfaces the
-                                // surface dropped with that raster.
-                                None => false,
-                            };
-                            log.emit_for(Level::Debug, "sidecar.vt.released", Subject::surface(&surface_id), &serde_json::json!({
-                                "name": answer.name,
-                                "generation": answer.generation,
-                                "raster": answer.raster,
-                                "sequence": answer.sequence,
-                                "held": held,
-                            }));
-                            continue;
-                        }
                         let consumed = image_obj.and_then(|o| o.get("consumed")).and_then(|v| v.as_object());
-                        let leased = image_obj.and_then(|o| o.get("leased")).and_then(|v| v.as_object());
                         let is_error = image_obj.is_some_and(|o| o.get("error").is_some());
                         let answer = image_obj.and_then(image_answer);
                         // Only the complete identity of the frame in flight may release this draw.
@@ -4517,7 +4469,7 @@ async fn surface_task(
                                         && answer.raster == state.raster
                                         && answer.sequence == u64::from(state.sequence)
                                 })
-                                && (consumed.is_some() || leased.is_some() || is_error));
+                                && (consumed.is_some() || is_error));
                         if releases_pending {
                             // Instrument of the wait for transfer completion (V5-104): from the
                             // moment of sending to the consumed or error reply.
@@ -4531,22 +4483,12 @@ async fn surface_task(
                                     "sequence": state.sequence,
                                     "wait_us": handled_at.duration_since(sent).as_micros() as u64,
                                     "queue_us": dispatched_at.map(|at| handled_at.duration_since(at).as_micros() as u64),
-                                    "answer": if consumed.is_some() { "consumed" } else if leased.is_some() { "leased" } else { "error" },
+                                    "answer": if consumed.is_some() { "consumed" } else { "error" },
                                 }));
                             }
                             let state = image_state.as_mut().unwrap();
                             state.pending_draw = false;
                             state.carrier = None;
-                            // The host holds a leased surface and shows it until it releases it.
-                            if leased.is_some() {
-                                if let Err(reason) = state.frame.hold(state.sent_surface) {
-                                    let response = json!({"surface": surface_id,
-                                        "body": {"error": "invalidParams", "reason": reason}});
-                                    if output_tx.reply(response).await.is_err() { return; }
-                                    continue;
-                                }
-                                state.leases.push((state.sequence, state.sent_surface));
-                            }
                             if let Some(configuration) = pending_configuration.take() {
                                 let new_state = match ImageState::new(&configuration, &terminal_font, terminal_font_size) {
                                     Ok(state) => state,

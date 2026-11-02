@@ -40,10 +40,6 @@ pub struct ImageState {
     pub carrier: Option<std::sync::Arc<crate::protocol::TransferStore>>,
     /// The session whose screen this raster draws, which the event of a frame names.
     pub session: Option<String>,
-    /// The surface of the frame in flight, which a `leased` answer holds.
-    pub sent_surface: u32,
-    /// The frames that the host holds in the lease mode of core, by sequence and surface, until it releases them.
-    pub leases: Vec<(u32, u32)>,
 }
 
 /// The raster that the host sets with configure: name, generation, raster number, pixel size, and
@@ -96,8 +92,6 @@ impl ImageState {
             sent_at: None,
             carrier: None,
             session: None,
-            sent_surface: 0,
-            leases: Vec::new(),
         })
     }
 
