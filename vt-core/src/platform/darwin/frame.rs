@@ -671,7 +671,6 @@ impl Frame {
 
         match result {
             0 => {}
-            -2 => return Err("the GPU frame draws no inline image".to_string()),
             -3 => return Err("the GPU frame collects no render metadata".to_string()),
             -4 => {
                 let cause = unsafe { std::ffi::CStr::from_ptr(frame_gpu_error()) };

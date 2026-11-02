@@ -26,6 +26,10 @@ struct Frame {
     // drawn with (a retained NSData), and the count of strips that the last draw drew.
     IOSurfaceRef strips;
     void *strip_texture;
+    // The overlay of a GPU frame: a surface of the frame size into which the CoreGraphics draw composites the inline
+    // images over a copy of the strip pixels under them, and its Metal texture.
+    IOSurfaceRef overlay;
+    void *overlay_texture;
     void *rows;
     void *configuration;
     uint32_t strips_drawn;
@@ -96,6 +100,8 @@ static Frame* frame_create(uint32_t width_px, uint32_t height_px, int gpu) {
     frame->texture = NULL;
     frame->strips = NULL;
     frame->strip_texture = NULL;
+    frame->overlay = NULL;
+    frame->overlay_texture = NULL;
     frame->rows = NULL;
     frame->configuration = NULL;
     frame->strips_drawn = 0;
@@ -258,19 +264,26 @@ Frame* frame_new_gpu(uint32_t width_px, uint32_t height_px) {
         return NULL;
     }
     frame->texture = (__bridge_retained void *)texture;
+    // The strip and overlay surfaces belong to this frame; the frames that created them only carry them.
     Frame *strips = frame_create(width_px, height_px, 1);
+    Frame *overlay = frame_create(width_px, height_px, 1);
     id<MTLTexture> strip_texture = strips ? [gpu_device newTextureWithDescriptor:descriptor iosurface:strips->surface plane:0] : nil;
-    if (!strip_texture) {
-        gpu_fail(@"Metal gives no texture over the strip surface of the frame", nil);
+    id<MTLTexture> overlay_texture = overlay ? [gpu_device newTextureWithDescriptor:descriptor iosurface:overlay->surface plane:0] : nil;
+    if (!strip_texture || !overlay_texture) {
+        gpu_fail(@"Metal gives no texture over the strip or overlay surface of the frame", nil);
         frame_drop(strips);
+        frame_drop(overlay);
         frame_drop(frame);
         return NULL;
     }
-    // The strip surface belongs to this frame; the frame that created it only carried it.
     frame->strips = strips->surface;
     strips->surface = NULL;
     frame_drop(strips);
     frame->strip_texture = (__bridge_retained void *)strip_texture;
+    frame->overlay = overlay->surface;
+    overlay->surface = NULL;
+    frame_drop(overlay);
+    frame->overlay_texture = (__bridge_retained void *)overlay_texture;
     frame->rows = (__bridge_retained void *)[NSMutableArray array];
     return frame;
 }
@@ -302,6 +315,38 @@ static void gpu_encode(id<MTLRenderCommandEncoder> encoder, id<MTLRenderPipeline
 
 static int frame_draw_gpu(Frame *frame, Screen *screen, Metrics *metrics, InlineImageRaster *images, uint32_t image_count,
                           RenderOutput *render_output);
+
+// Decodes an inline image and gives the size at which the frame draws it, or returns NULL when the data is missing, does
+// not decode, or the image does not fit inside the frame. Both draws use it, so they refuse and size the same images.
+static CGImageRef inline_image_decode(const Frame *frame, const InlineImageRaster *raster, CGFloat *drawn_width,
+                                      CGFloat *drawn_height) {
+    if (!raster->data || raster->data_len == 0) return NULL;
+    CFDataRef image_data = CFDataCreate(NULL, raster->data, raster->data_len);
+    CGImageSourceRef source = image_data ? CGImageSourceCreateWithData(image_data, NULL) : NULL;
+    CGImageRef image = source ? CGImageSourceCreateImageAtIndex(source, 0, NULL) : NULL;
+    if (image_data) CFRelease(image_data);
+    if (source) CFRelease(source);
+    if (!image) return NULL;
+    CGFloat width = raster->width ? raster->width : (CGFloat)CGImageGetWidth(image);
+    CGFloat height = raster->height ? raster->height : (CGFloat)CGImageGetHeight(image);
+    if (raster->preserve_aspect_ratio) {
+        CGFloat natural_width = (CGFloat)CGImageGetWidth(image);
+        CGFloat natural_height = (CGFloat)CGImageGetHeight(image);
+        if (raster->width && !raster->height) {
+            height = width * natural_height / natural_width;
+        } else if (!raster->width && raster->height) {
+            width = height * natural_width / natural_height;
+        }
+    }
+    if (width <= 0 || height <= 0 || raster->x >= frame->width || raster->y >= frame->height ||
+        width > frame->width - raster->x || height > frame->height - raster->y) {
+        CGImageRelease(image);
+        return NULL;
+    }
+    *drawn_width = width;
+    *drawn_height = height;
+    return image;
+}
 
 uint32_t frame_id(Frame *frame) {
     if (!frame) return 0;
@@ -403,6 +448,11 @@ static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Met
             if (!rows[row]) continue;
             CGContextFillRect(ctx, CGRectMake(0, (CGFloat)frame->height - ((CGFloat)row + 1.0) * metrics->cell_height,
                                               (CGFloat)frame->width, metrics->cell_height));
+        }
+        // The margin below the rows holds the default background, so the strips cover the whole frame.
+        CGFloat rows_height = (CGFloat)screen->height * metrics->cell_height;
+        if (rows_height < (CGFloat)frame->height) {
+            CGContextFillRect(ctx, CGRectMake(0, 0, (CGFloat)frame->width, (CGFloat)frame->height - rows_height));
         }
     }
 
@@ -599,41 +649,10 @@ static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Met
     for (uint32_t i = 0; !rows && i < image_count; i++) {
         InlineImageRaster *raster = &images[i];
         if (!raster->visible) continue;
-        if (!raster->data || raster->data_len == 0) {
-            CFRelease(font);
-            CGContextRelease(ctx);
-            CGColorRelease(default_fg_color);
-            CGColorRelease(default_bg_color);
-            IOSurfaceUnlock(surface, 0, NULL);
-            return -1;
-        }
-        CFDataRef image_data = CFDataCreate(NULL, raster->data, raster->data_len);
-        CGImageSourceRef source = image_data ? CGImageSourceCreateWithData(image_data, NULL) : NULL;
-        CGImageRef image = source ? CGImageSourceCreateImageAtIndex(source, 0, NULL) : NULL;
-        if (image_data) CFRelease(image_data);
-        if (source) CFRelease(source);
+        CGFloat width = 0;
+        CGFloat height = 0;
+        CGImageRef image = inline_image_decode(frame, raster, &width, &height);
         if (!image) {
-            CFRelease(font);
-            CGContextRelease(ctx);
-            CGColorRelease(default_fg_color);
-            CGColorRelease(default_bg_color);
-            IOSurfaceUnlock(surface, 0, NULL);
-            return -1;
-        }
-        CGFloat width = raster->width ? raster->width : (CGFloat)CGImageGetWidth(image);
-        CGFloat height = raster->height ? raster->height : (CGFloat)CGImageGetHeight(image);
-        if (raster->preserve_aspect_ratio) {
-            CGFloat natural_width = (CGFloat)CGImageGetWidth(image);
-            CGFloat natural_height = (CGFloat)CGImageGetHeight(image);
-            if (raster->width && !raster->height) {
-                height = width * natural_height / natural_width;
-            } else if (!raster->width && raster->height) {
-                width = height * natural_width / natural_height;
-            }
-        }
-        if (width <= 0 || height <= 0 || raster->x >= frame->width || raster->y >= frame->height ||
-            width > frame->width - raster->x || height > frame->height - raster->y) {
-            CGImageRelease(image);
             CFRelease(font);
             CGContextRelease(ctx);
             CGColorRelease(default_fg_color);
@@ -724,21 +743,70 @@ static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Met
     return 0;
 }
 
+// Composites the visible inline images into the overlay surface: it copies the strip pixels of each image rectangle into
+// the overlay, then draws every image in order with the CGContextDrawImage call of the CoreGraphics frame, and appends the
+// rectangle of each image (as an MTLRegion) to rects. An image that does not decode or fit returns -1.
+static int frame_draw_overlay(Frame *frame, InlineImageRaster *images, uint32_t image_count, NSMutableData *rects) {
+    NSMutableArray *decoded = [NSMutableArray array];
+    NSMutableData *sizes = [NSMutableData data];
+    for (uint32_t i = 0; i < image_count; i++) {
+        InlineImageRaster *raster = &images[i];
+        if (!raster->visible) continue;
+        CGFloat size[2] = {0, 0};
+        CGImageRef image = inline_image_decode(frame, raster, &size[0], &size[1]);
+        if (!image) return -1;
+        [decoded addObject:(__bridge_transfer id)image];
+        [sizes appendBytes:size length:sizeof(size)];
+        MTLRegion region = MTLRegionMake2D(raster->x, raster->y, (NSUInteger)ceil(size[0]), (NSUInteger)ceil(size[1]));
+        [rects appendBytes:&region length:sizeof(region)];
+    }
+    if (decoded.count == 0) return 0;
+    IOSurfaceLock(frame->strips, kIOSurfaceLockReadOnly, NULL);
+    IOSurfaceLock(frame->overlay, 0, NULL);
+    const uint8_t *strip_base = IOSurfaceGetBaseAddress(frame->strips);
+    uint8_t *overlay_base = IOSurfaceGetBaseAddress(frame->overlay);
+    size_t strip_row = IOSurfaceGetBytesPerRow(frame->strips);
+    size_t overlay_row = IOSurfaceGetBytesPerRow(frame->overlay);
+    for (NSUInteger i = 0; i < decoded.count; i++) {
+        MTLRegion region = ((const MTLRegion *)rects.bytes)[i];
+        for (NSUInteger y = region.origin.y; y < region.origin.y + region.size.height; y++) {
+            memcpy(overlay_base + y * overlay_row + region.origin.x * 4, strip_base + y * strip_row + region.origin.x * 4,
+                   region.size.width * 4);
+        }
+    }
+    IOSurfaceUnlock(frame->strips, kIOSurfaceLockReadOnly, NULL);
+    CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGContextRef ctx = color_space ? CGBitmapContextCreateWithData(overlay_base, frame->width, frame->height, 8, overlay_row, color_space,
+                                                                   kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little, NULL, NULL)
+                                   : NULL;
+    if (color_space) CGColorSpaceRelease(color_space);
+    if (!ctx) {
+        IOSurfaceUnlock(frame->overlay, 0, NULL);
+        return -1;
+    }
+    for (NSUInteger i = 0; i < decoded.count; i++) {
+        const CGFloat *size = (const CGFloat *)sizes.bytes + i * 2;
+        MTLRegion region = ((const MTLRegion *)rects.bytes)[i];
+        CGContextDrawImage(ctx, CGRectMake(region.origin.x, frame->height - region.origin.y - size[1], size[0], size[1]),
+                           (__bridge CGImageRef)decoded[i]);
+    }
+    CGContextRelease(ctx);
+    IOSurfaceUnlock(frame->overlay, 0, NULL);
+    return 0;
+}
+
 static void serialize_append(NSMutableData *data, const void *bytes, size_t length) {
     [data appendBytes:bytes length:length];
 }
 
 // Draws the screen through Metal. The CoreGraphics cell loop draws the rows whose cells differ from the cells their strip
 // was drawn with into the strip surface; the render pass copies the strips into the frame, fills the margin below the rows
-// with the default background and draws the cursor with the fills of the CoreGraphics frame. It draws no inline image yet
-// and refuses a screen that shows one (-2), it collects no render metadata (-3), and a failed render pass returns -4 with
-// its cause in frame_gpu_error.
+// with the default background, copies the inline images that frame_draw_overlay composited, and draws the cursor with the
+// fills of the CoreGraphics frame. It collects no render metadata (-3), and a failed render pass returns -4 with its cause in
+// frame_gpu_error.
 static int frame_draw_gpu(Frame *frame, Screen *screen, Metrics *metrics, InlineImageRaster *images, uint32_t image_count,
                           RenderOutput *render_output) {
     if (render_output) return -3;
-    for (uint32_t i = 0; i < image_count; i++) {
-        if (images[i].visible) return -2;
-    }
     // A change of the frame, the font or the default colors draws every strip.
     NSMutableData *configuration = [NSMutableData data];
     serialize_append(configuration, &frame->width, sizeof(frame->width));
@@ -791,13 +859,15 @@ static int frame_draw_gpu(Frame *frame, Screen *screen, Metrics *metrics, Inline
     }
     frame->strips_drawn = count;
 
-    uint64_t rows_height = (uint64_t)screen->height * metrics->cell_height;
-    uint32_t copied = rows_height < frame->height ? (uint32_t)rows_height : frame->height;
+    // The inline images are composited by the CoreGraphics draw over a copy of the strip pixels under them, so their
+    // pixels equal the CoreGraphics frame; the pass copies these rectangles over the strips.
+    NSMutableData *image_rects = [NSMutableData data];
+    if (image_count > 0) {
+        int result = frame_draw_overlay(frame, images, image_count, image_rects);
+        if (result != 0) return result;
+    }
     NSMutableData *fills = [NSMutableData data];
     NSMutableData *differences = [NSMutableData data];
-    if (copied < frame->height) {
-        gpu_append(fills, frame, CGRectMake(0, 0, frame->width, frame->height - copied), screen->default_background);
-    }
     if (screen->cursor_visible && screen->cursor_blink_visible && screen->cursor_shape != 4 &&
         screen->cursor_col < screen->width && screen->cursor_row < screen->height) {
         CGFloat cursor_x = screen->cursor_col * metrics->cell_width;
@@ -822,19 +892,29 @@ static int frame_draw_gpu(Frame *frame, Screen *screen, Metrics *metrics, Inline
     }
     id<MTLTexture> target = (__bridge id<MTLTexture>)frame->texture;
     id<MTLCommandBuffer> commands = [gpu_queue commandBuffer];
-    if (copied > 0) {
-        id<MTLBlitCommandEncoder> blit = [commands blitCommandEncoder];
-        [blit copyFromTexture:(__bridge id<MTLTexture>)frame->strip_texture
+    id<MTLBlitCommandEncoder> blit = [commands blitCommandEncoder];
+    [blit copyFromTexture:(__bridge id<MTLTexture>)frame->strip_texture
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(frame->width, frame->height, 1)
+                toTexture:target
+         destinationSlice:0
+         destinationLevel:0
+        destinationOrigin:MTLOriginMake(0, 0, 0)];
+    for (NSUInteger i = 0; i < image_rects.length / sizeof(MTLRegion); i++) {
+        MTLRegion region = ((const MTLRegion *)image_rects.bytes)[i];
+        [blit copyFromTexture:(__bridge id<MTLTexture>)frame->overlay_texture
                   sourceSlice:0
                   sourceLevel:0
-                 sourceOrigin:MTLOriginMake(0, 0, 0)
-                   sourceSize:MTLSizeMake(frame->width, copied, 1)
+                 sourceOrigin:region.origin
+                   sourceSize:region.size
                     toTexture:target
              destinationSlice:0
              destinationLevel:0
-            destinationOrigin:MTLOriginMake(0, 0, 0)];
-        [blit endEncoding];
+            destinationOrigin:region.origin];
     }
+    [blit endEncoding];
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = target;
     pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
@@ -874,6 +954,8 @@ void frame_drop(Frame *frame) {
         }
         if (frame->strip_texture) CFRelease(frame->strip_texture);
         if (frame->strips) CFRelease(frame->strips);
+        if (frame->overlay_texture) CFRelease(frame->overlay_texture);
+        if (frame->overlay) CFRelease(frame->overlay);
         if (frame->rows) CFRelease(frame->rows);
         if (frame->configuration) CFRelease(frame->configuration);
         if (frame->surface) {

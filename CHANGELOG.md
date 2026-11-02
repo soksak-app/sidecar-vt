@@ -1,5 +1,6 @@
 # Changelog
 
+- S121-3: The GPU frame composites inline images through an overlay surface with the pixels of the CoreGraphics frame.
 - S121-2: The GPU frame draws text, wide characters, underlines and the preedit from row strips that the CoreGraphics cell loop draws, and redraws only the strips of rows that changed.
 - S121-2-1: The frame clips each row to its row box, so a glyph whose ink extends above or below its row is drawn only inside that row.
 - S121-1: A frame can draw through a Metal render pass; it fills the background, the cell backgrounds and the cursor with the pixels of the CoreGraphics draw.

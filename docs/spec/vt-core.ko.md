@@ -142,7 +142,8 @@ Native IME는 marked text를 소유한다. 각 native input report는 순서 있
 
 - frame은 IOSurface 위의 strip texture에 화면 행마다 strip 하나를 둔다. strip은 CoreGraphics frame의 칸 loop가 그리므로, 글자, 넓은 글자, 밑줄, 그리고 `render_layout`이 칸에 넣은 preedit을 한 함수가 그린다. strip은 행의 hash가 그 strip을 그린 hash와 다를 때만 다시 그린다. 크기, 글꼴, theme이 바뀌면 모든 strip을 다시 그린다. 그래서 frame의 CPU 비용은 바뀐 행에 비례한다.
 - 두 frame 모두 각 행을 그 행의 box로 자르므로, 행 위아래로 넘친 잉크는 그 행 안에서만 그린다.
-- render pass는 기본 배경으로 지우고, 모든 strip을 복사하고, 같은 `CGContextDrawImage` 호출이 목표 사각형에 그린 tile로 inline image를 합성한 뒤, CoreGraphics frame의 채우기와 difference 채우기로 cursor를 그린다. 그래서 글자 위의 block cursor는 글자 pixel을 반전한다.
+- strip은 행 아래 여백의 기본 배경도 담는다. CoreGraphics 그리기는 CoreGraphics frame의 `CGContextDrawImage` 호출로, 각 image 아래 strip pixel을 복사한 overlay surface 위에 inline image를 합성한다. pass는 strip을 복사한 뒤 overlay의 image 사각형을 복사하고, CoreGraphics frame의 채우기와 difference 채우기로 cursor를 그린다. 그래서 글자나 image 위의 block cursor는 그 pixel을 반전한다.
+- CoreGraphics가 투명한 surface에 그리고 GPU가 합성하는 image tile은 CoreGraphics frame과 다르다. 반투명 test image에서 pixel이 최대 두 단계 달랐고, 그중 34개는 image가 불투명한 곳이었다. CoreGraphics가 투명한 surface 위와 덮는 pixel 위에서 image를 다르게 resampling하기 때문이다. overlay는 각 image를 CoreGraphics frame과 같은 pixel 위에 그리므로 구성상 정확하다.
 - pass는 동기적이다. 그리기는 command buffer가 끝난 뒤 돌아오므로, 다음 그리기가 strip을 쓸 때 그것을 읽는 GPU 작업은 없다.
 - 그리기가 다시 그린 strip 수는 진단 build의 render output에만 있다.
 - 한계: scroll은 모든 행을 바꾸므로 모든 strip을 다시 그린다. CoreGraphics frame이 모든 칸을 다시 그리는 것과 같다. strip을 행 내용으로 보관할지는 개발 뒤 scroll benchmark가 정한다.

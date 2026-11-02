@@ -174,44 +174,79 @@ fn the_gpu_frame_draws_text_with_the_pixels_of_the_cpu_frame_across_draws() {
     }
 }
 
-#[test]
-fn the_gpu_frame_refuses_an_inline_image_that_it_does_not_draw() {
-    let metrics = metrics(13.0, 1.0);
-    let screen = filled_screen(CursorShape::Block);
-    let png = [
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
-        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
-        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8,
-        0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99, 0x3d, 0x1d, 0x00, 0x00,
-        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-    ];
-    let image = InlineImagePlacement {
-        name: "red.png".into(),
-        data: png.to_vec(),
-        x: 0,
-        y: 0,
-        width: metrics.cell_width as u32,
-        height: metrics.cell_height as u32,
+// A 3 x 2 image whose pixels are opaque, translucent and transparent, so a scaled draw blends edges and alpha.
+const TRANSLUCENT_PNG: [u8; 85] = [
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x02, 0x08, 0x06, 0x00, 0x00, 0x00, 0x9d, 0x74, 0x66,
+    0x1a, 0x00, 0x00, 0x00, 0x1c, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xf8, 0xcf, 0xc0, 0xf0,
+    0x1f, 0x08, 0x1b, 0x80, 0x94, 0x06, 0xc3, 0xff, 0xff, 0x0c, 0x27, 0x40, 0x04, 0x10, 0xfe, 0x07,
+    0x00, 0x8e, 0xd5, 0x0c, 0x66, 0x95, 0x20, 0xfa, 0xdc, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+    0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+fn image(x: u32, y: u32, width: u32, height: u32) -> InlineImagePlacement {
+    InlineImagePlacement {
+        name: "translucent.png".into(),
+        data: TRANSLUCENT_PNG.to_vec(),
+        x,
+        y,
+        width,
+        height,
         preserve_aspect_ratio: true,
         anchor_row: 0,
         anchor_scroll: 0,
         visible: true,
-    };
-    let frame = Frame::new_gpu(
-        metrics.cell_width as u32 * 6,
-        metrics.cell_height as u32 * 3,
-    )
-    .expect("gpu frame");
-    let error = frame
-        .draw_with_theme_and_inline_images(
-            &screen,
-            &metrics,
-            cursor_render(CursorShape::Block),
-            &TerminalTheme::dark(),
-            &[image],
-        )
-        .expect_err("an inline image is refused");
-    assert_eq!(error, "the GPU frame draws no inline image");
+    }
+}
+
+#[test]
+fn the_gpu_frame_composites_inline_images_with_the_pixels_of_the_cpu_frame() {
+    let metrics = metrics(13.0, 2.0);
+    let cell_width = metrics.cell_width as u32;
+    let cell_height = metrics.cell_height as u32;
+    let width = cell_width * 6 + 3;
+    let height = cell_height * 3 + 5;
+    let theme = TerminalTheme::dark();
+    let mut screen = text_screen();
+    screen.cursor.col = 2;
+    screen.cursor.row = 1;
+    // The second image has only a width, so its height keeps the aspect ratio and ends between two pixel rows; a hidden
+    // image is not drawn.
+    let mut hidden = image(0, 0, cell_width * 6, cell_height * 3);
+    hidden.visible = false;
+    let images = [
+        image(cell_width, 0, cell_width * 3, cell_height * 2),
+        image(cell_width * 3 + 1, cell_height + 3, cell_width * 2 + 1, 0),
+        hidden,
+    ];
+    let cursor = cursor_render(CursorShape::Block);
+    let cpu = Frame::new(width, height).expect("cpu frame");
+    cpu.draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &images)
+        .expect("cpu draw");
+    let gpu = Frame::new_gpu(width, height).expect("gpu frame");
+    gpu.draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &images)
+        .expect("gpu draw");
+    assert_same_pixels(&cpu, &gpu, width, height, "inline images");
+}
+
+#[test]
+fn the_gpu_frame_refuses_an_inline_image_outside_the_frame_as_the_cpu_frame_does() {
+    let metrics = metrics(13.0, 1.0);
+    let width = metrics.cell_width as u32 * 6;
+    let height = metrics.cell_height as u32 * 3;
+    let screen = filled_screen(CursorShape::Block);
+    let images = [image(width - 2, 0, 4, 4)];
+    let cursor = cursor_render(CursorShape::Block);
+    let theme = TerminalTheme::dark();
+    let cpu = Frame::new(width, height).expect("cpu frame");
+    let gpu = Frame::new_gpu(width, height).expect("gpu frame");
+    let cpu_error = cpu
+        .draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &images)
+        .expect_err("cpu refuses");
+    let gpu_error = gpu
+        .draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &images)
+        .expect_err("gpu refuses");
+    assert_eq!(gpu_error, cpu_error);
 }
 
 #[cfg(feature = "diagnostics")]
