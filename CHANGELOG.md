@@ -1,5 +1,6 @@
 # Changelog
 
+- S121-2-1: The frame clips each row to its row box, so a glyph whose ink extends above or below its row is drawn only inside that row.
 - S121-1: A frame can draw through a Metal render pass; it fills the background, the cell backgrounds and the cursor with the pixels of the CoreGraphics draw.
 - S120: Version 0.0.22, which carries S119.
 - S119: While the host reports that its image region is not drawing, a surface draws no frame and sends no `screen` event; when the region draws again it draws and sends the changed screen once. A drawing state of an earlier generation is ignored, and an invalid drawing message is answered with `invalidParams`.

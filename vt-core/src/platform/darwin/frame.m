@@ -443,9 +443,19 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
         render_output->underline_thickness = CTFontGetUnderlineThickness(font);
     }
 #endif
+    // Each row is clipped to its row box, so ink that extends above or below its row stays in that row; the GPU frame
+    // draws the rows as separate strips and shows the same pixels.
+    int64_t clipped_row = -1;
     // 셀을 그린다
     for (uint32_t i = 0; i < screen->cell_count; i++) {
         Cell *cell = &screen->cells[i];
+        if ((int64_t)cell->row != clipped_row) {
+            if (clipped_row >= 0) CGContextRestoreGState(ctx);
+            CGContextSaveGState(ctx);
+            CGContextClipToRect(ctx, CGRectMake(0, (CGFloat)frame->height - ((CGFloat)cell->row + 1.0) * metrics->cell_height,
+                                                (CGFloat)frame->width, metrics->cell_height));
+            clipped_row = cell->row;
+        }
 #ifdef SOKSAK_DIAGNOSTICS
         RenderCell *render_cell = NULL;
         if (render_output) {
@@ -606,6 +616,7 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
         }
 
     }
+    if (clipped_row >= 0) CGContextRestoreGState(ctx);
     if (fg_cache.color) CGColorRelease(fg_cache.color);
     if (bg_cache.color) CGColorRelease(bg_cache.color);
 
