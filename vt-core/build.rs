@@ -22,6 +22,7 @@ fn main() {
         // Links the framework and objc.
         println!("cargo:rustc-link-lib=objc");
         println!("cargo:rustc-link-lib=framework=IOSurface");
+        println!("cargo:rustc-link-lib=framework=Metal");
         println!("cargo:rustc-link-lib=framework=CoreGraphics");
         println!("cargo:rustc-link-lib=framework=CoreText");
         println!("cargo:rustc-link-lib=framework=ImageIO");

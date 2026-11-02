@@ -3,6 +3,7 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreText/CoreText.h>
 #import <ImageIO/ImageIO.h>
+#import <Metal/Metal.h>
 #include "frame.h"
 #include <stdio.h>
 #include <string.h>
@@ -18,6 +19,8 @@ struct Frame {
     uint8_t nonce[16];
     uint32_t width;
     uint32_t height;
+    // The Metal texture over the surface of a GPU frame (a retained id<MTLTexture>), or NULL for a frame that CoreGraphics draws.
+    void *texture;
 };
 
 // 이웃한 셀은 대개 같은 색이다. 마지막으로 만든 색을 RGB 값으로 기억해 셀마다 색을 새로 만들지 않는다.
@@ -75,12 +78,14 @@ static void store_cell_bounds(RenderCell *cell, CGRect bounds) {
 #endif
 
 // 주어진 pixel 크기로 frame 을 만든다
-Frame* frame_new(uint32_t width_px, uint32_t height_px) {
+// Creates the frame and its surface. A GPU frame aligns the rows of the surface as Metal requires for a render target.
+static Frame* frame_create(uint32_t width_px, uint32_t height_px, int gpu) {
     Frame *frame = malloc(sizeof(Frame));
     if (!frame) return NULL;
 
     frame->width = width_px;
     frame->height = height_px;
+    frame->texture = NULL;
 
     // 전역 IOSurface 를 만든다
     // BGRA 형식 코드: 0x42475241
@@ -95,6 +100,11 @@ Frame* frame_new(uint32_t width_px, uint32_t height_px) {
         (id)kIOSurfaceIsGlobal: @YES,
 #pragma clang diagnostic pop
     };
+    if (gpu) {
+        NSMutableDictionary *aligned = [properties mutableCopy];
+        aligned[(id)kIOSurfaceBytesPerRow] = @(IOSurfaceAlignProperty(kIOSurfaceBytesPerRow, (size_t)width_px * 4));
+        properties = aligned;
+    }
 
     frame->surface = IOSurfaceCreate((CFDictionaryRef)properties);
     if (!frame->surface) {
@@ -125,6 +135,209 @@ Frame* frame_new(uint32_t width_px, uint32_t height_px) {
     return frame;
 }
 
+Frame* frame_new(uint32_t width_px, uint32_t height_px) {
+    return frame_create(width_px, height_px, 0);
+}
+
+// The Metal state of the process: one device, one queue and the two pipelines that fill rectangles.
+// A fill replaces the pixels with its color; a difference fill computes one minus the pixel, as kCGBlendModeDifference does with white.
+typedef struct {
+    float bounds[4];
+    float color[4];
+} GpuRect;
+
+static NSString *const gpu_shader_source =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "struct Rect { float4 bounds; float4 color; };\n"
+     "struct Fragment { float4 position [[position]]; float4 color; };\n"
+     "vertex Fragment rect_vertex(uint vertex_id [[vertex_id]], uint instance_id [[instance_id]],\n"
+     "                            constant Rect *rects [[buffer(0)]], constant float2 &size [[buffer(1)]]) {\n"
+     "    Rect rect = rects[instance_id];\n"
+     "    float2 point = rect.bounds.xy + float2(vertex_id & 1, vertex_id >> 1) * rect.bounds.zw;\n"
+     "    Fragment out;\n"
+     "    out.position = float4(point.x / size.x * 2.0 - 1.0, 1.0 - point.y / size.y * 2.0, 0.0, 1.0);\n"
+     "    out.color = rect.color;\n"
+     "    return out;\n"
+     "}\n"
+     "fragment float4 rect_fragment(Fragment in [[stage_in]]) { return in.color; }\n";
+
+static id<MTLDevice> gpu_device;
+static id<MTLCommandQueue> gpu_queue;
+static id<MTLRenderPipelineState> gpu_fill;
+static id<MTLRenderPipelineState> gpu_difference;
+static char gpu_error[256];
+
+static void gpu_fail(NSString *what, NSError *error) {
+    snprintf(gpu_error, sizeof(gpu_error), "%s%s%s", what.UTF8String, error ? ": " : "",
+             error ? error.localizedDescription.UTF8String : "");
+}
+
+static int gpu_prepare(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (!device) {
+            gpu_fail(@"the system has no Metal device", nil);
+            return;
+        }
+        NSError *error = nil;
+        id<MTLLibrary> library = [device newLibraryWithSource:gpu_shader_source options:nil error:&error];
+        if (!library) {
+            gpu_fail(@"the frame shaders do not compile", error);
+            return;
+        }
+        MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
+        descriptor.vertexFunction = [library newFunctionWithName:@"rect_vertex"];
+        descriptor.fragmentFunction = [library newFunctionWithName:@"rect_fragment"];
+        descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+        id<MTLRenderPipelineState> fill = [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+        if (!fill) {
+            gpu_fail(@"the fill pipeline is refused", error);
+            return;
+        }
+        MTLRenderPipelineColorAttachmentDescriptor *attachment = descriptor.colorAttachments[0];
+        attachment.blendingEnabled = YES;
+        attachment.rgbBlendOperation = MTLBlendOperationAdd;
+        attachment.sourceRGBBlendFactor = MTLBlendFactorOneMinusDestinationColor;
+        attachment.destinationRGBBlendFactor = MTLBlendFactorZero;
+        attachment.alphaBlendOperation = MTLBlendOperationAdd;
+        attachment.sourceAlphaBlendFactor = MTLBlendFactorOne;
+        attachment.destinationAlphaBlendFactor = MTLBlendFactorZero;
+        id<MTLRenderPipelineState> difference = [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+        if (!difference) {
+            gpu_fail(@"the difference pipeline is refused", error);
+            return;
+        }
+        id<MTLCommandQueue> queue = [device newCommandQueue];
+        if (!queue) {
+            gpu_fail(@"the Metal device gives no command queue", nil);
+            return;
+        }
+        gpu_device = device;
+        gpu_fill = fill;
+        gpu_difference = difference;
+        gpu_queue = queue;
+    });
+    return gpu_queue ? 0 : -1;
+}
+
+const char *frame_gpu_error(void) {
+    return gpu_error;
+}
+
+Frame* frame_new_gpu(uint32_t width_px, uint32_t height_px) {
+    if (gpu_prepare() != 0) return NULL;
+    Frame *frame = frame_create(width_px, height_px, 1);
+    if (!frame) {
+        gpu_fail(@"the surface of the frame is not created", nil);
+        return NULL;
+    }
+    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                          width:width_px
+                                                                                         height:height_px
+                                                                                      mipmapped:NO];
+    descriptor.usage = MTLTextureUsageRenderTarget;
+    id<MTLTexture> texture = [gpu_device newTextureWithDescriptor:descriptor iosurface:frame->surface plane:0];
+    if (!texture) {
+        gpu_fail(@"Metal gives no texture over the surface of the frame", nil);
+        frame_drop(frame);
+        return NULL;
+    }
+    frame->texture = (__bridge_retained void *)texture;
+    return frame;
+}
+
+static void gpu_rgb(float out[4], const uint8_t rgb[3]) {
+    out[0] = rgb[0] / 255.0f;
+    out[1] = rgb[1] / 255.0f;
+    out[2] = rgb[2] / 255.0f;
+    out[3] = 1.0f;
+}
+
+// Appends a rectangle given in the bottom-left coordinates of the CoreGraphics draw, so both draws compute the same rectangles.
+static void gpu_append(NSMutableData *rects, const Frame *frame, CGRect rect, const uint8_t rgb[3]) {
+    GpuRect item = {{(float)rect.origin.x, (float)((CGFloat)frame->height - rect.origin.y - rect.size.height),
+                     (float)rect.size.width, (float)rect.size.height}, {0}};
+    gpu_rgb(item.color, rgb);
+    [rects appendBytes:&item length:sizeof(item)];
+}
+
+static void gpu_encode(id<MTLRenderCommandEncoder> encoder, id<MTLRenderPipelineState> pipeline, NSData *rects, const float size[2]) {
+    NSUInteger count = rects.length / sizeof(GpuRect);
+    if (count == 0) return;
+    id<MTLBuffer> buffer = [gpu_device newBufferWithBytes:rects.bytes length:rects.length options:MTLResourceStorageModeShared];
+    [encoder setRenderPipelineState:pipeline];
+    [encoder setVertexBuffer:buffer offset:0 atIndex:0];
+    [encoder setVertexBytes:size length:sizeof(float) * 2 atIndex:1];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:count];
+}
+
+// Draws the screen through a Metal render pass with the rectangles of the CoreGraphics draw. It draws no text, underline or
+// inline image yet and refuses a screen that has one (-2), it collects no render metadata (-3), and a failed render pass
+// returns -4 with its cause in frame_gpu_error.
+static int frame_draw_gpu(Frame *frame, Screen *screen, Metrics *metrics, InlineImageRaster *images, uint32_t image_count,
+                          RenderOutput *render_output) {
+    if (render_output) return -3;
+    for (uint32_t i = 0; i < image_count; i++) {
+        if (images[i].visible) return -2;
+    }
+    NSMutableData *fills = [NSMutableData data];
+    NSMutableData *differences = [NSMutableData data];
+    for (uint32_t i = 0; i < screen->cell_count; i++) {
+        Cell *cell = &screen->cells[i];
+        if ((cell->ch_len > 0 && cell->width > 0) || (cell->underline && cell->width > 0)) return -2;
+        if (!cell->has_bg && !cell->inverse) continue;
+        const uint8_t *background = cell->has_bg ? cell->bg : screen->default_background;
+        if (cell->inverse) background = cell->has_fg ? cell->fg : screen->default_foreground;
+        CGFloat x = cell->col * metrics->cell_width;
+        CGFloat y = (CGFloat)frame->height - ((CGFloat)cell->row + 1.0) * metrics->cell_height;
+        gpu_append(fills, frame, CGRectMake(x, y, metrics->cell_width * cell->width, metrics->cell_height), background);
+    }
+    if (screen->cursor_visible && screen->cursor_blink_visible && screen->cursor_shape != 4 &&
+        screen->cursor_col < screen->width && screen->cursor_row < screen->height) {
+        CGFloat cursor_x = screen->cursor_col * metrics->cell_width;
+        CGFloat cursor_y = (CGFloat)frame->height - ((CGFloat)screen->cursor_row + 1.0) * metrics->cell_height;
+        CGFloat cursor_width = metrics->cell_width * screen->cursor_width;
+        CGFloat cursor_height = metrics->cell_height;
+        const uint8_t *color = screen->default_cursor;
+        if (screen->cursor_shape == 1) {
+            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y, cursor_width, 2.0), color);
+        } else if (screen->cursor_shape == 2) {
+            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y, 2.0, cursor_height), color);
+        } else if (screen->cursor_shape == 0) {
+            const uint8_t white[3] = {255, 255, 255};
+            gpu_append(differences, frame, CGRectMake(cursor_x, cursor_y, cursor_width, cursor_height), white);
+        } else {
+            CGFloat edge = 2.0;
+            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y, cursor_width, edge), color);
+            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y + cursor_height - edge, cursor_width, edge), color);
+            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y + edge, edge, cursor_height - 2.0 * edge), color);
+            gpu_append(fills, frame, CGRectMake(cursor_x + cursor_width - edge, cursor_y + edge, edge, cursor_height - 2.0 * edge), color);
+        }
+    }
+    float clear[4];
+    gpu_rgb(clear, screen->default_background);
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = (__bridge id<MTLTexture>)frame->texture;
+    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    pass.colorAttachments[0].clearColor = MTLClearColorMake(clear[0], clear[1], clear[2], 1.0);
+    id<MTLCommandBuffer> commands = [gpu_queue commandBuffer];
+    id<MTLRenderCommandEncoder> encoder = [commands renderCommandEncoderWithDescriptor:pass];
+    const float size[2] = {(float)frame->width, (float)frame->height};
+    gpu_encode(encoder, gpu_fill, fills, size);
+    gpu_encode(encoder, gpu_difference, differences, size);
+    [encoder endEncoding];
+    [commands commit];
+    [commands waitUntilCompleted];
+    if (commands.status != MTLCommandBufferStatusCompleted) {
+        gpu_fail(@"the frame render pass failed", commands.error);
+        return -4;
+    }
+    return 0;
+}
+
 uint32_t frame_id(Frame *frame) {
     if (!frame) return 0;
     return frame->surface_id;
@@ -144,6 +357,7 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
                                   InlineImageRaster *images, uint32_t image_count,
                                   RenderOutput *render_output) {
     if (!frame || !screen || !metrics) return -1;
+    if (frame->texture) return frame_draw_gpu(frame, screen, metrics, images, image_count, render_output);
 #ifdef SOKSAK_DIAGNOSTICS
     if (render_output && (!render_output->cells || render_output->cell_capacity < screen->cell_count)) return -1;
 #else
@@ -525,6 +739,9 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
 
 void frame_drop(Frame *frame) {
     if (frame) {
+        if (frame->texture) {
+            CFRelease(frame->texture);
+        }
         if (frame->surface) {
             CFRelease(frame->surface);
         }

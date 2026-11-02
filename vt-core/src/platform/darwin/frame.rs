@@ -254,6 +254,8 @@ unsafe impl Sync for CFrame {}
 
 unsafe extern "C" {
     fn frame_new(width_px: u32, height_px: u32) -> *mut CFrame;
+    fn frame_new_gpu(width_px: u32, height_px: u32) -> *mut CFrame;
+    fn frame_gpu_error() -> *const std::ffi::c_char;
     fn frame_id(frame: *mut CFrame) -> u32;
     fn frame_nonce(frame: *mut CFrame, buf: *mut u8);
     fn frame_draw_with_inline_images(
@@ -402,6 +404,23 @@ impl Frame {
                 })
             }
         }
+    }
+
+    /// A frame whose draws run through a Metal render pass into its IOSurface.
+    pub fn new_gpu(width_px: u32, height_px: u32) -> Result<Frame, String> {
+        let ptr = unsafe { frame_new_gpu(width_px, height_px) };
+        if ptr.is_null() {
+            let cause = unsafe { std::ffi::CStr::from_ptr(frame_gpu_error()) };
+            return Err(format!(
+                "the GPU frame is not created: {}",
+                cause.to_string_lossy()
+            ));
+        }
+        Ok(Frame {
+            ptr,
+            width: width_px,
+            height: height_px,
+        })
     }
 
     pub fn id(&self) -> u32 {
@@ -642,8 +661,15 @@ impl Frame {
             )
         };
 
-        if result != 0 {
-            return Err("Frame draw failed".to_string());
+        match result {
+            0 => {}
+            -2 => return Err("the GPU frame draws no text, underline or inline image".to_string()),
+            -3 => return Err("the GPU frame collects no render metadata".to_string()),
+            -4 => {
+                let cause = unsafe { std::ffi::CStr::from_ptr(frame_gpu_error()) };
+                return Err(cause.to_string_lossy().into_owned());
+            }
+            _ => return Err("Frame draw failed".to_string()),
         }
         if !collect_metadata {
             return Ok(None);

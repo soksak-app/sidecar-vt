@@ -109,6 +109,11 @@ typedef struct Frame Frame;
 // 실패하면 NULL 을 반환한다
 Frame* frame_new(uint32_t width_px, uint32_t height_px);
 
+// Creates a frame of the given pixel size whose draws run through a Metal render pass into its IOSurface.
+// Returns NULL on failure, and frame_gpu_error names the cause.
+Frame* frame_new_gpu(uint32_t width_px, uint32_t height_px);
+const char *frame_gpu_error(void);
+
 // IOSurface ID (u32) 를 가져온다
 uint32_t frame_id(Frame *frame);
 

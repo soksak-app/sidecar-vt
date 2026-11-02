@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S121-1: frame은 Metal render pass로 그릴 수 있고, 배경, 칸 배경, cursor를 CoreGraphics 그리기와 같은 pixel로 채운다.
 - S120: S119를 담은 version 0.0.22.
 - S119: host가 image region이 그리지 않는다고 알리는 동안 surface는 frame을 그리지 않고 `screen` event를 보내지 않으며, region이 다시 그리면 바뀐 화면을 한 번 그려 보낸다. 이전 generation의 drawing 상태는 무시하고, 잘못된 drawing message에는 `invalidParams`로 답한다.
 - S118: S117을 담은 version 0.0.21.
