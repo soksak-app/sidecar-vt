@@ -113,6 +113,10 @@ Frame* frame_new(uint32_t width_px, uint32_t height_px);
 // Returns NULL on failure, and frame_gpu_error names the cause.
 Frame* frame_new_gpu(uint32_t width_px, uint32_t height_px);
 const char *frame_gpu_error(void);
+#ifdef SOKSAK_DIAGNOSTICS
+// The count of strips that the last draw of a GPU frame drew.
+uint32_t frame_gpu_strips_drawn(Frame *frame);
+#endif
 
 // IOSurface ID (u32) 를 가져온다
 uint32_t frame_id(Frame *frame);

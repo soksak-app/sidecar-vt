@@ -21,6 +21,14 @@ struct Frame {
     uint32_t height;
     // The Metal texture over the surface of a GPU frame (a retained id<MTLTexture>), or NULL for a frame that CoreGraphics draws.
     void *texture;
+    // The strips of a GPU frame: a surface of the frame size that holds row r at the rows of row r, its Metal texture, the
+    // serialized cells of each row as it was drawn (a retained NSMutableArray of NSData) and the configuration they were
+    // drawn with (a retained NSData), and the count of strips that the last draw drew.
+    IOSurfaceRef strips;
+    void *strip_texture;
+    void *rows;
+    void *configuration;
+    uint32_t strips_drawn;
 };
 
 // 이웃한 셀은 대개 같은 색이다. 마지막으로 만든 색을 RGB 값으로 기억해 셀마다 색을 새로 만들지 않는다.
@@ -86,6 +94,11 @@ static Frame* frame_create(uint32_t width_px, uint32_t height_px, int gpu) {
     frame->width = width_px;
     frame->height = height_px;
     frame->texture = NULL;
+    frame->strips = NULL;
+    frame->strip_texture = NULL;
+    frame->rows = NULL;
+    frame->configuration = NULL;
+    frame->strips_drawn = 0;
 
     // 전역 IOSurface 를 만든다
     // BGRA 형식 코드: 0x42475241
@@ -245,6 +258,20 @@ Frame* frame_new_gpu(uint32_t width_px, uint32_t height_px) {
         return NULL;
     }
     frame->texture = (__bridge_retained void *)texture;
+    Frame *strips = frame_create(width_px, height_px, 1);
+    id<MTLTexture> strip_texture = strips ? [gpu_device newTextureWithDescriptor:descriptor iosurface:strips->surface plane:0] : nil;
+    if (!strip_texture) {
+        gpu_fail(@"Metal gives no texture over the strip surface of the frame", nil);
+        frame_drop(strips);
+        frame_drop(frame);
+        return NULL;
+    }
+    // The strip surface belongs to this frame; the frame that created it only carried it.
+    frame->strips = strips->surface;
+    strips->surface = NULL;
+    frame_drop(strips);
+    frame->strip_texture = (__bridge_retained void *)strip_texture;
+    frame->rows = (__bridge_retained void *)[NSMutableArray array];
     return frame;
 }
 
@@ -273,70 +300,8 @@ static void gpu_encode(id<MTLRenderCommandEncoder> encoder, id<MTLRenderPipeline
     [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:count];
 }
 
-// Draws the screen through a Metal render pass with the rectangles of the CoreGraphics draw. It draws no text, underline or
-// inline image yet and refuses a screen that has one (-2), it collects no render metadata (-3), and a failed render pass
-// returns -4 with its cause in frame_gpu_error.
 static int frame_draw_gpu(Frame *frame, Screen *screen, Metrics *metrics, InlineImageRaster *images, uint32_t image_count,
-                          RenderOutput *render_output) {
-    if (render_output) return -3;
-    for (uint32_t i = 0; i < image_count; i++) {
-        if (images[i].visible) return -2;
-    }
-    NSMutableData *fills = [NSMutableData data];
-    NSMutableData *differences = [NSMutableData data];
-    for (uint32_t i = 0; i < screen->cell_count; i++) {
-        Cell *cell = &screen->cells[i];
-        if ((cell->ch_len > 0 && cell->width > 0) || (cell->underline && cell->width > 0)) return -2;
-        if (!cell->has_bg && !cell->inverse) continue;
-        const uint8_t *background = cell->has_bg ? cell->bg : screen->default_background;
-        if (cell->inverse) background = cell->has_fg ? cell->fg : screen->default_foreground;
-        CGFloat x = cell->col * metrics->cell_width;
-        CGFloat y = (CGFloat)frame->height - ((CGFloat)cell->row + 1.0) * metrics->cell_height;
-        gpu_append(fills, frame, CGRectMake(x, y, metrics->cell_width * cell->width, metrics->cell_height), background);
-    }
-    if (screen->cursor_visible && screen->cursor_blink_visible && screen->cursor_shape != 4 &&
-        screen->cursor_col < screen->width && screen->cursor_row < screen->height) {
-        CGFloat cursor_x = screen->cursor_col * metrics->cell_width;
-        CGFloat cursor_y = (CGFloat)frame->height - ((CGFloat)screen->cursor_row + 1.0) * metrics->cell_height;
-        CGFloat cursor_width = metrics->cell_width * screen->cursor_width;
-        CGFloat cursor_height = metrics->cell_height;
-        const uint8_t *color = screen->default_cursor;
-        if (screen->cursor_shape == 1) {
-            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y, cursor_width, 2.0), color);
-        } else if (screen->cursor_shape == 2) {
-            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y, 2.0, cursor_height), color);
-        } else if (screen->cursor_shape == 0) {
-            const uint8_t white[3] = {255, 255, 255};
-            gpu_append(differences, frame, CGRectMake(cursor_x, cursor_y, cursor_width, cursor_height), white);
-        } else {
-            CGFloat edge = 2.0;
-            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y, cursor_width, edge), color);
-            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y + cursor_height - edge, cursor_width, edge), color);
-            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y + edge, edge, cursor_height - 2.0 * edge), color);
-            gpu_append(fills, frame, CGRectMake(cursor_x + cursor_width - edge, cursor_y + edge, edge, cursor_height - 2.0 * edge), color);
-        }
-    }
-    float clear[4];
-    gpu_rgb(clear, screen->default_background);
-    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-    pass.colorAttachments[0].texture = (__bridge id<MTLTexture>)frame->texture;
-    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
-    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-    pass.colorAttachments[0].clearColor = MTLClearColorMake(clear[0], clear[1], clear[2], 1.0);
-    id<MTLCommandBuffer> commands = [gpu_queue commandBuffer];
-    id<MTLRenderCommandEncoder> encoder = [commands renderCommandEncoderWithDescriptor:pass];
-    const float size[2] = {(float)frame->width, (float)frame->height};
-    gpu_encode(encoder, gpu_fill, fills, size);
-    gpu_encode(encoder, gpu_difference, differences, size);
-    [encoder endEncoding];
-    [commands commit];
-    [commands waitUntilCompleted];
-    if (commands.status != MTLCommandBufferStatusCompleted) {
-        gpu_fail(@"the frame render pass failed", commands.error);
-        return -4;
-    }
-    return 0;
-}
+                          RenderOutput *render_output);
 
 uint32_t frame_id(Frame *frame) {
     if (!frame) return 0;
@@ -353,11 +318,13 @@ int frame_draw(Frame *frame, Screen *screen, Metrics *metrics) {
     return frame_draw_with_inline_images(frame, screen, metrics, NULL, 0, NULL);
 }
 
-int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics,
-                                  InlineImageRaster *images, uint32_t image_count,
-                                  RenderOutput *render_output) {
-    if (!frame || !screen || !metrics) return -1;
-    if (frame->texture) return frame_draw_gpu(frame, screen, metrics, images, image_count, render_output);
+// Draws the screen with CoreGraphics into the surface, which has the size of the frame. Without a row selection it draws
+// the whole frame: the background, every cell, the inline images and the cursor. With a selection (one flag per screen row)
+// it draws only the selected rows, each from a fill of its row box with the default background, as the strips of a GPU
+// frame; the frame then draws the images and the cursor itself.
+static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Metrics *metrics,
+                         InlineImageRaster *images, uint32_t image_count,
+                         RenderOutput *render_output, const uint8_t *rows) {
 #ifdef SOKSAK_DIAGNOSTICS
     if (render_output && (!render_output->cells || render_output->cell_capacity < screen->cell_count)) return -1;
 #else
@@ -365,16 +332,16 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
 #endif
 
     // surface 를 잠근다
-    IOSurfaceLock(frame->surface, 0, NULL);
+    IOSurfaceLock(surface, 0, NULL);
 
     // surface 데이터를 가져온다
-    void *base_address = IOSurfaceGetBaseAddress(frame->surface);
+    void *base_address = IOSurfaceGetBaseAddress(surface);
     if (!base_address) {
-        IOSurfaceUnlock(frame->surface, 0, NULL);
+        IOSurfaceUnlock(surface, 0, NULL);
         return -1;
     }
 
-    size_t bytes_per_row = IOSurfaceGetBytesPerRow(frame->surface);
+    size_t bytes_per_row = IOSurfaceGetBytesPerRow(surface);
 #ifdef SOKSAK_DIAGNOSTICS
     if (render_output) {
         render_output->cell_count = screen->cell_count;
@@ -385,7 +352,7 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
     // sRGB 색 공간을 만든다
     CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     if (!color_space) {
-        IOSurfaceUnlock(frame->surface, 0, NULL);
+        IOSurfaceUnlock(surface, 0, NULL);
         return -1;
     }
 
@@ -403,7 +370,7 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
     CGColorSpaceRelease(color_space);
 
     if (!ctx) {
-        IOSurfaceUnlock(frame->surface, 0, NULL);
+        IOSurfaceUnlock(surface, 0, NULL);
         return -1;
     }
 
@@ -411,7 +378,7 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
     CTFontRef font = metrics->font ? CTFontCreateWithFontDescriptor(metrics->font->descriptor, metrics->font_size, NULL) : NULL;
     if (!font) {
         CGContextRelease(ctx);
-        IOSurfaceUnlock(frame->surface, 0, NULL);
+        IOSurfaceUnlock(surface, 0, NULL);
         return -1;
     }
 
@@ -429,7 +396,15 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
 
     // CGContextFillRect 로 배경 전체를 채운다
     CGContextSetFillColorWithColor(ctx, default_bg_color);
-    CGContextFillRect(ctx, CGRectMake(0, 0, (CGFloat)frame->width, (CGFloat)frame->height));
+    if (!rows) {
+        CGContextFillRect(ctx, CGRectMake(0, 0, (CGFloat)frame->width, (CGFloat)frame->height));
+    } else {
+        for (uint32_t row = 0; row < screen->height; row++) {
+            if (!rows[row]) continue;
+            CGContextFillRect(ctx, CGRectMake(0, (CGFloat)frame->height - ((CGFloat)row + 1.0) * metrics->cell_height,
+                                              (CGFloat)frame->width, metrics->cell_height));
+        }
+    }
 
     ColorCache fg_cache = {0};
     ColorCache bg_cache = {0};
@@ -449,6 +424,7 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
     // 셀을 그린다
     for (uint32_t i = 0; i < screen->cell_count; i++) {
         Cell *cell = &screen->cells[i];
+        if (rows && (cell->row >= screen->height || !rows[cell->row])) continue;
         if ((int64_t)cell->row != clipped_row) {
             if (clipped_row >= 0) CGContextRestoreGState(ctx);
             CGContextSaveGState(ctx);
@@ -539,7 +515,7 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
                 CGContextRelease(ctx);
                 CGColorRelease(default_fg_color);
                 CGColorRelease(default_bg_color);
-                IOSurfaceUnlock(frame->surface, 0, NULL);
+                IOSurfaceUnlock(surface, 0, NULL);
                 return -1;
             }
             NSString *ch = [[NSString alloc] initWithBytes:cell->ch length:cell->ch_len encoding:NSUTF8StringEncoding];
@@ -550,7 +526,7 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
                 CGContextRelease(ctx);
                 CGColorRelease(default_fg_color);
                 CGColorRelease(default_bg_color);
-                IOSurfaceUnlock(frame->surface, 0, NULL);
+                IOSurfaceUnlock(surface, 0, NULL);
                 return -1;
             }
             {
@@ -620,7 +596,7 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
     if (fg_cache.color) CGColorRelease(fg_cache.color);
     if (bg_cache.color) CGColorRelease(bg_cache.color);
 
-    for (uint32_t i = 0; i < image_count; i++) {
+    for (uint32_t i = 0; !rows && i < image_count; i++) {
         InlineImageRaster *raster = &images[i];
         if (!raster->visible) continue;
         if (!raster->data || raster->data_len == 0) {
@@ -628,7 +604,7 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
             CGContextRelease(ctx);
             CGColorRelease(default_fg_color);
             CGColorRelease(default_bg_color);
-            IOSurfaceUnlock(frame->surface, 0, NULL);
+            IOSurfaceUnlock(surface, 0, NULL);
             return -1;
         }
         CFDataRef image_data = CFDataCreate(NULL, raster->data, raster->data_len);
@@ -641,7 +617,7 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
             CGContextRelease(ctx);
             CGColorRelease(default_fg_color);
             CGColorRelease(default_bg_color);
-            IOSurfaceUnlock(frame->surface, 0, NULL);
+            IOSurfaceUnlock(surface, 0, NULL);
             return -1;
         }
         CGFloat width = raster->width ? raster->width : (CGFloat)CGImageGetWidth(image);
@@ -662,7 +638,7 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
             CGContextRelease(ctx);
             CGColorRelease(default_fg_color);
             CGColorRelease(default_bg_color);
-            IOSurfaceUnlock(frame->surface, 0, NULL);
+            IOSurfaceUnlock(surface, 0, NULL);
             return -1;
         }
         CGContextDrawImage(ctx, CGRectMake(raster->x, frame->height - raster->y - height, width, height), image);
@@ -671,7 +647,7 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
 
     // 커서 깜박임과 모양은 상위 서비스가 계산한 한 프레임 상태만 그린다.
     // 이 함수는 타이머나 애니메이션을 만들지 않으며, 화면 경계를 벗어난 커서는 버리지 않고 그리지 않는다.
-    if (screen->cursor_visible && screen->cursor_blink_visible && screen->cursor_shape != 4 &&
+    if (!rows && screen->cursor_visible && screen->cursor_blink_visible && screen->cursor_shape != 4 &&
         screen->cursor_col < screen->width && screen->cursor_row < screen->height) {
         CGFloat cursor_x = screen->cursor_col * metrics->cell_width;
         CGFloat cursor_y = (CGFloat)frame->height - ((CGFloat)screen->cursor_row + 1.0) * metrics->cell_height;
@@ -743,9 +719,152 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
     CGColorRelease(default_fg_color);
     CGColorRelease(default_bg_color);
 
-    IOSurfaceUnlock(frame->surface, 0, NULL);
+    IOSurfaceUnlock(surface, 0, NULL);
 
     return 0;
+}
+
+static void serialize_append(NSMutableData *data, const void *bytes, size_t length) {
+    [data appendBytes:bytes length:length];
+}
+
+// Draws the screen through Metal. The CoreGraphics cell loop draws the rows whose cells differ from the cells their strip
+// was drawn with into the strip surface; the render pass copies the strips into the frame, fills the margin below the rows
+// with the default background and draws the cursor with the fills of the CoreGraphics frame. It draws no inline image yet
+// and refuses a screen that shows one (-2), it collects no render metadata (-3), and a failed render pass returns -4 with
+// its cause in frame_gpu_error.
+static int frame_draw_gpu(Frame *frame, Screen *screen, Metrics *metrics, InlineImageRaster *images, uint32_t image_count,
+                          RenderOutput *render_output) {
+    if (render_output) return -3;
+    for (uint32_t i = 0; i < image_count; i++) {
+        if (images[i].visible) return -2;
+    }
+    // A change of the frame, the font or the default colors draws every strip.
+    NSMutableData *configuration = [NSMutableData data];
+    serialize_append(configuration, &frame->width, sizeof(frame->width));
+    serialize_append(configuration, &frame->height, sizeof(frame->height));
+    serialize_append(configuration, &screen->width, sizeof(screen->width));
+    serialize_append(configuration, &screen->height, sizeof(screen->height));
+    serialize_append(configuration, &metrics->cell_width, sizeof(metrics->cell_width));
+    serialize_append(configuration, &metrics->cell_height, sizeof(metrics->cell_height));
+    serialize_append(configuration, &metrics->font_size, sizeof(metrics->font_size));
+    serialize_append(configuration, &metrics->font, sizeof(metrics->font));
+    serialize_append(configuration, screen->default_foreground, 3);
+    serialize_append(configuration, screen->default_background, 3);
+    NSMutableArray<NSData *> *drawn = (__bridge NSMutableArray<NSData *> *)frame->rows;
+    if (![configuration isEqualToData:(__bridge NSData *)frame->configuration]) {
+        [drawn removeAllObjects];
+        if (frame->configuration) CFRelease(frame->configuration);
+        frame->configuration = (__bridge_retained void *)configuration;
+    }
+    NSMutableArray<NSMutableData *> *cells = [NSMutableArray arrayWithCapacity:screen->height];
+    for (uint32_t row = 0; row < screen->height; row++) [cells addObject:[NSMutableData data]];
+    for (uint32_t i = 0; i < screen->cell_count; i++) {
+        Cell *cell = &screen->cells[i];
+        if (cell->row >= screen->height) return -1;
+        NSMutableData *data = cells[cell->row];
+        serialize_append(data, &cell->col, sizeof(cell->col));
+        serialize_append(data, &cell->width, sizeof(cell->width));
+        serialize_append(data, &cell->ch_len, sizeof(cell->ch_len));
+        if (cell->ch_len > 0 && cell->ch) serialize_append(data, cell->ch, cell->ch_len);
+        serialize_append(data, cell->fg, 3);
+        serialize_append(data, cell->bg, 3);
+        uint8_t flags[4] = {cell->has_fg, cell->has_bg, cell->inverse, cell->underline};
+        serialize_append(data, flags, sizeof(flags));
+    }
+    NSMutableData *selection = [NSMutableData dataWithLength:screen->height];
+    uint8_t *rows = selection.mutableBytes;
+    uint32_t count = 0;
+    for (uint32_t row = 0; row < screen->height; row++) {
+        if (row < drawn.count && [drawn[row] isEqualToData:cells[row]]) continue;
+        rows[row] = 1;
+        count++;
+    }
+    if (count > 0) {
+        int result = frame_draw_cg(frame, frame->strips, screen, metrics, NULL, 0, NULL, rows);
+        if (result != 0) {
+            // A strip that failed holds unknown pixels, so the next draw draws every strip.
+            [drawn removeAllObjects];
+            return result;
+        }
+        [drawn setArray:cells];
+    }
+    frame->strips_drawn = count;
+
+    uint64_t rows_height = (uint64_t)screen->height * metrics->cell_height;
+    uint32_t copied = rows_height < frame->height ? (uint32_t)rows_height : frame->height;
+    NSMutableData *fills = [NSMutableData data];
+    NSMutableData *differences = [NSMutableData data];
+    if (copied < frame->height) {
+        gpu_append(fills, frame, CGRectMake(0, 0, frame->width, frame->height - copied), screen->default_background);
+    }
+    if (screen->cursor_visible && screen->cursor_blink_visible && screen->cursor_shape != 4 &&
+        screen->cursor_col < screen->width && screen->cursor_row < screen->height) {
+        CGFloat cursor_x = screen->cursor_col * metrics->cell_width;
+        CGFloat cursor_y = (CGFloat)frame->height - ((CGFloat)screen->cursor_row + 1.0) * metrics->cell_height;
+        CGFloat cursor_width = metrics->cell_width * screen->cursor_width;
+        CGFloat cursor_height = metrics->cell_height;
+        const uint8_t *color = screen->default_cursor;
+        if (screen->cursor_shape == 1) {
+            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y, cursor_width, 2.0), color);
+        } else if (screen->cursor_shape == 2) {
+            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y, 2.0, cursor_height), color);
+        } else if (screen->cursor_shape == 0) {
+            const uint8_t white[3] = {255, 255, 255};
+            gpu_append(differences, frame, CGRectMake(cursor_x, cursor_y, cursor_width, cursor_height), white);
+        } else {
+            CGFloat edge = 2.0;
+            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y, cursor_width, edge), color);
+            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y + cursor_height - edge, cursor_width, edge), color);
+            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y + edge, edge, cursor_height - 2.0 * edge), color);
+            gpu_append(fills, frame, CGRectMake(cursor_x + cursor_width - edge, cursor_y + edge, edge, cursor_height - 2.0 * edge), color);
+        }
+    }
+    id<MTLTexture> target = (__bridge id<MTLTexture>)frame->texture;
+    id<MTLCommandBuffer> commands = [gpu_queue commandBuffer];
+    if (copied > 0) {
+        id<MTLBlitCommandEncoder> blit = [commands blitCommandEncoder];
+        [blit copyFromTexture:(__bridge id<MTLTexture>)frame->strip_texture
+                  sourceSlice:0
+                  sourceLevel:0
+                 sourceOrigin:MTLOriginMake(0, 0, 0)
+                   sourceSize:MTLSizeMake(frame->width, copied, 1)
+                    toTexture:target
+             destinationSlice:0
+             destinationLevel:0
+            destinationOrigin:MTLOriginMake(0, 0, 0)];
+        [blit endEncoding];
+    }
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = target;
+    pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> encoder = [commands renderCommandEncoderWithDescriptor:pass];
+    const float size[2] = {(float)frame->width, (float)frame->height};
+    gpu_encode(encoder, gpu_fill, fills, size);
+    gpu_encode(encoder, gpu_difference, differences, size);
+    [encoder endEncoding];
+    [commands commit];
+    [commands waitUntilCompleted];
+    if (commands.status != MTLCommandBufferStatusCompleted) {
+        gpu_fail(@"the frame render pass failed", commands.error);
+        return -4;
+    }
+    return 0;
+}
+
+#ifdef SOKSAK_DIAGNOSTICS
+uint32_t frame_gpu_strips_drawn(Frame *frame) {
+    return frame->strips_drawn;
+}
+#endif
+
+int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics,
+                                  InlineImageRaster *images, uint32_t image_count,
+                                  RenderOutput *render_output) {
+    if (!frame || !screen || !metrics) return -1;
+    if (frame->texture) return frame_draw_gpu(frame, screen, metrics, images, image_count, render_output);
+    return frame_draw_cg(frame, frame->surface, screen, metrics, images, image_count, render_output, NULL);
 }
 
 void frame_drop(Frame *frame) {
@@ -753,6 +872,10 @@ void frame_drop(Frame *frame) {
         if (frame->texture) {
             CFRelease(frame->texture);
         }
+        if (frame->strip_texture) CFRelease(frame->strip_texture);
+        if (frame->strips) CFRelease(frame->strips);
+        if (frame->rows) CFRelease(frame->rows);
+        if (frame->configuration) CFRelease(frame->configuration);
         if (frame->surface) {
             CFRelease(frame->surface);
         }

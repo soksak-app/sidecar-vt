@@ -256,6 +256,8 @@ unsafe extern "C" {
     fn frame_new(width_px: u32, height_px: u32) -> *mut CFrame;
     fn frame_new_gpu(width_px: u32, height_px: u32) -> *mut CFrame;
     fn frame_gpu_error() -> *const std::ffi::c_char;
+    #[cfg(feature = "diagnostics")]
+    fn frame_gpu_strips_drawn(frame: *mut CFrame) -> u32;
     fn frame_id(frame: *mut CFrame) -> u32;
     fn frame_nonce(frame: *mut CFrame, buf: *mut u8);
     fn frame_draw_with_inline_images(
@@ -421,6 +423,12 @@ impl Frame {
             width: width_px,
             height: height_px,
         })
+    }
+
+    /// The count of strips that the last draw of a GPU frame drew.
+    #[cfg(feature = "diagnostics")]
+    pub fn strips_drawn(&self) -> u32 {
+        unsafe { frame_gpu_strips_drawn(self.ptr) }
     }
 
     pub fn id(&self) -> u32 {
@@ -663,7 +671,7 @@ impl Frame {
 
         match result {
             0 => {}
-            -2 => return Err("the GPU frame draws no text, underline or inline image".to_string()),
+            -2 => return Err("the GPU frame draws no inline image".to_string()),
             -3 => return Err("the GPU frame collects no render metadata".to_string()),
             -4 => {
                 let cause = unsafe { std::ffi::CStr::from_ptr(frame_gpu_error()) };
