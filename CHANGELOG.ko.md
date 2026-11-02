@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S115: S114를 담은 version 0.0.20.
 - S116: diagnostic package test는 각 screen message를 앞 message의 화면에 적용하므로, `cells` 없는 변경 형식이 더 이상 candidate release를 실패시키지 않는다. Red: candidate release가 `screen cells are required`로 실패했다. Green: 통과한다.
 - S114: 모든 `screen` 메시지는 `number`를 담고, resize 뒤, 재연결 뒤, 보내지 못한 메시지 뒤, `screen.read`, 행의 절반 넘게 바뀐 경우의 전체 형식을 빼면 그것이 가리키는 보낸 메시지 뒤에 바뀐 행만 담는다(`base: false`, `previous`, `changed`). 줄은 칸을 복사하지 않고 가진 행에서 쓴다.
 - F355-4-vt: 0.0.18판. `make release OUT=<folder>`는 실행 비트를 보존하는 `vt-alacritty`의 `npm pack`으로 release를 쓰고, release.yml은 더 이상 core release의 sok를 내려받지 않는다. core가 sidecar의 `npm pack` 파일을 설치하고 `sok sidecar release`가 없기 때문이다. core 의존은 core release `v0.0.25`에 pin된다.

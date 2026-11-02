@@ -176,7 +176,7 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
     assert.ok(initialScreen.body.render && typeof initialScreen.body.render === "object",
       `diagnostics build omitted matching render metadata (frame ${JSON.stringify(frame)}, version ${packageInfo.version})`);
     assert.deepEqual(initialScreen.body.render.frame, frame, "render metadata names a different frame");
-    assert.equal(packageInfo.version, "0.0.19", "candidate release package version differs");
+    assert.equal(packageInfo.version, "0.0.20", "candidate release package version differs");
     t.diagnostic(`PASS rendered_frame=${JSON.stringify(frame)}`);
 
     const payload = "printf 'S85_TRACE\\n'";
