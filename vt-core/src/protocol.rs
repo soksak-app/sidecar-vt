@@ -1228,6 +1228,13 @@ enum SurfaceCommand {
     },
     Reconnect,
     Configure(ImageConfiguration),
+    /// The drawing state of the image region that the host sends at its attachment and at each
+    /// change (core docs/spec/native-surfaces.md#image-regions).
+    Drawing {
+        name: String,
+        generation: u64,
+        drawing: bool,
+    },
     ImageDetach {
         detach: ImageDetach,
         request_check: ImageDetachRequestCheck,
@@ -2100,7 +2107,7 @@ async fn present_screen(
     // is drawn again before the answer arrives, the pixels being copied are overwritten and a frame
     // with missing glyphs is shown. The screen in the meantime stays dirty and is drawn after the
     // answer arrives.
-    if state.pending_draw {
+    if state.pending_draw || !state.drawing {
         state.dirty = true;
         return true;
     }
@@ -2353,7 +2360,7 @@ fn record_wheel(
 /// the host answers, the screen at that time is drawn once and sent.
 fn hold_while_presenting(image_state: &mut Option<ImageState>) -> bool {
     match image_state.as_mut() {
-        Some(state) if state.pending_draw => {
+        Some(state) if state.pending_draw || !state.drawing => {
             state.dirty = true;
             true
         }
@@ -3369,6 +3376,13 @@ async fn surface_task(
     let mut requested_shell = ShellRequest::default();
     let mut headless = false;
     let mut pending_configuration: Option<ImageConfiguration> = None;
+    // The drawing state that the host last sent for the image region of the surface. A surface
+    // draws until the first state arrives, because the host sends it at the attachment of the
+    // region, before the first configure.
+    let mut drawing = true;
+    // The generation of the last applied drawing state. A state of an earlier generation belongs to
+    // an earlier attachment of the region and is ignored.
+    let mut drawing_generation = 0;
     let mut latest_detached_image: Option<(String, u64)> = None;
     let mut last_image_detach: Option<ImageDetachReplay> = None;
     let mut image_owner_revision = 0_u64;
@@ -3681,6 +3695,27 @@ async fn surface_task(
                             return;
                         }
                     }
+                    SurfaceCommand::Drawing { name, generation, drawing: next } => {
+                        let current = image_state.as_ref().map_or(drawing_generation, |state| state.generation.max(drawing_generation));
+                        if generation < current {
+                            continue;
+                        }
+                        drawing_generation = generation;
+                        drawing = next;
+                        let Some(state) = image_state.as_mut() else { continue };
+                        if state.name != name {
+                            continue;
+                        }
+                        state.drawing = next;
+                        // The region draws again: the screen that changed while it did not is drawn
+                        // and sent once. A frame in flight draws it after its answer.
+                        if next && state.dirty && !state.pending_draw && session_id.is_some() {
+                            let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
+                            if !present_screen(&surface_id, screen, state, &output_tx, "drawing", &log, &mut screens, inputs.sequence).await {
+                                return;
+                            }
+                        }
+                    }
                     SurfaceCommand::Configure(configuration) => {
                         if image_state.is_none()
                             && pending_configuration.is_none()
@@ -3725,6 +3760,7 @@ async fn surface_task(
                         };
                         let mut new_state = new_state;
                         new_state.theme = current_theme;
+                        new_state.drawing = drawing;
                         new_state.session = session_id.clone();
                         new_state.inline_images = image_state.as_ref()
                             .map(|previous_state| previous_state.inline_images.clone())
@@ -4465,6 +4501,7 @@ async fn surface_task(
                                 };
                                 let mut new_state = new_state;
                                 new_state.theme = current_theme;
+                                new_state.drawing = drawing;
                         new_state.session = session_id.clone();
                                 let (cols, rows) = match calculate_terminal_size(
                                     configuration.width, configuration.height, &new_state.metrics) {
@@ -5668,6 +5705,27 @@ where
                                     if reply_tx.reply(response).await.is_err() {
                                         break;
                                     }
+                                }
+                            }
+                        } else if let Some(drawing) =
+                            image.get("drawing").and_then(|v| v.as_object())
+                        {
+                            let parsed = (|| {
+                                Some(SurfaceCommand::Drawing {
+                                    name: drawing.get("name")?.as_str()?.to_string(),
+                                    generation: drawing.get("generation")?.as_u64()?,
+                                    drawing: drawing.get("drawing")?.as_bool()?,
+                                })
+                            })();
+                            if let Some(command) = parsed {
+                                if tx.send(command).await.is_err() {
+                                    break;
+                                }
+                            } else {
+                                let response = json!({"surface": surface_id,
+                                    "body": {"error": "invalidParams", "reason": "invalid image drawing"}});
+                                if reply_tx.reply(response).await.is_err() {
+                                    break;
                                 }
                             }
                         } else if let Some(configure) =

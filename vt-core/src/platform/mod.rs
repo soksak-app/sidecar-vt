@@ -21,6 +21,9 @@ pub struct ImageState {
     pub render: Option<serde_json::Value>,
     pub pending_draw: bool,
     pub dirty: bool,
+    /// Whether the host draws the region (core docs/spec/native-surfaces.md#image-regions). While
+    /// it does not, the surface draws no raster and sends no screen, and changes stay dirty.
+    pub drawing: bool,
     pub width_px: u32,
     pub height_px: u32,
     pub scale: f32,
@@ -79,6 +82,7 @@ impl ImageState {
             render: None,
             pending_draw: false,
             dirty: false,
+            drawing: true,
             width_px,
             height_px,
             scale,

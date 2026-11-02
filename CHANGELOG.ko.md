@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S119: host가 image region이 그리지 않는다고 알리는 동안 surface는 frame을 그리지 않고 `screen` event를 보내지 않으며, region이 다시 그리면 바뀐 화면을 한 번 그려 보낸다. 이전 generation의 drawing 상태는 무시하고, 잘못된 drawing message에는 `invalidParams`로 답한다.
 - S118: S117을 담은 version 0.0.21.
 - S117: 동시에 시작하는 세션은 각자의 임시 파일로 shell integration 파일을 쓰므로, terminal 여러 개를 한 번에 열어도 `install shell integration file ...: No such file or directory`로 실패하지 않는다. Red: 동시 설치 test가 그 오류로 실패했다. Green: 통과한다.
 - S115: S114를 담은 version 0.0.20.

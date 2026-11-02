@@ -7782,3 +7782,97 @@ async fn the_first_screen_after_a_reconnection_is_the_full_form() {
     );
     assert!(after["body"]["number"].as_u64() > first["body"]["number"].as_u64());
 }
+
+/// Serves an open followed by the requests and returns the output.
+async fn serve_requests(requests: &str) -> String {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let input = format!(
+        "{}\n{}",
+        r#"{"surface":"s1","body":{"operation":"open","shell":"/bin/sh"}}"#, requests
+    );
+    let reader = std::io::Cursor::new(input.into_bytes());
+    let mut writer = Vec::new();
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let session_port_factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new("drawing".to_string(), calls.clone())) as Arc<dyn SessionPort>
+    });
+    let _ = serve(engine_factory, reader, &mut writer, session_port_factory).await;
+    String::from_utf8(writer).unwrap()
+}
+
+const DRAWING_CONFIGURE: &str = r#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}"#;
+
+#[tokio::test]
+async fn a_region_that_is_not_drawing_gets_no_raster_and_no_screen() {
+    let output = serve_requests(&format!(
+        "{}\n{}\n",
+        r#"{"surface":"s1","body":{"image":{"drawing":{"name":"view","generation":1,"drawing":false}}}}"#,
+        DRAWING_CONFIGURE
+    ))
+    .await;
+    assert_eq!(
+        output.matches(r#""kind":"iosurface-global""#).count(),
+        0,
+        "a raster was sent for a region that is not drawing: {output}"
+    );
+    assert!(
+        !output.contains(r#""event":"screen""#),
+        "a screen message was sent for a region that is not drawing: {output}"
+    );
+    assert!(
+        !output.contains(r#""error""#),
+        "the drawing message was answered with an error: {output}"
+    );
+}
+
+#[tokio::test]
+async fn a_region_that_draws_again_gets_one_raster_and_one_screen() {
+    let output = serve_requests(&format!(
+        "{}\n{}\n{}\n",
+        r#"{"surface":"s1","body":{"image":{"drawing":{"name":"view","generation":1,"drawing":false}}}}"#,
+        DRAWING_CONFIGURE,
+        r#"{"surface":"s1","body":{"image":{"drawing":{"name":"view","generation":1,"drawing":true}}}}"#,
+    ))
+    .await;
+    assert_eq!(
+        output.matches(r#""kind":"iosurface-global""#).count(),
+        1,
+        "a region that draws again did not get exactly one raster: {output}"
+    );
+    assert_eq!(
+        output.matches(r#""event":"screen""#).count(),
+        1,
+        "a region that draws again did not get exactly one screen: {output}"
+    );
+}
+
+#[tokio::test]
+async fn a_drawing_message_of_an_earlier_generation_is_ignored() {
+    // The region of generation 2 draws its configure, keeps drawing after a late state of
+    // generation 1, and draws the viewport change after the host consumed the first raster.
+    let output = serve_requests(&format!(
+        "{}\n{}\n{}\n{}\n",
+        DRAWING_CONFIGURE.replace(r#""generation":1"#, r#""generation":2"#),
+        r#"{"surface":"s1","body":{"image":{"drawing":{"name":"view","generation":1,"drawing":false}}}}"#,
+        r#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":2,"raster":1,"sequence":1}}}}"#,
+        r#"{"surface":"s1","body":{"operation":"viewport","offset":1}}"#,
+    ))
+    .await;
+    assert_eq!(
+        output.matches(r#""kind":"iosurface-global""#).count(),
+        2,
+        "a drawing state of generation 1 stopped the region of generation 2: {output}"
+    );
+}
+
+#[tokio::test]
+async fn an_invalid_drawing_message_is_answered_with_invalid_params() {
+    let output = serve_requests(
+        "{\"surface\":\"s1\",\"body\":{\"image\":{\"drawing\":{\"name\":\"view\",\"generation\":1,\"drawing\":\"no\"}}}}\n",
+    )
+    .await;
+    assert!(
+        output.contains(r#""reason":"invalid image drawing""#),
+        "an invalid drawing message was not answered with invalidParams: {output}"
+    );
+}
