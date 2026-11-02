@@ -5,7 +5,7 @@
 use portable_pty::CommandBuilder;
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 const ZSH_ENV: &str = include_str!("shell-integration/zshenv");
@@ -70,38 +70,41 @@ fn private_directory(path: &Path) -> Result<(), String> {
 }
 
 /// Leaves a file whose contents are the same as it is. A different or missing file is written to a
-/// temporary file and then renamed, so the replacement happens in one step.
+/// temporary file of its own and then renamed, so the replacement happens in one step and sessions
+/// that write it at the same time each rename their own file.
 fn write_file(path: &Path, content: &str) -> Result<(), String> {
     // silent: a file that cannot be read is written again below, and a failed write is an error.
     if fs::read(path).ok().as_deref() == Some(content.as_bytes()) {
         return Ok(());
     }
-    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&temporary)
-        .map_err(|error| {
-            format!(
-                "write shell integration file {}: {error}",
-                temporary.display()
-            )
-        })?;
-    file.write_all(content.as_bytes()).map_err(|error| {
+    // default: install_in names a file inside the integration directory, so the path has a parent.
+    let directory = path.parent().unwrap_or(Path::new("."));
+    let mut file = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o600))
+        .tempfile_in(directory)
+        .map_err(|error| format!("write shell integration file {}: {error}", path.display()))?;
+    file.write_all(content.as_bytes())
+        .map_err(|error| format!("write shell integration file {}: {error}", path.display()))?;
+    file.persist(path).map_err(|error| {
         format!(
-            "write shell integration file {}: {error}",
-            temporary.display()
+            "install shell integration file {}: {}",
+            path.display(),
+            error.error
         )
     })?;
-    fs::rename(&temporary, path)
-        .map_err(|error| format!("install shell integration file {}: {error}", path.display()))
+    Ok(())
 }
 
-/// Prepares the integration directory and returns its path.
+/// Prepares the integration directory in the temporary directory of the account and returns its
+/// path.
 pub fn install() -> Result<PathBuf, String> {
-    let root = std::env::temp_dir().join(format!("soksak-shell-{:016x}", content_hash()));
+    install_in(&std::env::temp_dir())
+}
+
+/// Prepares the integration directory in temporary and returns its path. Sessions that start at the
+/// same time call it at the same time.
+pub fn install_in(temporary: &Path) -> Result<PathBuf, String> {
+    let root = temporary.join(format!("soksak-shell-{:016x}", content_hash()));
     private_directory(&root)?;
     let zsh = root.join("zsh");
     private_directory(&zsh)?;

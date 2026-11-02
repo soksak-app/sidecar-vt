@@ -1,5 +1,6 @@
 # Changelog
 
+- S117: Sessions that start at the same time each write the shell integration files through a temporary file of their own, so opening several terminals at once no longer fails with `install shell integration file ...: No such file or directory`. Red: the concurrent install test failed with that error. Green: it passes.
 - S115: Version 0.0.20, which carries S114.
 - S116: The diagnostic package test applies each screen message to the screen of the message it follows, so a change form without `cells` no longer fails the candidate release. Red: the candidate release failed with `screen cells are required`. Green: it passes.
 - S114: Every `screen` message carries `number`, and a message carries only the rows that changed since the sent message that it names (`base: false`, `previous`, `changed`) except the full form after a resize, after a reconnection, after an unsent message, for `screen.read` and when more than half of the rows changed; the line is written from the held rows without a copy of the cells.
