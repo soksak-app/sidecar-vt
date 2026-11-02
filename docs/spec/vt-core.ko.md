@@ -136,6 +136,23 @@ Native IME는 marked text를 소유한다. 각 native input report는 순서 있
 
 `sidecar`와 `native image` 원천은 카드가 보여 주는 표면 오류도 보고한다. 둘 다 해결되지 않으므로, 카드 표시와 `terminal.session.error`는 표면이 닫힐 때까지 그 오류를 보여 준다.
 
+### GPU frame
+
+`Frame::new_gpu`가 만든 frame은 Metal render pass로 자기 IOSurface에 그린다. 그 pixel은 같은 화면의 CoreGraphics frame과 같으므로, CoreGraphics frame이 두 그리기의 유일한 기준이다.
+
+- frame은 IOSurface 위의 strip texture에 화면 행마다 strip 하나를 둔다. strip은 CoreGraphics frame의 칸 loop가 그리므로, 글자, 넓은 글자, 밑줄, 그리고 `render_layout`이 칸에 넣은 preedit을 한 함수가 그린다. strip은 행의 hash가 그 strip을 그린 hash와 다를 때만 다시 그린다. 크기, 글꼴, theme이 바뀌면 모든 strip을 다시 그린다. 그래서 frame의 CPU 비용은 바뀐 행에 비례한다.
+- 두 frame 모두 각 행을 그 행의 box로 자르므로, 행 위아래로 넘친 잉크는 그 행 안에서만 그린다.
+- render pass는 기본 배경으로 지우고, 모든 strip을 복사하고, 같은 `CGContextDrawImage` 호출이 목표 사각형에 그린 tile로 inline image를 합성한 뒤, CoreGraphics frame의 채우기와 difference 채우기로 cursor를 그린다. 그래서 글자 위의 block cursor는 글자 pixel을 반전한다.
+- pass는 동기적이다. 그리기는 command buffer가 끝난 뒤 돌아오므로, 다음 그리기가 strip을 쓸 때 그것을 읽는 GPU 작업은 없다.
+- 그리기가 다시 그린 strip 수는 진단 build의 render output에만 있다.
+- 한계: scroll은 모든 행을 바꾸므로 모든 strip을 다시 그린다. CoreGraphics frame이 모든 칸을 다시 그리는 것과 같다. strip을 행 내용으로 보관할지는 개발 뒤 scroll benchmark가 정한다.
+
+이유와, adversarial review가 제기하고 이 설계가 답한 반론:
+- CoreGraphics frame은 글자를 배경에 맞춰 smoothing한다(검은 배경의 흰 글자와 흰 배경의 검은 글자에서 잉크가 있는 pixel 1176개 중 709개가 보색이 아니었다). 그래서 배경과 무관한 coverage의 atlas로는 그 pixel을 재현할 수 없고, 칸 밖에서 합성하는 칸 단위 tile은 값이 다른 둘째 renderer다.
+- 자기 배경 위에 그린 칸 단위 tile은 앞 칸이 그 칸에 그린 잉크를 지우지만, CoreGraphics frame은 그것을 남긴다. 행 strip은 칸을 그리는 순서대로 담으므로 구성상 정확하다.
+- 칸 배경색을 key로 하는 cache는 색마다 커진다. strip은 화면 행 수로 제한된다.
+- 행 위치에 대한 반론은 거절했다. `H - (r + 1) × cell height`의 CoreGraphics 사각형은 아래쪽 원점 좌표이며 surface 메모리의 `r × cell height`부터 `(r + 1) × cell height`까지의 행을 덮고, 행 아래에 여백이 있는 test가 이를 검증한다.
+
 ### 터미널 검증
 
 - 수정 전에 실패하는 기준선을 기록하고, 수정 뒤 같은 검사를 실행한다.

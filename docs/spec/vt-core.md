@@ -134,6 +134,23 @@ The page also sends every left-button press, movement while pressed, and release
 
 The `sidecar` and `native image` sources also report the surface error that the card shows. Neither is resolved, so the card indicator and `terminal.session.error` show the error until the surface closes.
 
+### GPU frame
+
+A frame created by `Frame::new_gpu` draws through a Metal render pass into its IOSurface. Its pixels equal those of the CoreGraphics frame for the same screen, so the CoreGraphics frame is the single reference of both draws.
+
+- The frame keeps one strip per screen row in a strip texture over an IOSurface. The cell loop of the CoreGraphics frame draws a strip, so one function draws text, wide characters, underlines and the preedit that `render_layout` places in the cells. A strip is drawn again only when the hash of its row differs from the hash it was drawn with; a change of size, font or theme draws every strip again. The CPU cost of a frame is then in proportion to the rows that changed.
+- Both frames clip each row to its row box, so ink that extends above or below its row is drawn only inside that row.
+- The render pass clears to the default background, copies every strip, composites the inline images from tiles that the same `CGContextDrawImage` call draws at their target rectangle, and then draws the cursor with the fills and the difference fill of the CoreGraphics frame, so a block cursor over a glyph inverts the glyph pixels.
+- The pass is synchronous: a draw returns after its command buffer completes, so the next draw writes strips that no GPU work reads.
+- The count of strips that a draw redrew is part of the render output of a diagnostic build only.
+- Limit: a scroll changes every row, so it draws every strip, as the CoreGraphics frame draws every cell. A benchmark of scrolling decides after development whether strips are kept by row content.
+
+Reasons and the objections that an adversarial review raised and that this design answers:
+- The CoreGraphics frame smooths text against its background (white text on black and black text on white gave 709 of 1176 inked pixels that are not complementary), so an atlas of coverage that does not depend on the background cannot reproduce its pixels, and a tile per cell that is composited outside its cell is a second renderer whose values differ.
+- A tile per cell over its own background erases the ink that an earlier cell drew into it, which the CoreGraphics frame keeps; a row strip contains its cells in their drawing order and is exact by construction.
+- A cache keyed by the background color of a cell grows with each color; strips are bounded by the rows of the screen.
+- A row placement objection was rejected: the CoreGraphics rectangle at `H - (r + 1) × cell height` is in bottom-left coordinates and covers the rows `r × cell height` to `(r + 1) × cell height` of the surface memory, which a test with a margin below the rows verifies.
+
 ### Terminal verification
 
 - Record a failing baseline before each correction and run the same assertion after correction.
