@@ -284,3 +284,60 @@ fn the_gpu_frame_draws_only_the_strips_of_changed_rows() {
         "a change of one row and of the cursor draws one strip"
     );
 }
+
+// A frame draws into a surface that the host does not hold. Holding the drawn surface moves the next draw to another
+// surface, and releasing it lets a later draw use it again; both the CPU and the GPU frame keep this pool.
+#[test]
+fn a_held_surface_is_not_drawn_into_until_it_is_released() {
+    let metrics = metrics(13.0, 1.0);
+    let width = metrics.cell_width as u32 * 6;
+    let height = metrics.cell_height as u32 * 3;
+    let theme = TerminalTheme::dark();
+    let cursor = cursor_render(CursorShape::Block);
+    for (kind, frame) in [
+        ("cpu", Frame::new(width, height).expect("cpu frame")),
+        ("gpu", Frame::new_gpu(width, height).expect("gpu frame")),
+    ] {
+        let screen = text_screen();
+        frame
+            .draw_with_theme(&screen, &metrics, cursor, &theme)
+            .expect("first draw");
+        let first = frame.id();
+        frame
+            .draw_with_theme(&screen, &metrics, cursor, &theme)
+            .expect("draw again");
+        assert_eq!(
+            frame.id(),
+            first,
+            "{kind}: a surface that is not held is drawn again"
+        );
+        frame.hold(first).expect("hold");
+        frame
+            .draw_with_theme(&screen, &metrics, cursor, &theme)
+            .expect("draw while held");
+        let second = frame.id();
+        assert_ne!(second, first, "{kind}: a held surface is not drawn into");
+        let cpu = Frame::new(width, height).expect("reference frame");
+        cpu.draw_with_theme(&screen, &metrics, cursor, &theme)
+            .expect("reference draw");
+        assert_same_pixels(&cpu, &frame, width, height, kind);
+        frame.hold(second).expect("hold the second");
+        frame.release(first).expect("release");
+        frame
+            .draw_with_theme(&screen, &metrics, cursor, &theme)
+            .expect("draw after release");
+        assert_eq!(
+            frame.id(),
+            first,
+            "{kind}: a released surface is drawn into again"
+        );
+        assert_eq!(
+            frame.release(first.wrapping_add(1_000_000)),
+            Err(format!(
+                "the frame holds no surface {}",
+                first.wrapping_add(1_000_000)
+            )),
+            "{kind}: a release of an unknown surface is refused"
+        );
+    }
+}

@@ -256,6 +256,8 @@ unsafe extern "C" {
     fn frame_new(width_px: u32, height_px: u32) -> *mut CFrame;
     fn frame_new_gpu(width_px: u32, height_px: u32) -> *mut CFrame;
     fn frame_gpu_error() -> *const std::ffi::c_char;
+    fn frame_hold(frame: *mut CFrame, id: u32) -> i32;
+    fn frame_release(frame: *mut CFrame, id: u32) -> i32;
     #[cfg(feature = "diagnostics")]
     fn frame_gpu_strips_drawn(frame: *mut CFrame) -> u32;
     fn frame_id(frame: *mut CFrame) -> u32;
@@ -429,6 +431,22 @@ impl Frame {
     #[cfg(feature = "diagnostics")]
     pub fn strips_drawn(&self) -> u32 {
         unsafe { frame_gpu_strips_drawn(self.ptr) }
+    }
+
+    /// Marks the target surface `id` as held by the host, so no draw writes it until it is released.
+    pub fn hold(&self, id: u32) -> Result<(), String> {
+        match unsafe { frame_hold(self.ptr, id) } {
+            0 => Ok(()),
+            _ => Err(format!("the frame has no surface {id}")),
+        }
+    }
+
+    /// Releases the target surface `id` that the host held.
+    pub fn release(&self, id: u32) -> Result<(), String> {
+        match unsafe { frame_release(self.ptr, id) } {
+            0 => Ok(()),
+            _ => Err(format!("the frame holds no surface {id}")),
+        }
     }
 
     pub fn id(&self) -> u32 {

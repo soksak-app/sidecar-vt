@@ -13,7 +13,19 @@ struct FrameFont {
     CTFontDescriptorRef descriptor;
 };
 
+// A surface that a frame draws into. The host may hold a surface that it shows (the lease mode of core), and the window
+// server marks a shown surface in use; a frame draws only into a surface that is neither.
+typedef struct {
+    IOSurfaceRef surface;
+    uint32_t id;
+    uint8_t nonce[16];
+    // The Metal texture over the surface of a GPU frame (a retained id<MTLTexture>), or NULL.
+    void *texture;
+    uint8_t held;
+} FrameTarget;
+
 struct Frame {
+    // The target that the last draw drew into: its surface, identifier, nonce and texture. The targets own these values.
     IOSurfaceRef surface;
     uint32_t surface_id;
     uint8_t nonce[16];
@@ -33,6 +45,9 @@ struct Frame {
     void *rows;
     void *configuration;
     uint32_t strips_drawn;
+    FrameTarget *targets;
+    uint32_t target_count;
+    uint32_t current;
 };
 
 // 이웃한 셀은 대개 같은 색이다. 마지막으로 만든 색을 RGB 값으로 기억해 셀마다 색을 새로 만들지 않는다.
@@ -91,22 +106,9 @@ static void store_cell_bounds(RenderCell *cell, CGRect bounds) {
 
 // 주어진 pixel 크기로 frame 을 만든다
 // Creates the frame and its surface. A GPU frame aligns the rows of the surface as Metal requires for a render target.
-static Frame* frame_create(uint32_t width_px, uint32_t height_px, int gpu) {
-    Frame *frame = malloc(sizeof(Frame));
-    if (!frame) return NULL;
-
-    frame->width = width_px;
-    frame->height = height_px;
-    frame->texture = NULL;
-    frame->strips = NULL;
-    frame->strip_texture = NULL;
-    frame->overlay = NULL;
-    frame->overlay_texture = NULL;
-    frame->rows = NULL;
-    frame->configuration = NULL;
-    frame->strips_drawn = 0;
-
-    // 전역 IOSurface 를 만든다
+// Creates a global BGRA surface in sRGB that carries its nonce as the soksak.frame property. A GPU surface aligns its rows
+// as Metal requires for a render target.
+static IOSurfaceRef surface_create(uint32_t width_px, uint32_t height_px, int gpu, uint8_t nonce[16]) {
     // BGRA 형식 코드: 0x42475241
     NSDictionary *properties = @{
         (id)kIOSurfaceWidth: @(width_px),
@@ -124,33 +126,56 @@ static Frame* frame_create(uint32_t width_px, uint32_t height_px, int gpu) {
         aligned[(id)kIOSurfaceBytesPerRow] = @(IOSurfaceAlignProperty(kIOSurfaceBytesPerRow, (size_t)width_px * 4));
         properties = aligned;
     }
-
-    frame->surface = IOSurfaceCreate((CFDictionaryRef)properties);
-    if (!frame->surface) {
-        free(frame);
-        return NULL;
-    }
-
-    frame->surface_id = IOSurfaceGetID(frame->surface);
+    IOSurfaceRef surface = IOSurfaceCreate((CFDictionaryRef)properties);
+    if (!surface) return NULL;
 
     // surface 에 sRGB 색 공간을 붙인다
     CGColorSpaceRef srgb_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     if (srgb_space) {
         CFPropertyListRef color_space_plist = CGColorSpaceCopyPropertyList(srgb_space);
         if (color_space_plist) {
-            IOSurfaceSetValue(frame->surface, kIOSurfaceColorSpace, color_space_plist);
+            IOSurfaceSetValue(surface, kIOSurfaceColorSpace, color_space_plist);
             CFRelease(color_space_plist);
         }
         CGColorSpaceRelease(srgb_space);
     }
 
-    // 16바이트 nonce 를 생성한다
-    arc4random_buf(frame->nonce, 16);
+    // 16바이트 nonce 를 생성해 surface 의 property 로 설정한다
+    arc4random_buf(nonce, 16);
+    NSData *nonce_data = [NSData dataWithBytes:nonce length:16];
+    IOSurfaceSetValue(surface, CFSTR("soksak.frame"), (CFDataRef)nonce_data);
+    return surface;
+}
 
-    // nonce 를 surface 의 property 로 설정한다
-    NSData *nonce_data = [NSData dataWithBytes:frame->nonce length:16];
-    IOSurfaceSetValue(frame->surface, CFSTR("soksak.frame"), (CFDataRef)nonce_data);
+static void frame_use_target(Frame *frame, uint32_t index) {
+    FrameTarget *target = &frame->targets[index];
+    frame->current = index;
+    frame->surface = target->surface;
+    frame->surface_id = target->id;
+    memcpy(frame->nonce, target->nonce, 16);
+    frame->texture = target->texture;
+}
 
+static Frame* frame_create(uint32_t width_px, uint32_t height_px, int gpu) {
+    Frame *frame = calloc(1, sizeof(Frame));
+    if (!frame) return NULL;
+    frame->width = width_px;
+    frame->height = height_px;
+    frame->targets = calloc(1, sizeof(FrameTarget));
+    if (!frame->targets) {
+        free(frame);
+        return NULL;
+    }
+    FrameTarget *target = &frame->targets[0];
+    target->surface = surface_create(width_px, height_px, gpu, target->nonce);
+    if (!target->surface) {
+        free(frame->targets);
+        free(frame);
+        return NULL;
+    }
+    target->id = IOSurfaceGetID(target->surface);
+    frame->target_count = 1;
+    frame_use_target(frame, 0);
     return frame;
 }
 
@@ -263,26 +288,19 @@ Frame* frame_new_gpu(uint32_t width_px, uint32_t height_px) {
         frame_drop(frame);
         return NULL;
     }
-    frame->texture = (__bridge_retained void *)texture;
-    // The strip and overlay surfaces belong to this frame; the frames that created them only carry them.
-    Frame *strips = frame_create(width_px, height_px, 1);
-    Frame *overlay = frame_create(width_px, height_px, 1);
-    id<MTLTexture> strip_texture = strips ? [gpu_device newTextureWithDescriptor:descriptor iosurface:strips->surface plane:0] : nil;
-    id<MTLTexture> overlay_texture = overlay ? [gpu_device newTextureWithDescriptor:descriptor iosurface:overlay->surface plane:0] : nil;
+    frame->targets[0].texture = (__bridge_retained void *)texture;
+    frame_use_target(frame, 0);
+    uint8_t unused_nonce[16];
+    frame->strips = surface_create(width_px, height_px, 1, unused_nonce);
+    frame->overlay = surface_create(width_px, height_px, 1, unused_nonce);
+    id<MTLTexture> strip_texture = frame->strips ? [gpu_device newTextureWithDescriptor:descriptor iosurface:frame->strips plane:0] : nil;
+    id<MTLTexture> overlay_texture = frame->overlay ? [gpu_device newTextureWithDescriptor:descriptor iosurface:frame->overlay plane:0] : nil;
     if (!strip_texture || !overlay_texture) {
         gpu_fail(@"Metal gives no texture over the strip or overlay surface of the frame", nil);
-        frame_drop(strips);
-        frame_drop(overlay);
         frame_drop(frame);
         return NULL;
     }
-    frame->strips = strips->surface;
-    strips->surface = NULL;
-    frame_drop(strips);
     frame->strip_texture = (__bridge_retained void *)strip_texture;
-    frame->overlay = overlay->surface;
-    overlay->surface = NULL;
-    frame_drop(overlay);
     frame->overlay_texture = (__bridge_retained void *)overlay_texture;
     frame->rows = (__bridge_retained void *)[NSMutableArray array];
     return frame;
@@ -939,28 +957,88 @@ uint32_t frame_gpu_strips_drawn(Frame *frame) {
 }
 #endif
 
+// Selects the target of the next draw: the current one when it is neither held nor in use, otherwise another such target,
+// otherwise a new target. The draw never waits for a surface.
+static int frame_select_target(Frame *frame) {
+    for (uint32_t step = 0; step < frame->target_count; step++) {
+        uint32_t index = (frame->current + step) % frame->target_count;
+        FrameTarget *target = &frame->targets[index];
+        if (!target->held && !IOSurfaceIsInUse(target->surface)) {
+            frame_use_target(frame, index);
+            return 0;
+        }
+    }
+    FrameTarget *targets = realloc(frame->targets, sizeof(FrameTarget) * (frame->target_count + 1));
+    if (!targets) return -1;
+    frame->targets = targets;
+    FrameTarget *target = &frame->targets[frame->target_count];
+    memset(target, 0, sizeof(*target));
+    target->surface = surface_create(frame->width, frame->height, frame->texture != NULL, target->nonce);
+    if (!target->surface) return -1;
+    target->id = IOSurfaceGetID(target->surface);
+    if (frame->texture) {
+        MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                              width:frame->width
+                                                                                             height:frame->height
+                                                                                          mipmapped:NO];
+        descriptor.usage = MTLTextureUsageRenderTarget;
+        id<MTLTexture> texture = [gpu_device newTextureWithDescriptor:descriptor iosurface:target->surface plane:0];
+        if (!texture) {
+            CFRelease(target->surface);
+            gpu_fail(@"Metal gives no texture over a new target surface of the frame", nil);
+            return -4;
+        }
+        target->texture = (__bridge_retained void *)texture;
+    }
+    frame->target_count++;
+    frame_use_target(frame, frame->target_count - 1);
+    return 0;
+}
+
+static FrameTarget *frame_target(Frame *frame, uint32_t id) {
+    for (uint32_t i = 0; i < frame->target_count; i++) {
+        if (frame->targets[i].id == id) return &frame->targets[i];
+    }
+    return NULL;
+}
+
+int frame_hold(Frame *frame, uint32_t id) {
+    FrameTarget *target = frame ? frame_target(frame, id) : NULL;
+    if (!target) return -1;
+    target->held = 1;
+    return 0;
+}
+
+int frame_release(Frame *frame, uint32_t id) {
+    FrameTarget *target = frame ? frame_target(frame, id) : NULL;
+    if (!target || !target->held) return -1;
+    target->held = 0;
+    return 0;
+}
+
 int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics,
                                   InlineImageRaster *images, uint32_t image_count,
                                   RenderOutput *render_output) {
     if (!frame || !screen || !metrics) return -1;
+    int selected = frame_select_target(frame);
+    if (selected != 0) return selected;
     if (frame->texture) return frame_draw_gpu(frame, screen, metrics, images, image_count, render_output);
     return frame_draw_cg(frame, frame->surface, screen, metrics, images, image_count, render_output, NULL);
 }
 
 void frame_drop(Frame *frame) {
     if (frame) {
-        if (frame->texture) {
-            CFRelease(frame->texture);
+        for (uint32_t i = 0; i < frame->target_count; i++) {
+            if (frame->targets[i].texture) CFRelease(frame->targets[i].texture);
+            if (frame->targets[i].surface) CFRelease(frame->targets[i].surface);
         }
+        free(frame->targets);
         if (frame->strip_texture) CFRelease(frame->strip_texture);
         if (frame->strips) CFRelease(frame->strips);
         if (frame->overlay_texture) CFRelease(frame->overlay_texture);
         if (frame->overlay) CFRelease(frame->overlay);
         if (frame->rows) CFRelease(frame->rows);
         if (frame->configuration) CFRelease(frame->configuration);
-        if (frame->surface) {
-            CFRelease(frame->surface);
-        }
         free(frame);
     }
 }

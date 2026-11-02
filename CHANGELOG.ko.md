@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S121-4-1: frame은 목표 surface pool을 두고, host가 쥐지 않았고 in use가 아닌 surface에만 그린다.
 - S121-3: GPU frame은 overlay surface로 CoreGraphics frame과 같은 pixel의 inline image를 합성한다.
 - S121-2: GPU frame은 CoreGraphics 칸 loop가 그린 행 strip으로 글자, 넓은 글자, 밑줄, preedit을 그리고, 바뀐 행의 strip만 다시 그린다.
 - S121-2-1: frame은 각 행을 그 행의 box로 자르므로, 잉크가 행 위아래로 넘치는 글자는 그 행 안에서만 그린다.
