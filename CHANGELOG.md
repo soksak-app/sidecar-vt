@@ -1,5 +1,6 @@
 # Changelog
 
+- S135: Inline images keep moving with output at the history limit: the scroll generation counts the rows dropped past the limit, on plain output too.
 - S132: Closing a session sends SIGHUP to the child first and SIGKILL after up to 250 ms, so a shell at its prompt ends its jobs.
 - S131-6: An input request no longer consumes PTY output, so it ends during a flood of output.
 - S131-5: Each row of the close table has its own test, and a close that was requested decides the reason when the report of the reaper is ready at the same time.

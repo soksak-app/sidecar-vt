@@ -2038,6 +2038,49 @@ fn an_inline_image_is_anchored_at_the_cursor_where_its_sequence_appears() {
 }
 
 #[test]
+fn an_inline_image_after_the_history_limit_counts_the_rows_that_the_limit_dropped() {
+    // The history limit is 10000 rows. On a 10-row screen, the first 9 line feeds move the cursor to
+    // the bottom row without scrolling, and each later line feed pushes one row into the history.
+    // After 10050 line feeds, 10041 rows were pushed and 41 of them were dropped past the limit.
+    let mut engine = AlacrittyEngine::new();
+    engine.resize(20, 10);
+    engine.feed("\r\n".repeat(10_050).as_bytes());
+    assert_eq!(
+        engine.scrollback(),
+        (0, 10_000),
+        "the history must be at its limit"
+    );
+    engine.feed(b"\x1b]1337;File=name=ZmlsZS5wbmc=;inline=1:aGVsbG8=\x07");
+    let first = inline_anchor_scroll(&mut engine);
+    assert_eq!(
+        first, 10_041,
+        "the scroll generation must count the dropped rows"
+    );
+
+    engine.feed("\r\n".repeat(5).as_bytes());
+    engine.feed(b"\x1b]1337;File=name=ZmlsZS5wbmc=;inline=1:aGVsbG8=\x07");
+    let second = inline_anchor_scroll(&mut engine);
+    assert_eq!(
+        second - first,
+        5,
+        "the scroll generation must move with each pushed row"
+    );
+}
+
+fn inline_anchor_scroll(engine: &mut AlacrittyEngine) -> i64 {
+    let anchors: Vec<_> = engine
+        .drain_events()
+        .into_iter()
+        .filter_map(|event| match event {
+            EngineEvent::InlineImage { anchor, .. } => Some(anchor),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(anchors.len(), 1, "{anchors:?}");
+    anchors[0].scroll
+}
+
+#[test]
 fn a_narrowing_reflow_keeps_the_rows_in_view_while_empty_rows_lie_below_the_cursor() {
     let mut engine = AlacrittyEngine::new();
     engine.resize(10, 6);

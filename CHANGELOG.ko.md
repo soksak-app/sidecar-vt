@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S135: history 상한에서도 inline image가 출력과 함께 움직인다. scroll generation이 상한을 넘어 버린 줄을 세며, 일반 출력에서도 그렇다.
 - S132: 세션을 닫으면 child에 먼저 SIGHUP을 보내고 최대 250 ms 뒤 SIGKILL을 보내므로, prompt에 있는 shell은 자기 job을 끝낸다.
 - S131-6: input 요청은 PTY 출력을 소비하지 않으므로 출력 flood 중에도 끝난다.
 - S131-5: close 표의 각 행에 test가 있고, reaper의 보고가 동시에 준비되어도 요청된 close가 이유를 정한다.

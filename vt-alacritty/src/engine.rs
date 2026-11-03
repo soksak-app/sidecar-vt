@@ -577,7 +577,7 @@ pub struct AlacrittyEngine {
     /// Absolute row number of the first prompt row (dropped + history row count + screen row).
     /// Present only in the prompt state.
     prompt_start: Option<i64>,
-    /// Number of rows dropped past the history limit. Counted in the prompt state.
+    /// Number of rows dropped past the history limit, and history rows erased by ED 3.
     dropped: i64,
     /// Limit on the number of history rows.
     history_limit: usize,
@@ -1061,15 +1061,12 @@ impl AlacrittyEngine {
         self.dropped + self.term.grid().history_size() as i64 + i64::from(line)
     }
 
-    /// Feeds input into the engine. In the prompt state, the history limit is raised temporarily so
-    /// that every row this input pushes up is kept in history. Then the rows past the limit are
-    /// dropped and counted. This keeps the absolute number of the first prompt row correct after
-    /// scrolling. One byte cannot push up more rows than the screen has.
+    /// Feeds input into the engine. The history limit is raised temporarily so that every row this
+    /// input pushes up is kept in history. Then the rows past the limit are dropped and counted.
+    /// Without this, the library drops the rows at the limit silently, and the absolute numbers of
+    /// the screen rows and the scroll generation of inline images stop moving. One byte cannot push
+    /// up more rows than the screen has.
     fn advance(&mut self, bytes: &[u8]) {
-        if self.prompt_start.is_none() {
-            self.processor.advance(&mut self.term, bytes);
-            return;
-        }
         let rows = self.term.grid().screen_lines();
         self.term
             .grid_mut()
@@ -1873,8 +1870,11 @@ impl Engine for AlacrittyEngine {
         }
     }
 
+    /// Count of rows that have scrolled into the history, including the rows dropped past the
+    /// history limit. It increases with each row pushed up and does not change when the history
+    /// reaches its limit.
     fn scroll_generation(&self) -> i64 {
-        self.term.grid().history_size() as i64
+        self.dropped + self.term.grid().history_size() as i64
     }
 
     fn modes(&self) -> Modes {
