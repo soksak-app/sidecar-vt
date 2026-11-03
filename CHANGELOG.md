@@ -1,5 +1,6 @@
 # Changelog
 
+- S130: The cost of a frame on 0.0.23 is measured: a status line 1.7 ms per frame and 20 rows 3.0 ms per frame.
 - S129: Version 0.0.23, which carries S122 to S128.
 - S128: The sidecar uses the records kit 0.0.6, whose release gate accepts a closed item with a `Closed:` reason.
 - S127: The image surface of a session redraws only the strips of changed rows.

@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S130: 0.0.23의 frame 비용을 쟀다. status line은 frame당 1.7 ms, 20행은 frame당 3.0 ms다.
 - S129: S122부터 S128까지 담은 version 0.0.23.
 - S128: sidecar는 `Closed:` 사유로 닫은 항목을 받아들이는 records kit 0.0.6을 쓴다.
 - S127: 세션의 image surface는 바뀐 행의 strip만 다시 그린다.
