@@ -45,8 +45,8 @@ fn screen_text(screen: &Screen, cols: usize) -> String {
                 .iter()
                 .map(|cell| {
                     cell.ch
-                        .clone()
-                        .unwrap_or_else(|| " ".repeat(cell.width.max(1) as usize))
+                        .as_deref()
+                        .map_or_else(|| " ".repeat(cell.width.max(1) as usize), str::to_string)
                 })
                 .collect();
             while row.chars().count() < cols {

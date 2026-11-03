@@ -68,7 +68,13 @@ fn bel_and_st_terminated_effects_and_queries_preserve_response_order() {
         "responses must retain input order"
     );
     assert_eq!(engine.screen().lines[0][0].ch.as_deref(), Some("A"));
-    assert_eq!(engine.screen().lines[0][0].fg.as_deref(), Some("#00ffff"));
+    assert_eq!(
+        engine.screen().lines[0][0]
+            .fg
+            .map(|color| color.to_string())
+            .as_deref(),
+        Some("#00ffff")
+    );
 }
 
 #[test]
@@ -427,12 +433,21 @@ fn osc50_cursor_shape_changes_program_cursor() {
 fn osc104_resets_indexed_colors() {
     let mut engine = AlacrittyEngine::new();
     engine.feed(b"\x1b]4;1;rgb:0000/ffff/ffff\x07\x1b[38;5;1mX");
-    assert_eq!(engine.screen().lines[0][0].fg.as_deref(), Some("#00ffff"));
+    assert_eq!(
+        engine.screen().lines[0][0]
+            .fg
+            .map(|color| color.to_string())
+            .as_deref(),
+        Some("#00ffff")
+    );
     engine.feed(b"\x1b]104;1\x07\x1b[39mY\x1b[38;5;1mZ");
     let expected = default_terminal_color(1).expect("default color 1");
     let expected = format!("#{:02x}{:02x}{:02x}", expected[0], expected[1], expected[2]);
     assert_eq!(
-        engine.screen().lines[0][2].fg.as_deref(),
+        engine.screen().lines[0][2]
+            .fg
+            .map(|color| color.to_string())
+            .as_deref(),
         Some(expected.as_str())
     );
 }
@@ -468,11 +483,17 @@ fn osc104_without_parameters_resets_all_indexed_colors() {
     );
     let screen = engine.screen();
     assert_eq!(
-        screen.lines[0][0].fg.as_deref(),
+        screen.lines[0][0]
+            .fg
+            .map(|color| color.to_string())
+            .as_deref(),
         Some(expected_one.as_str())
     );
     assert_eq!(
-        screen.lines[0][1].fg.as_deref(),
+        screen.lines[0][1]
+            .fg
+            .map(|color| color.to_string())
+            .as_deref(),
         Some(expected_two.as_str())
     );
 }
@@ -725,7 +746,10 @@ fn native_selection_updates_raster_cells_and_returns_text_once() {
     engine.selection_update(5, 0).expect("selection update");
     let selected = engine.screen();
     assert_eq!(
-        selected.lines[0][2].bg.as_deref(),
+        selected.lines[0][2]
+            .bg
+            .map(|color| color.to_string())
+            .as_deref(),
         Some("#44475a"),
         "a selected cell is drawn on the selection color"
     );
@@ -762,7 +786,7 @@ fn a_program_mouse_click_can_clear_a_previous_selection_without_copying() {
     engine.selection_update(5, 0).expect("selection update");
     engine.selection_end().expect("selection copy");
     assert_eq!(engine.selection_text().as_deref(), Some("hello"));
-    let selected_pixel = engine.screen().lines[0][2].bg.clone();
+    let selected_pixel = engine.screen().lines[0][2].bg;
     assert!(engine.selection_clear(), "the selected pixels changed");
     assert_eq!(engine.selection_text(), None);
     assert_ne!(engine.screen().lines[0][2].bg, selected_pixel);
@@ -842,7 +866,9 @@ fn inverted_text(screen: &soksak_sidecar_vt_core::Screen, row: usize) -> String 
     );
     screen.lines[row]
         .iter()
-        .filter(|cell| cell.bg.as_deref() == Some(selection.as_str()))
+        .filter(|cell| {
+            cell.bg.map(|color| color.to_string()).as_deref() == Some(selection.as_str())
+        })
         .map(|cell| cell.ch.as_deref().unwrap_or(" "))
         .collect()
 }
@@ -938,7 +964,10 @@ fn indexed_colors_and_combining_characters_survive_export() {
         .iter()
         .find(|cell| cell.ch.as_deref() == Some("X"))
         .expect("X cell");
-    assert_eq!(x.fg.as_deref(), Some("#ff0000"));
+    assert_eq!(
+        x.fg.map(|color| color.to_string()).as_deref(),
+        Some("#ff0000")
+    );
     assert!(
         first
             .iter()
@@ -951,8 +980,20 @@ fn dynamic_color_replies_and_screen_colors_use_the_same_palette() {
     let mut engine = AlacrittyEngine::new();
     engine.feed(b"\x1b]10;rgb:1122/3344/5566\x07\x1b]11;rgb:7788/99aa/bbcc\x07\x1b[39mA");
     let screen = engine.screen();
-    assert_eq!(screen.lines[0][0].fg.as_deref(), Some("#113355"));
-    assert_eq!(screen.lines[0][0].bg.as_deref(), Some("#7799bb"));
+    assert_eq!(
+        screen.lines[0][0]
+            .fg
+            .map(|color| color.to_string())
+            .as_deref(),
+        Some("#113355")
+    );
+    assert_eq!(
+        screen.lines[0][0]
+            .bg
+            .map(|color| color.to_string())
+            .as_deref(),
+        Some("#7799bb")
+    );
 
     engine.feed(b"\x1b]10;?\x07\x1b]11;?\x07\x1b]12;?\x07");
     let replies: Vec<Vec<u8>> = engine
@@ -983,13 +1024,19 @@ fn default_palette_styled_cells_use_the_same_rgb_as_queries() {
     let mut engine = AlacrittyEngine::new();
     engine.feed(b"\x1b[38;5;196m\x1b[48;5;21mX");
     let cell = &engine.screen().lines[0][0];
-    assert_eq!(cell.fg.as_deref(), Some("#ff0000"));
+    assert_eq!(
+        cell.fg.map(|color| color.to_string()).as_deref(),
+        Some("#ff0000")
+    );
     let expected_bg = DEFAULT_PALETTE[21];
     let expected_bg_text = format!(
         "#{:02x}{:02x}{:02x}",
         expected_bg[0], expected_bg[1], expected_bg[2]
     );
-    assert_eq!(cell.bg.as_deref(), Some(expected_bg_text.as_str()));
+    assert_eq!(
+        cell.bg.map(|color| color.to_string()).as_deref(),
+        Some(expected_bg_text.as_str())
+    );
 }
 
 #[test]
@@ -998,8 +1045,8 @@ fn application_theme_changes_default_and_ansi_raster_colors_without_changing_tex
     engine.feed(b"A\x1b[38;5;1mR");
     let dark = engine.screen();
     let dark_text = text(&dark);
-    let dark_default = dark.lines[0][0].fg.clone();
-    let dark_ansi = dark.lines[0][1].fg.clone();
+    let dark_default = dark.lines[0][0].fg;
+    let dark_ansi = dark.lines[0][1].fg;
 
     engine.set_theme(TerminalTheme::light());
     let light = engine.screen();
@@ -1773,11 +1820,20 @@ fn erase_display_clears_the_screen_without_moving_it_into_the_history() {
     let cursor = engine.cursor();
     assert_eq!((cursor.row, cursor.col), (1, 3), "ED 2 moved the cursor");
     assert_eq!(
-        engine.screen().lines[5][19].bg.as_deref(),
-        engine.screen().lines[0][0].bg.as_deref()
+        engine.screen().lines[5][19]
+            .bg
+            .map(|color| color.to_string())
+            .as_deref(),
+        engine.screen().lines[0][0]
+            .bg
+            .map(|color| color.to_string())
+            .as_deref()
     );
     assert_ne!(
-        engine.screen().lines[0][0].bg.as_deref(),
+        engine.screen().lines[0][0]
+            .bg
+            .map(|color| color.to_string())
+            .as_deref(),
         Some("#1e1e1e"),
         "erased cells lost the current background"
     );
@@ -1853,7 +1909,11 @@ fn osc_highlight_colors_are_set_queried_reset_and_draw_the_selection() {
     engine.selection_update(1, 0).unwrap();
     let cell = engine.screen().lines[0][0].clone();
     assert_eq!(
-        (cell.bg.as_deref(), cell.fg.as_deref(), cell.inverse),
+        (
+            cell.bg.map(|color| color.to_string()).as_deref(),
+            cell.fg.map(|color| color.to_string()).as_deref(),
+            cell.inverse
+        ),
         (Some("#123456"), Some("#abcdef"), false),
         "a selected cell uses the highlight colors instead of inverse"
     );
@@ -1866,7 +1926,11 @@ fn osc_highlight_colors_are_set_queried_reset_and_draw_the_selection() {
     );
     let cell = engine.screen().lines[0][0].clone();
     assert_eq!(
-        (cell.bg.as_deref(), cell.fg.as_deref(), cell.inverse),
+        (
+            cell.bg.map(|color| color.to_string()).as_deref(),
+            cell.fg.map(|color| color.to_string()).as_deref(),
+            cell.inverse
+        ),
         (Some("#334455"), Some("#e0e0e0"), false),
         "without highlight colors a selected cell keeps its text color on the theme selection"
     );
@@ -1916,14 +1980,14 @@ fn osc_special_colors_draw_attributed_text_when_enabled_and_answer_queries() {
         .lines
         .first()
         .and_then(|line| line.first())
-        .and_then(|cell| cell.fg.clone());
+        .and_then(|cell| cell.fg);
 
     engine.feed(
         b"\x1b]5;0;rgb:11/22/33;4;#445566\x07\x1b[1mB\x1b[0m\x1b[3mI\x1b[0m\x1b[1;31mR\x1b[0m",
     );
     let before = engine.screen().lines[0].clone();
     assert_ne!(
-        before[0].fg.as_deref(),
+        before[0].fg.map(|color| color.to_string()).as_deref(),
         Some("#112233"),
         "a special color is not used until OSC 6 enables it"
     );
@@ -1931,17 +1995,17 @@ fn osc_special_colors_draw_attributed_text_when_enabled_and_answer_queries() {
     assert_eq!(replies(&mut engine), ["\x1b]5;0;rgb:1111/2222/3333\x07"]);
     let line = engine.screen().lines[0].clone();
     assert_eq!(
-        line[0].fg.as_deref(),
+        line[0].fg.map(|color| color.to_string()).as_deref(),
         Some("#112233"),
         "bold text with the default foreground uses the bold color"
     );
     assert_eq!(
-        line[1].fg.as_deref(),
+        line[1].fg.map(|color| color.to_string()).as_deref(),
         Some("#445566"),
         "italic text uses the italic color"
     );
     assert_ne!(
-        line[2].fg.as_deref(),
+        line[2].fg.map(|color| color.to_string()).as_deref(),
         Some("#112233"),
         "an explicit foreground is kept"
     );

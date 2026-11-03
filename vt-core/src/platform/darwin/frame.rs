@@ -22,7 +22,7 @@ pub struct GlyphRenderBounds {
     pub col: u32,
     pub width: u32,
     pub font_run_count: u32,
-    pub grapheme: String,
+    pub grapheme: compact_str::CompactString,
     pub foreground: [u8; 3],
     pub background: [u8; 3],
     pub ink: Option<[f64; 4]>,
@@ -490,21 +490,20 @@ impl Frame {
         }
         // The default background is the current default background of the screen (including OSC
         // 11). The margin outside the cells is also filled with this color.
-        let (default_background, valid) = parse_hex_color(&Some(render_screen.background.clone()));
-        if !valid {
+        let Some(default_background) = crate::palette::parse_hex(&render_screen.background) else {
             return Err(format!(
                 "invalid screen background {:?}",
                 render_screen.background
             ));
-        }
+        };
         // Rust owns the strings that render_screen and CCell refer to until this call ends. The
         // native function does not store these borrowed pointers. Converts the Rust Screen to the C
         // Screen.
         let mut cells = Vec::new();
         for row in &render_screen.lines {
             for cell in row {
-                let (fg, has_fg) = parse_hex_color(&cell.fg);
-                let (bg, has_bg) = parse_hex_color(&cell.bg);
+                let (fg, has_fg) = cell_color(cell.fg);
+                let (bg, has_bg) = cell_color(cell.bg);
 
                 cells.push(CCell {
                     col: 0, // Set per cell below.
@@ -852,13 +851,13 @@ fn apply_preedit(
         let cell_width = u8::try_from(width)
             .map_err(|_| "preedit grapheme display width exceeds Cell width".to_string())?;
         let mut cell = crate::protocol::Cell {
-            ch: Some(grapheme.to_string()),
+            ch: Some(grapheme.into()),
             width: cell_width,
             underline: selected_contains(preedit.marked_range, utf16_col, utf16_end),
             ..Default::default()
         };
         if selected_contains(preedit.selected_range, utf16_col, utf16_end) {
-            cell.bg = Some("#808080".to_string());
+            cell.bg = Some(crate::protocol::Rgb([0x80, 0x80, 0x80]));
         }
         placements.push((logical_row, logical_col, cell));
         for offset in 1..width {
@@ -1143,16 +1142,9 @@ pub fn metrics_for(
     })
 }
 
-fn parse_hex_color(color_opt: &Option<String>) -> ([u8; 3], bool) {
-    if let Some(color_str) = color_opt
-        && color_str.starts_with('#')
-        && color_str.len() == 7
-        && let Ok(val) = u32::from_str_radix(&color_str[1..], 16)
-    {
-        let r = ((val >> 16) & 0xFF) as u8;
-        let g = ((val >> 8) & 0xFF) as u8;
-        let b = (val & 0xFF) as u8;
-        return ([r, g, b], true);
+fn cell_color(color: Option<crate::protocol::Rgb>) -> ([u8; 3], bool) {
+    match color {
+        Some(crate::protocol::Rgb(rgb)) => (rgb, true),
+        None => ([0, 0, 0], false),
     }
-    ([0, 0, 0], false)
 }

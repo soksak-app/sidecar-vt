@@ -1590,7 +1590,7 @@ impl AlacrittyEngine {
         &self,
         color: Color,
         colors: &alacritty_terminal::term::color::Colors,
-    ) -> Option<String> {
+    ) -> Option<soksak_sidecar_vt_core::Rgb> {
         let rgb = match color {
             Color::Named(name) => colors[name].or_else(|| {
                 self.theme
@@ -1614,7 +1614,7 @@ impl AlacrittyEngine {
                     })
             }),
         }?;
-        Some(format!("#{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b))
+        Some(soksak_sidecar_vt_core::Rgb([rgb.r, rgb.g, rgb.b]))
     }
 
     fn cell(
@@ -1622,7 +1622,7 @@ impl AlacrittyEngine {
         cell: &alacritty_terminal::term::cell::Cell,
         colors: &alacritty_terminal::term::color::Colors,
     ) -> Cell {
-        let mut text = String::new();
+        let mut text = compact_str::CompactString::default();
         if cell.c != '\0' && (cell.c != ' ' || cell.zerowidth().is_some()) {
             text.push(cell.c);
         }
@@ -1639,7 +1639,7 @@ impl AlacrittyEngine {
                 1
             },
             fg: match self.special_foreground(cell.flags, cell.fg) {
-                Some(rgb) => Some(format!("#{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b)),
+                Some(rgb) => Some(soksak_sidecar_vt_core::Rgb([rgb.r, rgb.g, rgb.b])),
                 None => self.color(cell.fg, colors),
             },
             bg: self.color(cell.bg, colors),
@@ -1659,14 +1659,8 @@ impl AlacrittyEngine {
             && !cell.underline
             && !cell.inverse
             && cell.link.is_none()
-            && cell
-                .fg
-                .as_deref()
-                .is_none_or(|color| color == self.theme_hex(self.theme.foreground).as_str())
-            && cell
-                .bg
-                .as_deref()
-                .is_none_or(|color| color == self.theme_hex(self.theme.background).as_str())
+            && cell.fg.is_none_or(|color| color.0 == self.theme.foreground)
+            && cell.bg.is_none_or(|color| color.0 == self.theme.background)
     }
 
     fn theme_rgb(&self, rgb: [u8; 3]) -> Rgb {
@@ -1812,7 +1806,9 @@ impl Engine for AlacrittyEngine {
         let renderable = self.term.renderable_content();
         let cols = self.term.grid().columns() as u16;
         let rows = self.term.grid().screen_lines() as u16;
-        let mut lines = vec![Vec::<Cell>::new(); rows as usize];
+        let mut lines: Vec<Vec<Cell>> = (0..rows)
+            .map(|_| Vec::with_capacity(usize::from(cols)))
+            .collect();
         // The display point is in grid coordinates. While the scrollback is shown, history rows are
         // negative, so the viewport offset is added.
         let offset = renderable.display_offset as i32;
@@ -1834,12 +1830,8 @@ impl Engine for AlacrittyEngine {
                 // Selected cells are drawn with the highlight background (or the theme's selection
                 // background when unset) and the highlight foreground (or the cell's foreground
                 // color when unset).
-                let hex = |rgb: Rgb| format!("#{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b);
-                let foreground = if cell.inverse {
-                    cell.bg.clone()
-                } else {
-                    cell.fg.clone()
-                };
+                let hex = |rgb: Rgb| soksak_sidecar_vt_core::Rgb([rgb.r, rgb.g, rgb.b]);
+                let foreground = if cell.inverse { cell.bg } else { cell.fg };
                 let foreground =
                     foreground.or_else(|| self.default_rgb(NamedColor::Foreground).map(hex));
                 cell.bg = Some(hex(self

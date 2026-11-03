@@ -1,5 +1,6 @@
 # Changelog
 
+- S126: The engine builds a screen without an allocation per cell.
 - S125: The service sends no screen message for a frame, answers `screen.read` with the full form and sends a `view` event when the cursor or the scrollback of a frame changes.
 - S124: A frame whose record the event log does not store is not hashed.
 - S123: A test measures that output which the frame clock holds builds no screen.

@@ -25,6 +25,6 @@ pub use palette::{
 };
 pub use protocol::{
     Cell, ClipboardSelection, Cursor, CursorShape, DaemonEvent, Engine, EngineEvent, InlineAnchor,
-    LocalSessionPort, Modes, Preedit, Screen, Scrollback, SessionPort, ShellMarker, ShellRequest,
-    make_default_session_port_factory, serve,
+    LocalSessionPort, Modes, Preedit, Rgb, Screen, Scrollback, SessionPort, ShellMarker,
+    ShellRequest, make_default_session_port_factory, serve,
 };

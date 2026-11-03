@@ -244,7 +244,9 @@ impl Engine for MockEngine {
                 for ch in s.chars() {
                     let width = if (ch as u32) > 127 { 2 } else { 1 };
                     let cell = Cell {
-                        ch: Some(ch.to_string()),
+                        ch: Some(compact_str::CompactString::from(
+                            &*ch.encode_utf8(&mut [0; 4]),
+                        )),
                         width,
                         ..Default::default()
                     };
@@ -7296,7 +7298,7 @@ fn rendered_glyph_count(message: &serde_json::Value) -> usize {
                     ch: cell["grapheme"]
                         .as_str()
                         .filter(|text| !text.is_empty())
-                        .map(str::to_string),
+                        .map(Into::into),
                     width: cell["width"].as_u64().unwrap() as u8,
                     ..Cell::default()
                 })

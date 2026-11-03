@@ -927,16 +927,43 @@ impl Default for CursorPolicy {
     }
 }
 
-/// The attributes of one cell
+/// A true color of a cell. Its text form is `#rrggbb` in lowercase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Rgb(pub [u8; 3]);
+
+impl std::fmt::Display for Rgb {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let [red, green, blue] = self.0;
+        write!(formatter, "#{red:02x}{green:02x}{blue:02x}")
+    }
+}
+
+impl Serialize for Rgb {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Rgb {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = <std::borrow::Cow<'de, str>>::deserialize(deserializer)?;
+        crate::palette::parse_hex(&text).map(Rgb).ok_or_else(|| {
+            serde::de::Error::custom(format!("a cell color must be #rrggbb, found {text:?}"))
+        })
+    }
+}
+
+/// The attributes of one cell. The grapheme and the colors are stored inline, so a cell takes no
+/// allocation of its own.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Cell {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ch: Option<String>,
+    pub ch: Option<compact_str::CompactString>,
     pub width: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fg: Option<String>,
+    pub fg: Option<Rgb>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bg: Option<String>,
+    pub bg: Option<Rgb>,
     #[serde(default)]
     pub bold: bool,
     #[serde(default)]

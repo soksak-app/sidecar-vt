@@ -30,6 +30,7 @@ portable-pty = "0.8"
 unicode-segmentation = "1.12"
 unicode-width = "0.2"
 sha2 = "0.10"
+compact_str = { version = "0.9", features = ["serde"] }
 tempfile = "3"
 
 [[test]]

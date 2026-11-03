@@ -102,7 +102,9 @@ impl Engine for FakeEngine {
             for ch in line.chars() {
                 let width = if (ch as u32) > 127 { 2 } else { 1 };
                 let cell = Cell {
-                    ch: Some(ch.to_string()),
+                    ch: Some(compact_str::CompactString::from(
+                        &*ch.encode_utf8(&mut [0; 4]),
+                    )),
                     width,
                     ..Default::default()
                 };

@@ -22,6 +22,7 @@ diagnostics = ["soksak-sidecar-vt-core/diagnostics"]
 alacritty_terminal = "0.26"
 serde_json = "1"
 soksak-sidecar-vt-core = { path = "../vt-core" }
+compact_str = "0.9"
 # The form of the time of a text record (core docs/spec/diagnostics.md#forms), which the standard library does not format.
 time = { version = "0.3", features = ["formatting", "macros"] }
 tokio = { version = "1", features = ["io-util", "rt-multi-thread", "time", "net", "process", "sync", "macros", "io-std"] }

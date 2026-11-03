@@ -137,7 +137,7 @@ fn opt_in_render_metadata_describes_the_drawn_glyph_underline_and_cursor() {
     let width = metrics.cell_width as u32 * 3 + 5;
     let height = metrics.cell_height as u32 * 2 + 7;
     let mut state = screen(3, 2);
-    state.lines[1][1].ch = Some("X".to_string());
+    state.lines[1][1].ch = Some("X".into());
     state.lines[1][1].underline = true;
     state.cursor.col = 2;
     state.cursor.row = 0;
@@ -233,16 +233,16 @@ fn preedit_metadata_reports_effective_overlay_and_inverse_colors() {
         Frame::new(metrics.cell_width as u32 * 3, metrics.cell_height as u32).expect("frame");
     let mut state = screen(3, 1);
     state.lines[0][0] = Cell {
-        ch: Some("!".to_string()),
-        fg: Some("#ff0000".to_string()),
-        bg: Some("#0000ff".to_string()),
+        ch: Some("!".into()),
+        fg: Some(soksak_sidecar_vt_core::Rgb([0xff, 0x00, 0x00])),
+        bg: Some(soksak_sidecar_vt_core::Rgb([0x00, 0x00, 0xff])),
         inverse: true,
         ..Default::default()
     };
     state.lines[0][2] = Cell {
-        ch: Some("Z".to_string()),
-        fg: Some("#ff0000".to_string()),
-        bg: Some("#0000ff".to_string()),
+        ch: Some("Z".into()),
+        fg: Some(soksak_sidecar_vt_core::Rgb([0xff, 0x00, 0x00])),
+        bg: Some(soksak_sidecar_vt_core::Rgb([0x00, 0x00, 0xff])),
         inverse: true,
         ..Default::default()
     };
@@ -366,8 +366,8 @@ fn fallback_multirun_metadata_bounds_match_the_pixels_in_the_drawn_frame() {
         assert_eq!(grapheme.graphemes(true).count(), 1, "{grapheme:?}");
         let frame = Frame::new(width, height).expect("frame");
         let mut state = screen(1, 1);
-        state.lines[0][0].ch = Some(grapheme.to_string());
-        state.lines[0][0].fg = Some("#ff0000".to_string());
+        state.lines[0][0].ch = Some(grapheme.into());
+        state.lines[0][0].fg = Some(soksak_sidecar_vt_core::Rgb([0xff, 0x00, 0x00]));
         let metadata = frame
             .draw_with_render_metadata(
                 &state,
@@ -466,7 +466,7 @@ fn cursor_styles_and_row_coordinates_are_pixel_distinct() {
 
     let mut text_state = screen(1, 1);
     text_state.cursor.focused = true;
-    text_state.lines[0][0].ch = Some("X".to_string());
+    text_state.lines[0][0].ch = Some("X".into());
     let text_frame = Frame::new(width, height).expect("text frame");
     text_frame
         .draw(&text_state, &metrics)
@@ -494,9 +494,9 @@ fn cursor_styles_and_row_coordinates_are_pixel_distinct() {
 fn complex_utf8_and_cjk_are_not_truncated_or_overlapped() {
     let metrics = metrics(13.0, 1.0);
     let mut state = screen(8, 1);
-    state.lines[0][0].ch = Some("👩‍💻".to_string());
+    state.lines[0][0].ch = Some("👩‍💻".into());
     state.lines[0][0].width = 2;
-    state.lines[0][2].ch = Some("tail".to_string());
+    state.lines[0][2].ch = Some("tail".into());
     let frame =
         Frame::new(metrics.cell_width as u32 * 8, metrics.cell_height as u32).expect("frame");
     frame.draw(&state, &metrics).expect("complex grapheme");
@@ -510,7 +510,7 @@ fn complex_utf8_and_cjk_are_not_truncated_or_overlapped() {
 
     state.lines[0][0].ch = None;
     state.lines[0][0].width = 1;
-    state.lines[0][2].ch = Some("T".to_string());
+    state.lines[0][2].ch = Some("T".into());
     state.cursor.preedit = Some(Preedit {
         text: "한".to_string(),
         marked_range: None,
@@ -774,8 +774,8 @@ fn wrapped_preedit_replaces_only_overlay_cells_and_clear_restores_the_base_frame
     let mut base = screen(4, 3);
     base.cursor.col = 3;
     base.cursor.visible = false;
-    base.lines[1][0].ch = Some("P".to_string());
-    base.lines[1][3].ch = Some("Z".to_string());
+    base.lines[1][0].ch = Some("P".into());
+    base.lines[1][3].ch = Some("Z".into());
     let hidden = CursorRender {
         visible: false,
         ..CursorRender::default()
@@ -840,7 +840,7 @@ fn overlay_intersection_clears_the_whole_committed_wide_cell_span() {
     state.cursor.col = 2;
     state.cursor.visible = false;
     state.lines[0][1] = Cell {
-        ch: Some("漢".to_string()),
+        ch: Some("漢".into()),
         width: 2,
         ..Default::default()
     };
@@ -1023,8 +1023,8 @@ fn cropped_preedit_keeps_full_state_and_clear_restores_committed_rows() {
     base.cursor.row = 0;
     base.cursor.col = 3;
     base.cursor.visible = false;
-    base.lines[0][0].ch = Some("X".to_string());
-    base.lines[1][3].ch = Some("Z".to_string());
+    base.lines[0][0].ch = Some("X".into());
+    base.lines[1][3].ch = Some("Z".into());
     let hidden = CursorRender {
         visible: false,
         ..CursorRender::default()
@@ -1505,8 +1505,8 @@ fn cell_raster_is_stable_when_cursor_phase_changes_outside_the_cell() {
     let width = metrics.cell_width as u32 * 4;
     let height = metrics.cell_height as u32 * 2;
     let mut state = screen(4, 2);
-    state.lines[0][0].ch = Some("A".to_string());
-    state.lines[0][1].ch = Some("한".to_string());
+    state.lines[0][0].ch = Some("A".into());
+    state.lines[0][1].ch = Some("한".into());
     state.lines[0][1].width = 2;
     state.cursor.row = 1;
     state.cursor.focused = true;
@@ -1550,7 +1550,7 @@ fn terminal_theme_changes_background_foreground_and_cursor_pixels_without_metric
     let width = initial_metrics.cell_width as u32;
     let height = initial_metrics.cell_height as u32;
     let mut state = screen(1, 1);
-    state.lines[0][0].ch = Some("X".to_string());
+    state.lines[0][0].ch = Some("X".into());
     state.cursor.focused = true;
     let frame = Frame::new(width, height).expect("theme frame");
 
@@ -1625,7 +1625,7 @@ fn block_cursor_covers_the_full_width_of_the_character_under_it() {
     // The cursor on a committed wide character also covers both cells.
     let mut wide_text = screen(4, 1);
     wide_text.cursor.focused = true;
-    wide_text.lines[0][0].ch = Some("한".to_string());
+    wide_text.lines[0][0].ch = Some("한".into());
     wide_text.lines[0][0].width = 2;
     wide_text.lines[0][1].width = 0;
     let frame = Frame::new(cell * 4, height).expect("frame");
@@ -1676,7 +1676,7 @@ fn wide_preedit_glyph_is_not_clipped_by_its_continuation_cell() {
 
     // The ink of the second cell of a committed wide character is the reference.
     let mut committed = screen(4, 1);
-    committed.lines[0][0].ch = Some("글".to_string());
+    committed.lines[0][0].ch = Some("글".into());
     committed.lines[0][0].width = 2;
     committed.lines[0][1].width = 0;
     let frame = Frame::new(cell * 4, height).expect("frame");
@@ -1792,7 +1792,7 @@ fn a_wide_glyph_narrower_than_two_cells_is_centred_in_them() {
     let cell = metrics.cell_width as u32;
     let height = metrics.cell_height as u32;
     let mut state = screen(4, 1);
-    state.lines[0][0].ch = Some("한".to_string());
+    state.lines[0][0].ch = Some("한".into());
     state.lines[0][0].width = 2;
     state.lines[0][1].width = 0;
     let frame = Frame::new(cell * 4, height).expect("frame");

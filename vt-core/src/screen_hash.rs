@@ -305,10 +305,9 @@ fn screen_cells(screen: &Screen) -> Result<Vec<HashCell<'_>>, String> {
             screen.cursor.row, screen.cursor.col
         ));
     }
-    let color = |name: &str, color: &Option<String>| match color {
-        None => Ok(Color::Default),
-        Some(text) => Color::parse_true(text)
-            .ok_or_else(|| format!("screen hash: {name} must be #rrggbb, found {text:?}")),
+    let color = |color: Option<crate::protocol::Rgb>| match color {
+        None => Color::Default,
+        Some(crate::protocol::Rgb([red, green, blue])) => Color::True(red, green, blue),
     };
     let mut cells = Vec::with_capacity(rows as usize * cols as usize);
     for row in 0..rows as usize {
@@ -323,8 +322,8 @@ fn screen_cells(screen: &Screen) -> Result<Vec<HashCell<'_>>, String> {
                 // default: a blank cell has no grapheme.
                 grapheme: cell.ch.as_deref().unwrap_or(""),
                 width: cell.width,
-                fg: color(&format!("cell ({row}, {col}) fg"), &cell.fg)?,
-                bg: color(&format!("cell ({row}, {col}) bg"), &cell.bg)?,
+                fg: color(cell.fg),
+                bg: color(cell.bg),
                 attributes: u8::from(cell.bold)
                     | u8::from(cell.italic) << 2
                     | u8::from(cell.underline) << 3

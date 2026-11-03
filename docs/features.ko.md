@@ -2,6 +2,7 @@
 
 [English](features.md)
 
+- [o] S126 — P0: 엔진은 cell마다 할당하지 않고 화면을 만든다. 입력: 모든 cell에 색과 문자가 있는 24행 100열 화면. 동작: 만드는 데 12147번 할당했다. 기대: cell은 색을 RGB byte로, grapheme을 inline string으로 담고, 글자 형식 `#rrggbb`는 답을 serialize할 때만 쓴다. Red: `building_a_screen_allocates_per_line_not_per_cell`가 `12147 allocations built a 24x100 screen; the bound is 160`로 실패했다. Green: 이 test와 workspace의 모든 test 505개가 통과한다.
 - [o] S125 — P0: service는 frame마다 screen 메시지를 보내지 않는다. 입력: raster가 그 화면을 보여 주는데도 frame마다 화면 전체를 JSON으로 host를 거쳐 page에 보냈다. 기대: `screen.read`에 full form으로 답하고, 그린 frame의 커서나 scrollback이 바뀌면 frame, caret을 담은 커서, scrollback을 `view` event로 보낸다. Red: `a_frame_sends_no_screen_message_and_a_screen_read_answers_the_full_screen`가 `only the reply of screen.read is a screen message`로, `a_frame_sends_its_view_when_the_cursor_or_the_scrollback_changes`가 `view` event 없음으로 실패했다. Green: 두 test와 package의 모든 test가 통과한다. S122의 frame 시계 spec을 같은 변경에 적는다.
 - [o] S124 — P0: event log가 저장하지 않는 record의 frame은 hash하지 않는다. 입력: event log policy가 class `frame`을 끄고 surface가 frame을 그린다. 동작: 그 record만 읽는 grid 전체의 hash를 계산했다. 기대: hash를 계산하지 않는다. Red: `a_frame_whose_record_is_not_stored_is_not_hashed`가 `a frame whose record is not stored was hashed`로 실패했다. Green: 이 test와 serve test가 통과한다.
 - [o] S123 — P0: frame 시계가 잡아 둔 출력이 화면을 만들지 않음을 test가 잰다. 입력: S122가 이 동작을 말하지만 재는 test가 없다. 기대: surface는 그리는 frame마다 화면을 하나 만든다. Red: frame 시계가 정하기 전에 화면을 만들면 `the_frame_clock_builds_no_screen_for_output_that_it_holds`가 `20 chunks of output built 21 screens for 1 frames`로 실패했다. Green: S122의 코드에서 같은 test가 통과한다.
