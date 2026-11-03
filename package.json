@@ -7,7 +7,7 @@
   "packageManager": "pnpm@11.24.0",
   "devDependencies": {
     "@soksak/kit-events": "https://github.com/soksak-app/kit-events/releases/download/v0.0.1/soksak-kit-events-0.0.1.tgz",
-    "@soksak/kit-records": "https://github.com/soksak-app/kit-records/releases/download/v0.0.1/soksak-kit-records-0.0.1.tgz",
+    "@soksak/kit-records": "https://github.com/soksak-app/kit-records/releases/download/v0.0.6/soksak-kit-records-0.0.6.tgz",
     "tree-sitter-bash": "0.25.1",
     "tree-sitter-javascript": "0.25.0",
     "tree-sitter-rust": "0.24.0",

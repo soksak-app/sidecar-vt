@@ -1,5 +1,6 @@
 # Changelog
 
+- S128: The sidecar uses the records kit 0.0.6, whose release gate accepts a closed item with a `Closed:` reason.
 - S127: The image surface of a session redraws only the strips of changed rows.
 - S126: The engine builds a screen without an allocation per cell.
 - S125: The service sends no screen message for a frame, answers `screen.read` with the full form and sends a `view` event when the cursor or the scrollback of a frame changes.
