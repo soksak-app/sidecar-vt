@@ -591,6 +591,11 @@ pub struct AlacrittyEngine {
     special_enabled: [bool; 5],
 }
 
+/// The input that one raise of the history limit covers. The library frees the rows above its cache
+/// of 1000 rows when the limit returns (`Storage::shrink_lines`), and one byte of a line feed pushes
+/// one row, so a slice of this size recycles those rows instead of allocating them for each chunk.
+const ADVANCE_SLICE_BYTES: usize = 1000;
+
 impl Default for AlacrittyEngine {
     fn default() -> Self {
         Self::new()
@@ -1061,18 +1066,20 @@ impl AlacrittyEngine {
         self.dropped + self.term.grid().history_size() as i64 + i64::from(line)
     }
 
-    /// Feeds input into the engine. The history limit is raised temporarily so that every row this
-    /// input pushes up is kept in history. Then the rows past the limit are dropped and counted.
-    /// Without this, the library drops the rows at the limit silently, and the absolute numbers of
-    /// the screen rows and the scroll generation of inline images stop moving. One byte cannot push
-    /// up more rows than the screen has.
+    /// Feeds input into the engine. The history limit is raised temporarily so that every row a
+    /// slice of this input pushes up is kept in history. Then the rows past the limit are dropped
+    /// and counted. Without this, the library drops the rows at the limit silently, and the absolute
+    /// numbers of the screen rows and the scroll generation of inline images stop moving. One byte
+    /// cannot push up more rows than the screen has.
     fn advance(&mut self, bytes: &[u8]) {
         let rows = self.term.grid().screen_lines();
-        self.term
-            .grid_mut()
-            .update_history(self.history_limit + bytes.len() * rows);
-        self.processor.advance(&mut self.term, bytes);
-        self.limit_history();
+        for slice in bytes.chunks(ADVANCE_SLICE_BYTES) {
+            self.term
+                .grid_mut()
+                .update_history(self.history_limit + slice.len() * rows);
+            self.processor.advance(&mut self.term, slice);
+            self.limit_history();
+        }
     }
 
     /// Reduces the history to the limit and counts the dropped rows. Changes the grid size. The

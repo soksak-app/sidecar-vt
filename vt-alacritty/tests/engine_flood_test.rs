@@ -1,0 +1,74 @@
+#[allow(dead_code)]
+#[path = "../src/engine.rs"]
+mod engine;
+
+use engine::AlacrittyEngine;
+use soksak_sidecar_vt_core::Engine;
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Counts the live bytes, their peak and the allocations of this test binary, which runs this one
+/// test, so the numbers state what the engine allocates.
+struct Counting;
+
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+static PEAK: AtomicUsize = AtomicUsize::new(0);
+static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+// SAFETY: every call forwards to the system allocator with the same arguments.
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let live = LIVE.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
+        PEAK.fetch_max(live, Ordering::Relaxed);
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        unsafe { System.alloc(layout) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
+        unsafe { System.dealloc(ptr, layout) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: Counting = Counting;
+
+const CHUNK_BYTES: usize = 64 * 1024;
+const CHUNKS: usize = 16;
+
+/// The bound on what a flood adds above a full history: the rows that the library caches, 1000 rows
+/// of 80 cells of 24 bytes, with the same again for the rows and the allocator granularity.
+const FLOOD_PEAK_BOUND: usize = 4 * 1024 * 1024;
+/// A chunk that recycles the rows of the history allocates no row per line.
+const FLOOD_ALLOCATIONS_PER_CHUNK: usize = 64;
+
+#[test]
+fn a_flood_at_the_history_limit_allocates_no_rows_per_chunk() {
+    let mut engine = AlacrittyEngine::new();
+    let chunk = b"y\n".repeat(CHUNK_BYTES / 2);
+    // The history fills first, so the flood below only recycles rows.
+    for _ in 0..2 {
+        engine.feed(&b"y\n".repeat(30_000));
+    }
+    let live = LIVE.load(Ordering::Relaxed);
+    PEAK.store(live, Ordering::Relaxed);
+    let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+    let started = std::time::Instant::now();
+    for _ in 0..CHUNKS {
+        engine.feed(&chunk);
+    }
+    let elapsed = started.elapsed();
+    let peak = PEAK.load(Ordering::Relaxed) - live;
+    let allocated = ALLOCATIONS.load(Ordering::Relaxed) - allocations;
+    println!(
+        "flood of {CHUNKS} chunks of {CHUNK_BYTES} bytes: peak {peak} bytes over a full history, \
+         {allocated} allocations, {elapsed:?}"
+    );
+    assert!(
+        peak <= FLOOD_PEAK_BOUND,
+        "peak {peak} bytes over a full history"
+    );
+    assert!(
+        allocated <= CHUNKS * FLOOD_ALLOCATIONS_PER_CHUNK,
+        "{allocated} allocations for {CHUNKS} chunks"
+    );
+}

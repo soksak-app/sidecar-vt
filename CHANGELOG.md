@@ -1,5 +1,7 @@
 # Changelog
 
+- S141: The specification states that a job between its fork and its exec can lose the hangup of zsh, and the close test waits for the report of the job instead of a timer.
+- S140: A flood at the history limit recycles rows: the peak over a full history is 256608 bytes again instead of 65471072.
 - S138: A request line has the 64 MiB message limit: a line over it is refused with `message exceeds 67108864 bytes` and ends the input of its connection, because the line decoder ends its stream after an error.
 - S137: OSC 7 accepts only the `file` scheme; a `kitty-shell-cwd` URI is rejected as an OSC 7 error, because the shell integration of this service reports `file`.
 - S135: Inline images keep moving with output at the history limit: the scroll generation counts the rows dropped past the limit, on plain output too.

@@ -1,5 +1,7 @@
 # 변경 기록
 
+- S141: 명세는 fork와 exec 사이의 job이 zsh의 hangup을 잃을 수 있음을 적고, close test는 timer 대신 job의 보고를 기다린다.
+- S140: history 한계의 flood는 행을 다시 쓴다. 가득 찬 history 위의 peak가 65471072 byte에서 다시 256608 byte가 된다.
 - S138: 요청 줄은 64 MiB message 한도를 가진다. 한도를 넘는 줄은 `message exceeds 67108864 bytes`로 거부되고, 줄 decoder가 오류 뒤 stream을 끝내므로 그 연결의 입력도 끝난다.
 - S137: OSC 7은 `file` 스킴만 받아들인다. `kitty-shell-cwd` URI는 OSC 7 오류로 거부되며, 이 service의 shell integration은 `file`로 보고한다.
 - S135: history 상한에서도 inline image가 출력과 함께 움직인다. scroll generation이 상한을 넘어 버린 줄을 세며, 일반 출력에서도 그렇다.
