@@ -1,5 +1,6 @@
 # Changelog
 
+- S134: A malformed payload of OSC 4 or OSC 52 produces `sequence.rejected` without the payload.
 - S133: One `vte::Parser` finds the sequences before the terminal, so an OSC ended by CAN, SUB or ESC no longer holds later output or marks, an erase with a control byte inside it erases in place, an unknown CSI, DCS or ESC is rejected, and a sequence over 1402200 bytes is rejected. The peak of a flood fell to 65536 bytes.
 - S146: Concurrent writers no longer pass the bound of the queued input, because the check and the addition run under the lock of the input.
 - S145: An inline image scrolled partly past the top edge draws clipped until its last row leaves, instead of disappearing when its anchor row leaves.

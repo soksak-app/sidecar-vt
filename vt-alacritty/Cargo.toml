@@ -20,6 +20,7 @@ diagnostics = ["soksak-sidecar-vt-core/diagnostics"]
 
 [dependencies]
 alacritty_terminal = "0.26"
+base64 = "0.22"
 serde_json = "1"
 soksak-sidecar-vt-core = { path = "../vt-core" }
 compact_str = "0.9"

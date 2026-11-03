@@ -2390,3 +2390,52 @@ fn a_sequence_over_the_bound_ends_at_a_string_terminator() {
         "{screen:?}"
     );
 }
+
+#[test]
+fn a_malformed_color_of_osc_4_is_rejected_without_its_payload() {
+    let cases: [(&[u8], &str); 3] = [
+        (
+            b"\x1b]4;1;notacolor-secret\x07",
+            "OSC 4 color is not an X color",
+        ),
+        (
+            b"\x1b]4;secret;#102030\x07",
+            "OSC 4 color index is not 0-255",
+        ),
+        (b"\x1b]4;1\x07", "OSC 4 has an index without a color"),
+    ];
+    for (input, reason) in cases {
+        let mut engine = AlacrittyEngine::new();
+        engine.feed(input);
+        assert_eq!(rejections(&mut engine), [reason]);
+    }
+}
+
+#[test]
+fn a_valid_osc_4_is_not_rejected() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b]4;1;#102030;2;rgb:10/20/30;3;?\x07");
+    assert_eq!(rejections(&mut engine), Vec::<String>::new());
+}
+
+#[test]
+fn a_malformed_osc_52_is_rejected_without_its_payload() {
+    let cases: [(&[u8], &str); 4] = [
+        (b"\x1b]52;c;not*base64\x07", "OSC 52 data is not base64"),
+        (b"\x1b]52;c;/w==\x07", "OSC 52 data is not UTF-8"),
+        (b"\x1b]52;x;aGVsbG8=\x07", "OSC 52 target is not supported"),
+        (b"\x1b]52;c\x07", "OSC 52 has no data"),
+    ];
+    for (input, reason) in cases {
+        let mut engine = AlacrittyEngine::new();
+        engine.feed(input);
+        assert_eq!(rejections(&mut engine), [reason]);
+    }
+}
+
+#[test]
+fn a_valid_osc_52_is_not_rejected() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b]52;c;aGVsbG8=\x07\x1b]52;;aGVsbG8=\x07\x1b]52;s;?\x07");
+    assert_eq!(rejections(&mut engine), Vec::<String>::new());
+}

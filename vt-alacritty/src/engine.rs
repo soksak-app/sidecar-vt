@@ -6,6 +6,8 @@ use alacritty_terminal::term::cell::{Cell as GridCell, Flags};
 use alacritty_terminal::term::{Config, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, Handler, NamedColor, Processor, Rgb};
 use alacritty_terminal::vte::{Params, Parser, Perform};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use soksak_sidecar_vt_core::directory_uri::local_path;
 use soksak_sidecar_vt_core::{
     Cell, ClipboardSelection, Cursor, CursorShape as ProtocolCursorShape, Engine, EngineEvent,
@@ -184,6 +186,56 @@ fn parse_x_color(value: &str) -> Option<Rgb> {
         g: scale(&hex[width..2 * width])?,
         b: scale(&hex[2 * width..])?,
     })
+}
+
+/// The rejection of a payload that the library drops with only a debug line. The reason does not
+/// hold the payload, because OSC 52 carries clipboard text.
+fn osc_payload_rejection(selector: &[u8], payload: &[u8]) -> Option<&'static str> {
+    match selector {
+        b"4" => osc_4_rejection(payload),
+        b"52" => osc_52_rejection(payload),
+        _ => None,
+    }
+}
+
+fn osc_4_rejection(payload: &[u8]) -> Option<&'static str> {
+    let parts: Vec<&[u8]> = payload.split(|byte| *byte == b';').collect();
+    for pair in parts.chunks(2) {
+        let [index, color] = pair else {
+            return Some("OSC 4 has an index without a color");
+        };
+        let index = std::str::from_utf8(index).map(str::parse::<u8>);
+        if !matches!(index, Ok(Ok(_))) {
+            return Some("OSC 4 color index is not 0-255");
+        }
+        let readable = std::str::from_utf8(color)
+            .is_ok_and(|color| color == "?" || parse_x_color(color).is_some());
+        if !readable {
+            return Some("OSC 4 color is not an X color");
+        }
+    }
+    None
+}
+
+fn osc_52_rejection(payload: &[u8]) -> Option<&'static str> {
+    let mut parts = payload.splitn(2, |byte| *byte == b';');
+    let target = parts.next().and_then(|target| target.first());
+    if !matches!(target, None | Some(b'c' | b'p' | b's')) {
+        return Some("OSC 52 target is not supported");
+    }
+    let Some(data) = parts.next() else {
+        return Some("OSC 52 has no data");
+    };
+    if data == b"?" {
+        return None;
+    }
+    let Ok(bytes) = STANDARD.decode(data) else {
+        return Some("OSC 52 data is not base64");
+    };
+    if std::str::from_utf8(&bytes).is_err() {
+        return Some("OSC 52 data is not UTF-8");
+    }
+    None
 }
 
 /// Converts an OSC 22 pointer name into a CSS cursor value. Accepts X cursor font names and CSS
@@ -854,7 +906,8 @@ impl AlacrittyEngine {
                 "unsupported OSC selector {selector}"
             )))
         } else {
-            None
+            osc_payload_rejection(selector, payload)
+                .map(|reason| EngineEvent::Error(reason.to_string()))
         };
         let mark = if let Some(EngineEvent::ShellState { marker, params }) = &event {
             let redraw = params
