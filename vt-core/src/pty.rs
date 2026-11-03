@@ -9,6 +9,7 @@ use crate::platform::pty::{
     wait_for_exit,
 };
 use crate::protocol::DaemonEvent;
+use nix::sys::signal::Signal;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
@@ -173,6 +174,22 @@ impl Session {
             .lock()
             // default: recover the retained guard and report the field through the session writer.
             .unwrap_or_else(|error| self.recovered(field, error.into_inner(), name))
+    }
+
+    /// Waits until the reaper reaped the child or the limit passed, and the caller reads which.
+    fn wait_reaped_for<'a>(
+        &self,
+        child: MutexGuard<'a, SessionChild>,
+        limit: std::time::Duration,
+    ) -> MutexGuard<'a, SessionChild> {
+        match self
+            .child_reaped
+            .wait_timeout_while(child, limit, |child| child.reaped.is_none())
+        {
+            Ok((child, _)) => child,
+            // default: recover the same child guard, and the caller rechecks completion.
+            Err(error) => self.recovered(&self.child, error.into_inner().0, "child"),
+        }
     }
 
     fn wait_reaped<'a>(&self, child: MutexGuard<'a, SessionChild>) -> MutexGuard<'a, SessionChild> {
@@ -478,9 +495,27 @@ impl PtyService {
         }
         session.close.notify_one();
         let kill_result = {
+            // A hangup lets a shell pass the signal to its jobs, which SIGKILL does not.
+            let hangup_result = {
+                let child = session.recover(&session.child, "child");
+                match &child.reaped {
+                    Some(_) => Ok(()),
+                    None => {
+                        signal_child(child.child.as_ref(), Signal::SIGHUP).map(|(pid, result)| {
+                            record_kill(&session, "child", pid, "SIGHUP", result);
+                        })
+                    }
+                }
+            };
+            // A program that ignores SIGHUP produces no event, so this wait has a time limit. A shell
+            // passes the hangup to its jobs while its terminal is open.
+            drop(
+                session
+                    .wait_reaped_for(session.recover(&session.child, "child"), CLOSE_HANGUP_WAIT),
+            );
             let process_group_result = kill_process_group(session.process_group);
             if let (Ok(result), Some(group)) = (&process_group_result, session.process_group) {
-                record_kill(&session, "process group", group, *result);
+                record_kill(&session, "process group", group, "SIGKILL", *result);
             }
             // A process with unread terminal output exits only after that output drains or the
             // master closes, so the master closes before the wait for the child.
@@ -493,19 +528,22 @@ impl PtyService {
             let child = session.recover(&session.child, "child");
             let child_result = match &child.reaped {
                 Some(result) => result.clone(),
-                None => kill_child(child.child.as_ref()).and_then(|(pid, result)| {
-                    record_kill(&session, "child", pid, result);
-                    let child = session.wait_reaped(child);
-                    child
-                        .reaped
-                        .clone()
-                        .expect("wait_while returns after the reaper recorded its result")
-                }),
+                None => {
+                    signal_child(child.child.as_ref(), Signal::SIGKILL).and_then(|(pid, result)| {
+                        record_kill(&session, "child", pid, "SIGKILL", result);
+                        let child = session.wait_reaped(child);
+                        child
+                            .reaped
+                            .clone()
+                            .expect("wait_while returns after the reaper recorded its result")
+                    })
+                }
             };
-            match (process_group_result, child_result) {
-                (Err(group_error), _) => Err(group_error),
-                (_, Err(child_error)) => Err(child_error),
-                (Ok(_), Ok(())) => Ok(()),
+            match (hangup_result, process_group_result, child_result) {
+                (Err(hangup_error), _, _) => Err(hangup_error),
+                (_, Err(group_error), _) => Err(group_error),
+                (_, _, Err(child_error)) => Err(child_error),
+                (Ok(()), Ok(_), Ok(())) => Ok(()),
             }
         };
         session.recover(&session.input, "input").take();
@@ -572,6 +610,9 @@ impl PtyService {
             .ok_or_else(|| format!("session {session_id} not found"))
     }
 }
+
+/// How long close waits for a child to end after SIGHUP before it sends SIGKILL.
+const CLOSE_HANGUP_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// What the I/O task of a session owns. The session keeps the master for resize and for the
 /// measurement, and the task owns a non-blocking duplicate of it.
@@ -883,18 +924,15 @@ async fn send_end(session: &Session, output: &mpsc::Sender<DaemonEvent>, event: 
     }
 }
 
-/// Sends SIGKILL to the child of the session. The caller holds the child lock and has confirmed
+/// Sends a signal to the child of the session. The caller holds the child lock and has confirmed
 /// that the reaper thread has not reaped the child yet. It returns the result of the signal's
 /// delivery and the pid of the child.
-fn kill_child(child: &(dyn Child + Send)) -> Result<(i32, KillResult), String> {
+fn signal_child(child: &(dyn Child + Send), signal: Signal) -> Result<(i32, KillResult), String> {
     let pid = child
         .process_id()
         .ok_or_else(|| "PTY child has no process id".to_string())?;
     let pid = i32::try_from(pid).map_err(|_| format!("PTY child process id {pid} is invalid"))?;
-    match nix::sys::signal::kill(
-        nix::unistd::Pid::from_raw(pid),
-        nix::sys::signal::Signal::SIGKILL,
-    ) {
+    match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), signal) {
         Ok(()) => Ok((pid, KillResult::Sent)),
         // ESRCH: the child has already ended and waits to be reaped. The reaper thread reaps it.
         Err(nix::errno::Errno::ESRCH) => Ok((pid, KillResult::NoSuchProcess)),
@@ -975,7 +1013,7 @@ pub mod fault;
 
 /// Records the SIGKILL that closing a session sent to its process group or its child, and what it
 /// reached.
-fn record_kill(session: &Session, target: &str, id: i32, result: KillResult) {
+fn record_kill(session: &Session, target: &str, id: i32, signal: &str, result: KillResult) {
     session.log.emit_for(
         Level::Info,
         "sidecar.vt.kill",
@@ -983,7 +1021,7 @@ fn record_kill(session: &Session, target: &str, id: i32, result: KillResult) {
         &serde_json::json!({
             "target": target,
             "id": id,
-            "signal": "SIGKILL",
+            "signal": signal,
             "result": result.name(),
         }),
     );
