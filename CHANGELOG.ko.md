@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S122: 출력을 33 ms frame 시계에 맞춰 그리고, 입력 뒤 200 ms 안의 출력은 바로 그리며, 시계가 잡아 둔 출력은 화면을 만들지 않는다.
 - S120: S119를 담은 version 0.0.22.
 - S119: host가 image region이 그리지 않는다고 알리는 동안 surface는 frame을 그리지 않고 `screen` event를 보내지 않으며, region이 다시 그리면 바뀐 화면을 한 번 그려 보낸다. 이전 generation의 drawing 상태는 무시하고, 잘못된 drawing message에는 `invalidParams`로 답한다.
 - S118: S117을 담은 version 0.0.21.

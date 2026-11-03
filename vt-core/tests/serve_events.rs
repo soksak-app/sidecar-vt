@@ -1519,3 +1519,161 @@ async fn a_request_in_progress_after_the_bound_is_the_event_request_waiting_with
         assert!(event["fields"]["ms"].as_u64().unwrap() >= 10_000, "{event}");
     }
 }
+
+/// A surface whose host answers each frame with `consumed`, as the copy mode of core does. It records
+/// the time of each frame that the surface sends.
+struct AnsweredSurface {
+    events: TestEvents,
+    outputs: mpsc::Sender<soksak_sidecar_vt_core::protocol::DaemonEvent>,
+    requests: mpsc::Sender<Vec<u8>>,
+    frames: Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
+}
+
+async fn serve_answered() -> AnsweredSurface {
+    let events = TestEvents::new();
+    let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
+    let (outputs, receiver) = mpsc::channel(64);
+    let port = Arc::new(OutputPort(std::sync::Mutex::new(Some(receiver))));
+    let factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync> =
+        Arc::new(move || port.clone() as Arc<dyn SessionPort>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
+    let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+    let handle = events.handle();
+    tokio::spawn(async move {
+        let _ = serve(engine_factory, serve_in, serve_out, factory, handle).await;
+    });
+    let (requests, mut pending) = mpsc::channel::<Vec<u8>>(64);
+    tokio::spawn(async move {
+        while let Some(request) = pending.recv().await {
+            to_serve.write_all(&request).await.unwrap();
+        }
+    });
+    let frames = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let answers = requests.clone();
+    let times = Arc::clone(&frames);
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(from_serve).lines();
+        while let Some(line) = lines.next_line().await.unwrap() {
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            let Some(sequence) = value["body"]["image"]["sequence"].as_u64() else {
+                continue;
+            };
+            times.lock().unwrap().push(tokio::time::Instant::now());
+            let answer = format!(
+                "{{\"surface\":\"s1\",\"body\":{{\"image\":{{\"consumed\":{{\"name\":\"view\",\"generation\":1,\"raster\":1,\"sequence\":{sequence}}}}}}}}}\n"
+            );
+            if answers.send(answer.into_bytes()).await.is_err() {
+                return;
+            }
+        }
+    });
+    requests
+        .send(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#.to_vec())
+        .await
+        .unwrap();
+    let surface = AnsweredSurface {
+        events,
+        outputs,
+        requests,
+        frames,
+    };
+    surface.wait_frames(1).await;
+    surface
+}
+
+impl AnsweredSurface {
+    async fn wait_frames(&self, count: usize) {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while self.frames.lock().unwrap().len() < count {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "{count} frames were not sent: {:?}",
+                self.frames.lock().unwrap()
+            )
+        });
+    }
+
+    /// Sends `count` outputs and waits until a frame draws the last of them.
+    async fn output(&self, count: usize) {
+        let before = self.events.named("sidecar.vt.pty_read").len();
+        for _ in 0..count {
+            self.outputs.send(daemon_output(b"x")).await.unwrap();
+        }
+        let read = wait_events(&self.events, "sidecar.vt.pty_read", before + count, |_| {
+            true
+        })
+        .await;
+        let last = read[before + count - 1]["fields"]["sequence"]
+            .as_u64()
+            .unwrap();
+        wait_events(&self.events, "sidecar.vt.frame", 1, |frame| {
+            frame["fields"]["sequence"]
+                .as_u64()
+                .is_some_and(|sequence| sequence >= last)
+        })
+        .await;
+    }
+}
+
+// The frame clock draws output on one clock of 33 ms: no two frames of output without input are
+// closer than 33 ms, and the last output is drawn. The time of the test runs paused, so the clock
+// of the runtime alone measures the interval.
+#[tokio::test(start_paused = true)]
+async fn the_frame_clock_draws_output_without_input_at_most_once_in_33_ms() {
+    let surface = serve_answered().await;
+    surface.output(20).await;
+    let frames = surface.frames.lock().unwrap().clone();
+    assert!(frames.len() >= 2, "the output drew no frame: {frames:?}");
+    for pair in frames.windows(2) {
+        assert!(
+            pair[1] - pair[0] >= std::time::Duration::from_millis(33),
+            "two frames are {:?} apart: {frames:?}",
+            pair[1] - pair[0]
+        );
+    }
+}
+
+// The output that follows an input within 200 ms is drawn at once, without the frame clock: a
+// second output right after the frame of the first one is drawn without waiting 33 ms.
+#[tokio::test(start_paused = true)]
+async fn the_frame_clock_draws_output_at_once_within_200_ms_after_an_input() {
+    let surface = serve_answered().await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let drawn = surface.frames.lock().unwrap().len();
+    surface
+        .requests
+        .send(b"{\"surface\":\"s1\",\"body\":{\"operation\":\"paste\",\"text\":\"a\"}}\n".to_vec())
+        .await
+        .unwrap();
+    wait_events(&surface.events, "sidecar.vt.reply", 1, |event| {
+        event["fields"]["operation"] == "paste"
+    })
+    .await;
+    surface.output(1).await;
+    surface.output(1).await;
+    let frames = surface.frames.lock().unwrap().clone();
+    assert!(
+        frames.len() >= drawn + 2,
+        "the outputs drew no two frames: {frames:?}"
+    );
+    let gap = frames[frames.len() - 1] - frames[frames.len() - 2];
+    assert!(
+        gap < std::time::Duration::from_millis(33),
+        "the second output after an input waited {gap:?} for the frame clock: {:?}",
+        surface
+            .events
+            .named("sidecar.vt.frame")
+            .iter()
+            .map(|frame| (
+                frame["fields"]["reason"].clone(),
+                frame["fields"]["sequence"].clone()
+            ))
+            .collect::<Vec<_>>()
+    );
+}

@@ -2175,6 +2175,7 @@ async fn present_screen(
     state.render = render.map(|render| render.value(frame));
     state.pending_draw = true;
     state.sent_at = Some(std::time::Instant::now());
+    state.presented_at = Some(Instant::now());
     state.dirty = false;
     let nonce = state.frame.nonce();
     let nonce_b64 = base64_encode(&nonce);
@@ -2358,6 +2359,23 @@ fn record_wheel(
 /// the screen is neither drawn nor sent as JSON. If JSON is sent for every screen while output
 /// piles up, the page spends its time on past screens, and input and scrolling fall behind. When
 /// the host answers, the screen at that time is drawn once and sent.
+/// The interval of the frame clock. Output of a session is drawn at most once in this interval.
+const FRAME_INTERVAL: Duration = Duration::from_millis(33);
+
+/// The time after an input during which output is drawn at once, so the echo of typing does not
+/// wait for the frame clock.
+const INPUT_WINDOW: Duration = Duration::from_millis(200);
+
+/// The time of the next frame of the frame clock, or none when the frame is drawn at once: within
+/// the input window, or when the last frame is at least one interval old.
+fn frame_due(state: &ImageState, last_input: Option<Instant>) -> Option<Instant> {
+    if last_input.is_some_and(|input| input.elapsed() < INPUT_WINDOW) {
+        return None;
+    }
+    let due = state.presented_at? + FRAME_INTERVAL;
+    (due > Instant::now()).then_some(due)
+}
+
 fn hold_while_presenting(image_state: &mut Option<ImageState>) -> bool {
     match image_state.as_mut() {
         Some(state) if state.pending_draw || !state.drawing => {
@@ -3417,8 +3435,24 @@ async fn surface_task(
     cursor_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut last_cursor_frame: Option<(CursorShape, bool, bool, bool)> = None;
 
+    // The time at which the frame clock draws the changes that output made since the last frame.
+    let mut frame_clock: Option<Instant> = None;
+    // The time of the last input or paste, which starts the input window.
+    let mut last_input: Option<Instant> = None;
+
     loop {
         tokio::select! {
+            _ = tokio::time::sleep_until(frame_clock.unwrap_or_else(Instant::now)), if frame_clock.is_some() => {
+                frame_clock = None;
+                if session_id.is_some()
+                    && let Some(state) = image_state.as_mut()
+                    && state.dirty && !state.pending_draw && state.drawing {
+                        let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
+                        if !present_screen(&surface_id, screen, state, &output_tx, "clock", &log, &mut screens, inputs.sequence).await {
+                            return;
+                        }
+                    }
+            }
             _ = cursor_tick.tick(), if image_state.is_some() && !headless => {
                 // If cursor blinking is turned off entirely, this tick does nothing
                 // (V5-96-14-6-4-9). engine.screen() copies the whole grid, so copying the whole
@@ -3452,6 +3486,11 @@ async fn surface_task(
                     && let Some(state) = image_state.as_mut() {
                         if state.pending_draw {
                             state.dirty = true;
+                        } else if let Some(due) = frame_due(state, last_input) {
+                            // The frame clock draws the blink state together with the output.
+                            state.dirty = true;
+                            frame_clock.get_or_insert(due);
+                            last_cursor_frame = Some(signature);
                         } else if !present_screen(&surface_id, screen, state, &output_tx, "blink", &log, &mut screens, inputs.sequence).await {
                             return;
                         } else {
@@ -3811,6 +3850,7 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::InputTransaction { actions, preedit: next_preedit, cids } => {
+                        last_input = Some(Instant::now());
                         let modes = engine.modes();
                         let mut next_focused = focused;
                         let mut bytes = Vec::new();
@@ -3918,6 +3958,7 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::Paste { text, cids } => {
+                        last_input = Some(Instant::now());
                         cursor_activity = Instant::now();
                         last_cursor_frame = None;
                         // Input is written after the viewport is returned to the newest output.
@@ -4538,6 +4579,10 @@ async fn surface_task(
                                         return;
                                     }
                                 }
+                            } else if image_state.as_ref().unwrap().dirty
+                                && let Some(due) = frame_due(image_state.as_ref().unwrap(), last_input) {
+                                // The frame clock draws the changes made during the wait.
+                                frame_clock.get_or_insert(due);
                             } else if image_state.as_ref().unwrap().dirty {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
                                 // Sends one screen that holds the changes made during the wait,
@@ -4577,16 +4622,21 @@ async fn surface_task(
                                 record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
                                 if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs, screens: &mut screens }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart).await { return; }
                                 if headless || hold_while_presenting(&mut image_state) { continue; }
+                                if let Some(ref mut img_state) = image_state {
+                                    // The frame clock holds output that follows a frame within its
+                                    // interval, and that output builds no screen.
+                                    if let Some(due) = frame_due(img_state, last_input) {
+                                        img_state.dirty = true;
+                                        frame_clock.get_or_insert(due);
+                                        continue;
+                                    }
+                                }
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
 
                                 if let Some(ref mut img_state) = image_state {
-                                        // If the image is on the host, it is not drawn until it
-                                        // comes back, and only the fact of the change is recorded.
-                                        if img_state.pending_draw {
-                                            img_state.dirty = true;
-                                        } else if !present_screen(&surface_id, screen, img_state, &output_tx, "image", &log, &mut screens, inputs.sequence).await {
-                                            return;
-                                        }
+                                    if !present_screen(&surface_id, screen, img_state, &output_tx, "image", &log, &mut screens, inputs.sequence).await {
+                                        return;
+                                    }
                                     continue;
                                 }
 

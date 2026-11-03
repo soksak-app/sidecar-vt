@@ -35,6 +35,8 @@ pub struct ImageState {
     /// The time the pending transfer was sent. This is the instrument of the consumed wait time
     /// (V5-104).
     pub sent_at: Option<std::time::Instant>,
+    /// The time of the last frame, which the frame clock counts its interval from.
+    pub presented_at: Option<tokio::time::Instant>,
     /// The store of the connection that carries a transfer image awaiting a reply. If the surface
     /// releases this state before the reply, it hands the transfer image to that store.
     pub carrier: Option<std::sync::Arc<crate::protocol::TransferStore>>,
@@ -90,6 +92,7 @@ impl ImageState {
             inline_images: Vec::new(),
             presentation_events: Vec::new(),
             sent_at: None,
+            presented_at: None,
             carrier: None,
             session: None,
         })
