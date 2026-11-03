@@ -2,7 +2,7 @@
 
 [English](features.md)
 
-- [~] S148 — P0: S131부터 S147까지 담은 VT release를 publish하고 registry에 올린 뒤 terminal plugin이 요구하게 한다. 진행: 이 version의 release run이 돌고 있고, registry와 plugin이 그 뒤를 잇는다.
+- [o] S148 — P0: S131부터 S147까지 담은 VT release를 publish하고 registry에 올린 뒤 terminal plugin이 요구하게 한다. 결과: release run이 v0.0.24를 공개했고, registry가 그것을 올렸으며, terminal 0.0.36과 0.0.37이 그것을 요구한다.
 - [o] S131 — P0: 프로그램이 엔진의 소비보다 빨리 쓰는 출력은 service를 키우지 않는다. 입력: 터미널에서 약 20초 동안 `yes`. 동작: reader가 각 read를 무제한 channel로 보내 service가 약 3 GB에 이르렀다. 기대: `docs/spec/vt-core.md`의 PTY 출력과 입력 절의 계약. Red와 Green: 하위 항목.
   - [o] S131-1 — P0: 세션은 ring과 attach 경로를 쥐지 않는다. 입력: flood가 8 KiB chunk 10,000개를 채운다. 동작: production 경로가 호출하지 않는 `PtyService::attach`를 위해 ring이 세션당 80 MB를 쥔다. 기대: `attach`, ring, `truncated`, 그 경로의 engine reset, `SessionPort::attach`, attachment map이 없다. Green: `output_that_the_consumer_reads_is_not_dropped`. Red에서는 ring이 버린 chunk를 보고했다. persistent가 아닌 연결은 끝날 때 자기 세션을 닫는다. 그 뒤 소비할 곳이 없기 때문이다.
   - [o] S131-2 — P0: I/O task 하나가 세션을 읽고 쓴다. 입력: 아무도 소비하지 않는 16 MiB 출력, echo하는 프로그램에 쓰는 4 MiB의 줄. 동작: reader가 전부 읽고 surface task가 write를 기다린다. 기대: 읽기가 64 KiB 16 chunk에서 멈추고, write가 deadlock 없이 끝나고, write 결과가 순서대로 오고, surface가 거기서 acknowledgement와 `pty_write` 기록을 보낸다. bridge task가 없다. Red: `the reader read 1485824 bytes while nothing consumed the output`, `the write of 4 MiB waited for a program that does not read`. Green: 같은 test와 `writes_to_a_program_that_echoes_end_in_order_while_the_output_is_read`.
