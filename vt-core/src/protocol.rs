@@ -1177,9 +1177,12 @@ pub struct InlineImagePlacement {
     pub name: String,
     pub data: Vec<u8>,
     pub x: u32,
-    pub y: u32,
+    /// The top in pixels. It is negative while the image is scrolled partly past the top edge.
+    pub y: i32,
     pub width: u32,
     pub height: u32,
+    /// The height at which the frame draws the image, which decides when its last row leaves.
+    pub drawn_height: u32,
     pub preserve_aspect_ratio: bool,
     pub anchor_row: i32,
     pub anchor_scroll: i64,
@@ -2610,26 +2613,34 @@ fn store_inline_display(
             "inline image received before the image region was configured".to_string(),
         ));
     };
-    if !crate::platform::darwin::frame::inline_image_decodable(&data) {
+    let width = resolve_inline_dimension(
+        &width,
+        state.metrics.cell_width.round() as u32,
+        state.width_px,
+    );
+    let height = resolve_inline_dimension(
+        &height,
+        state.metrics.cell_height.round() as u32,
+        state.height_px,
+    );
+    let Some(drawn_height) = crate::platform::darwin::frame::inline_image_drawn_height(
+        &data,
+        width,
+        height,
+        preserve_aspect_ratio,
+    ) else {
         return Err(InlineImageFailure::Rejected(
             "OSC 1337 image data is not decodable as an image".to_string(),
         ));
-    }
+    };
     let placement = InlineImagePlacement {
         name: name.clone(),
         data,
         x: u32::from(anchor.col).saturating_mul(state.metrics.cell_width.round() as u32),
-        y: u32::from(anchor.row).saturating_mul(state.metrics.cell_height.round() as u32),
-        width: resolve_inline_dimension(
-            &width,
-            state.metrics.cell_width.round() as u32,
-            state.width_px,
-        ),
-        height: resolve_inline_dimension(
-            &height,
-            state.metrics.cell_height.round() as u32,
-            state.height_px,
-        ),
+        y: i32::from(anchor.row).saturating_mul(state.metrics.cell_height.round() as i32),
+        width,
+        height,
+        drawn_height,
         preserve_aspect_ratio,
         anchor_row: i32::from(anchor.row),
         anchor_scroll: anchor.scroll,
@@ -2647,6 +2658,25 @@ fn store_inline_display(
     Ok(())
 }
 
+/// The top in pixels of an inline image while a row of it is on the frame.
+pub fn inline_image_top(
+    anchor_row: i32,
+    scrolled: i64,
+    viewport_offset: i32,
+    cell_height: u32,
+    drawn_height: u32,
+    frame_height: u32,
+) -> Option<i32> {
+    let top =
+        (i64::from(anchor_row) - scrolled + i64::from(viewport_offset)) * i64::from(cell_height);
+    if top + i64::from(drawn_height) <= 0 || top >= i64::from(frame_height) {
+        return None;
+    }
+    // silent: drawn_height is a u32, so a top below the range of i32 belongs to an image taller
+    // than 2 GiB rows of pixels, and no frame holds a pixel of it at that position.
+    i32::try_from(top).ok()
+}
+
 fn refresh_inline_image_positions(
     engine: &mut Box<dyn Engine>,
     image_state: &mut Option<ImageState>,
@@ -2659,13 +2689,20 @@ fn refresh_inline_image_positions(
     let offset = engine.viewport_offset() as i32;
     let cell_height = state.metrics.cell_height.round() as u32;
     for image in &mut state.inline_images {
-        let row = image.anchor_row - (current_scroll - image.anchor_scroll) as i32 + offset;
-        image.visible = row >= 0;
-        image.y = if row >= 0 {
-            (row as u32).saturating_mul(cell_height)
-        } else {
-            state.height_px
-        };
+        match inline_image_top(
+            image.anchor_row,
+            current_scroll - image.anchor_scroll,
+            offset,
+            cell_height,
+            image.drawn_height,
+            state.height_px,
+        ) {
+            Some(top) => {
+                image.visible = true;
+                image.y = top;
+            }
+            None => image.visible = false,
+        }
     }
 }
 

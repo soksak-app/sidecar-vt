@@ -194,7 +194,7 @@ const TRANSLUCENT_PNG: [u8; 85] = [
     0x44, 0xae, 0x42, 0x60, 0x82,
 ];
 
-fn image(x: u32, y: u32, width: u32, height: u32) -> InlineImagePlacement {
+fn image(x: u32, y: i32, width: u32, height: u32) -> InlineImagePlacement {
     InlineImagePlacement {
         name: "translucent.png".into(),
         data: TRANSLUCENT_PNG.to_vec(),
@@ -202,6 +202,7 @@ fn image(x: u32, y: u32, width: u32, height: u32) -> InlineImagePlacement {
         y,
         width,
         height,
+        drawn_height: height,
         preserve_aspect_ratio: true,
         anchor_row: 0,
         anchor_scroll: 0,
@@ -226,7 +227,12 @@ fn the_strip_frame_composites_inline_images_with_the_pixels_of_the_coregraphics_
     hidden.visible = false;
     let images = [
         image(cell_width, 0, cell_width * 3, cell_height * 2),
-        image(cell_width * 3 + 1, cell_height + 3, cell_width * 2 + 1, 0),
+        image(
+            cell_width * 3 + 1,
+            cell_height as i32 + 3,
+            cell_width * 2 + 1,
+            0,
+        ),
         hidden,
     ];
     let cursor = cursor_render(CursorShape::Block);
@@ -256,8 +262,9 @@ fn an_inline_image_past_an_edge_of_the_frame_draws_clipped_on_both_frames() {
         .expect("draw without an image");
     let cases = [
         ("past the right edge", image(width - 2, 0, 4, 4)),
-        ("past the bottom edge", image(0, height - 2, 4, 4)),
+        ("past the bottom edge", image(0, height as i32 - 2, 4, 4)),
         ("larger than the frame", image(0, 0, width * 2, height * 2)),
+        ("past the top edge", image(0, -2, 4, 4)),
     ];
     for (what, placement) in cases {
         let images = [placement];
@@ -293,7 +300,8 @@ fn an_inline_image_wholly_outside_the_frame_draws_nothing_on_both_frames() {
         .expect("draw without an image");
     let cases = [
         ("right of the frame", image(width, 0, 4, 4)),
-        ("below the frame", image(0, height, 4, 4)),
+        ("below the frame", image(0, height as i32, 4, 4)),
+        ("above the frame", image(0, -4, 4, 4)),
     ];
     for (what, placement) in cases {
         let images = [placement];

@@ -50,6 +50,7 @@ fn inline_image_raster_is_composited_without_erasing_terminal_background() {
         y: 0,
         width: metrics.cell_width as u32,
         height: metrics.cell_height as u32,
+        drawn_height: metrics.cell_height as u32,
         preserve_aspect_ratio: true,
         anchor_row: 0,
         anchor_scroll: 0,

@@ -94,7 +94,7 @@ typedef struct {
     const uint8_t *data;
     uint32_t data_len;
     uint32_t x;
-    uint32_t y;
+    int32_t y;
     uint32_t width;
     uint32_t height;
     uint8_t preserve_aspect_ratio;
@@ -132,7 +132,8 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
                                   InlineImageRaster *images, uint32_t image_count,
                                   RenderOutput *render_output);
 // Returns 1 when ImageIO decodes the data of an inline image, and 0 otherwise.
-int frame_inline_image_decodable(const uint8_t *data, size_t length);
+int frame_inline_image_drawn_height(const uint8_t *data, size_t length, uint32_t width, uint32_t height,
+                                    uint8_t preserve_aspect_ratio, uint32_t *drawn_height);
 
 // frame 을 해제하고 IOSurface 를 release 한다
 void frame_drop(Frame *frame);

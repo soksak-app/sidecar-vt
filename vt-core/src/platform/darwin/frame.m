@@ -226,18 +226,42 @@ static CGImageRef image_decode(const uint8_t *data, size_t length) {
     return image;
 }
 
-// Reports whether ImageIO decodes the data of an inline image. The inline image store calls it when it keeps an image, so
-// an image that does not decode is rejected before any frame draws it.
-int frame_inline_image_decodable(const uint8_t *data, size_t length) {
+// The size at which a frame draws an image. False when the image has no area at that size.
+static bool inline_image_drawn_size(CGImageRef image, uint32_t requested_width, uint32_t requested_height,
+                                    uint8_t preserve_aspect_ratio, CGFloat *drawn_width, CGFloat *drawn_height) {
+    CGFloat natural_width = (CGFloat)CGImageGetWidth(image);
+    CGFloat natural_height = (CGFloat)CGImageGetHeight(image);
+    CGFloat width = requested_width ? requested_width : natural_width;
+    CGFloat height = requested_height ? requested_height : natural_height;
+    if (preserve_aspect_ratio) {
+        if (requested_width && !requested_height) {
+            height = width * natural_height / natural_width;
+        } else if (!requested_width && requested_height) {
+            width = height * natural_width / natural_height;
+        }
+    }
+    *drawn_width = width;
+    *drawn_height = height;
+    return width > 0 && height > 0;
+}
+
+// Gives the height at which a frame draws an image. The inline image store calls it when it keeps an image, so an image
+// that does not decode is rejected before any frame draws it.
+int frame_inline_image_drawn_height(const uint8_t *data, size_t length, uint32_t width, uint32_t height,
+                                    uint8_t preserve_aspect_ratio, uint32_t *drawn_height) {
     CGImageRef image = image_decode(data, length);
     if (!image) return 0;
+    CGFloat size[2] = {0, 0};
+    bool drawable = inline_image_drawn_size(image, width, height, preserve_aspect_ratio, &size[0], &size[1]);
     CGImageRelease(image);
+    if (!drawable) return 0;
+    *drawn_height = (uint32_t)ceil(size[1]);
     return 1;
 }
 
 // An image whose origin is past the frame has no pixel to draw. Both draws skip it.
 static bool inline_image_outside(const Frame *frame, const InlineImageRaster *raster) {
-    return raster->x >= frame->width || raster->y >= frame->height;
+    return raster->x >= frame->width || (int64_t)raster->y >= (int64_t)frame->height;
 }
 
 // Decodes an inline image and gives the size at which the frame draws it, or returns NULL when the data is missing or does
@@ -245,23 +269,11 @@ static bool inline_image_outside(const Frame *frame, const InlineImageRaster *ra
 static CGImageRef inline_image_decode(const InlineImageRaster *raster, CGFloat *drawn_width, CGFloat *drawn_height) {
     CGImageRef image = image_decode(raster->data, raster->data_len);
     if (!image) return NULL;
-    CGFloat width = raster->width ? raster->width : (CGFloat)CGImageGetWidth(image);
-    CGFloat height = raster->height ? raster->height : (CGFloat)CGImageGetHeight(image);
-    if (raster->preserve_aspect_ratio) {
-        CGFloat natural_width = (CGFloat)CGImageGetWidth(image);
-        CGFloat natural_height = (CGFloat)CGImageGetHeight(image);
-        if (raster->width && !raster->height) {
-            height = width * natural_height / natural_width;
-        } else if (!raster->width && raster->height) {
-            width = height * natural_width / natural_height;
-        }
-    }
-    if (width <= 0 || height <= 0) {
+    if (!inline_image_drawn_size(image, raster->width, raster->height, raster->preserve_aspect_ratio, drawn_width,
+                                 drawn_height)) {
         CGImageRelease(image);
         return NULL;
     }
-    *drawn_width = width;
-    *drawn_height = height;
     return image;
 }
 
@@ -577,7 +589,7 @@ static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Met
             IOSurfaceUnlock(surface, 0, NULL);
             return -1;
         }
-        CGContextDrawImage(ctx, CGRectMake(raster->x, frame->height - raster->y - height, width, height), image);
+        CGContextDrawImage(ctx, CGRectMake(raster->x, (CGFloat)frame->height - raster->y - height, width, height), image);
         CGImageRelease(image);
     }
 
@@ -672,13 +684,19 @@ static int frame_draw_overlay(Frame *frame, InlineImageRaster *images, uint32_t 
         CGFloat size[2] = {0, 0};
         CGImageRef image = inline_image_decode(raster, &size[0], &size[1]);
         if (!image) return -1;
+        // Above the frame: no row of the image is on the frame.
+        if (raster->y + ceil(size[1]) <= 0) {
+            CGImageRelease(image);
+            continue;
+        }
         [decoded addObject:(__bridge_transfer id)image];
-        [sizes appendBytes:size length:sizeof(size)];
+        CGFloat placed[3] = {size[0], size[1], raster->y};
+        [sizes appendBytes:placed length:sizeof(placed)];
         ComposeRect item = {
             .left = raster->x,
-            .top = raster->y,
+            .top = (uint32_t)MAX(0, raster->y),
             .right = (uint32_t)MIN((CGFloat)frame->width, raster->x + ceil(size[0])),
-            .bottom = (uint32_t)MIN((CGFloat)frame->height, raster->y + ceil(size[1])),
+            .bottom = (uint32_t)MIN((CGFloat)frame->height, (CGFloat)raster->y + ceil(size[1])),
             .kind = COMPOSE_OVERLAY,
         };
         [rects appendBytes:&item length:sizeof(item)];
@@ -711,9 +729,9 @@ static int frame_draw_overlay(Frame *frame, InlineImageRaster *images, uint32_t 
         return -1;
     }
     for (NSUInteger i = 0; i < decoded.count; i++) {
-        const CGFloat *size = (const CGFloat *)sizes.bytes + i * 2;
+        const CGFloat *placed = (const CGFloat *)sizes.bytes + i * 3;
         const ComposeRect *rect = (const ComposeRect *)rects.bytes + i;
-        CGContextDrawImage(ctx, CGRectMake(rect->left, frame->height - rect->top - size[1], size[0], size[1]),
+        CGContextDrawImage(ctx, CGRectMake(rect->left, (CGFloat)frame->height - placed[2] - placed[1], placed[0], placed[1]),
                            (__bridge CGImageRef)decoded[i]);
     }
     CGContextRelease(ctx);
