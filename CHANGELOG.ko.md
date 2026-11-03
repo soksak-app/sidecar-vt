@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S129: S122부터 S128까지 담은 version 0.0.23.
 - S128: sidecar는 `Closed:` 사유로 닫은 항목을 받아들이는 records kit 0.0.6을 쓴다.
 - S127: 세션의 image surface는 바뀐 행의 strip만 다시 그린다.
 - S126: 엔진은 cell마다 할당하지 않고 화면을 만든다.
