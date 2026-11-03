@@ -74,6 +74,7 @@ unsupported 행은 성공한 무동작 결과가 아니라 명시된 범위 결�
 - 진단 build(`--features diagnostics`)를 `SOKSAK_VT_TRACE_DIR`와 함께 시작하면 표면의 모든 engine 입력을 `<dir>/<surface>.trace`에 한 줄씩 덧붙인다: `resize <cols> <rows>`, `reset`, `feed <base64>`. Engine test는 이 trace를 재생해 화면을 재현한다. Release build에는 trace 코드가 없다.
 - OSC 52는 계속 policy-gated clipboard 소유권을 사용한다. 조회 token은 한 번만 사용할 수 있고 거부하면 소유권을 지우며 BEL/ST 분할 입력을 검사한다.
 - OSC 1337은 제한된 image 전송으로 유지한다. 잘못된 payload는 명시적으로 거부하고 multipart 상태는 표면을 넘지 않으며, 해당 표면이 소유하지 않은 이름의 삭제는 거부한다. 그림은 같은 출력 조각의 뒤 출력이 커서를 옮겨도 그 시퀀스가 나타난 자리의 커서와 스크롤 위치에 놓이며, 페이지의 `image.inline`과 `image.inline.deleted` 이벤트는 그 변경을 그린 래스터와 함께 보낸다. 그리기가 실패하면 그리기 오류 뒤에 보낸다.
+- DEC 2026(`CSI ? 2026 h`와 `CSI ? 2026 l`, synchronized update)은 여는 sequence 뒤의 출력을 닫는 sequence까지 잡는다. 닫히지 않은 update의 기한은 라이브러리가 여는 sequence 뒤 150 ms로 정하며, frame clock은 그 기한에 `stop_sync`를 호출해 잡힌 출력을 처리하고 그린다. 끝나지 않는 update의 끝을 알리는 이벤트는 없으므로 타이머는 update가 잡혀 있는 동안에만 존재한다.
 
 여섯 계약 모두 BEL/ST 분할 입력을 보존한다. relay 응답은 원본 표면 식별자를 포함하며 vendor event를 다른 표면에 방송하지 않는다. 터미널 페이지는 typed directory·hyperlink·notification·shell-state event를 소비해 session status에 기록한다. 미래의 알 수 없는 event는 버리지 않고 `unsupported`에 남긴다.
 
@@ -81,7 +82,7 @@ unsupported 행은 성공한 무동작 결과가 아니라 명시된 범위 결�
 
 ## CSI selector 근거
 
-현재 사이드카는 실행 동작 근거가 있는 선택자만 기록한다: CSI `3C`, `?12h/l`, `?25h/l`, `CSI 1–7 SP q`(DECSCUSR), `m`, `?1049h/l`, `r`와 함께 사용하는 `S/T`, `J/K`, `@/P`, `L/M`, `I/Z`, `6n/c`, `b`, `?1/?1000/?1002/?1003/?1006/?2004 h/l`, `14t`, 그리고 VT 키패드 제어 `ESC =`/`ESC >`. `CSI 14t`는 글자 영역을 인라인 그림 픽셀 크기와 같은 단위인 기기 픽셀로 알린다. 그래서 이 값으로 셀 크기를 계산한 프로그램은 셀에 맞는 그림을 요청한다. 이는 CSI 전체 구현 주장이 아니다. 이동·지우기·모드·조회·마우스·보호 셀·속성 스택 중 목록에 없는 범주는 이름 있는 동작 검사나 명시적 거부 검사가 생길 때까지 미완료로 남긴다.
+현재 사이드카는 실행 동작 근거가 있는 선택자만 기록한다: CSI `3C`, `?12h/l`, `?25h/l`, `CSI 1–7 SP q`(DECSCUSR), `m`, `?1049h/l`, `r`와 함께 사용하는 `S/T`, `J/K`, `@/P`, `L/M`, `I/Z`, `6n/c`, `b`, `?1/?1000/?1002/?1003/?1006/?2004/?2026 h/l`, `14t`, 그리고 VT 키패드 제어 `ESC =`/`ESC >`. `CSI 14t`는 글자 영역을 인라인 그림 픽셀 크기와 같은 단위인 기기 픽셀로 알린다. 그래서 이 값으로 셀 크기를 계산한 프로그램은 셀에 맞는 그림을 요청한다. 이는 CSI 전체 구현 주장이 아니다. 이동·지우기·모드·조회·마우스·보호 셀·속성 스택 중 목록에 없는 범주는 이름 있는 동작 검사나 명시적 거부 검사가 생길 때까지 미완료로 남긴다.
 
 고정한 XTerm 기준 문서에 대해 OSC와 CSI를 서로 분리한 두 목록으로 관리한다.
 

@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S136: synchronized update(DEC 2026)가 닫히지 않으면 여는 sequence 뒤 150 ms에 끝난다. frame clock이 라이브러리가 정한 기한에 `stop_sync`를 호출하고, update가 잡고 있던 출력을 그린다. timer는 update가 잡혀 있는 동안에만 존재한다.
 - S141: 명세는 fork와 exec 사이의 job이 zsh의 hangup을 잃을 수 있음을 적고, close test는 timer 대신 job의 보고를 기다린다.
 - S140: history 한계의 flood는 행을 다시 쓴다. 가득 찬 history 위의 peak가 65471072 byte에서 다시 256608 byte가 된다.
 - S138: 요청 줄은 64 MiB message 한도를 가진다. 한도를 넘는 줄은 `message exceeds 67108864 bytes`로 거부되고, 줄 decoder가 오류 뒤 stream을 끝내므로 그 연결의 입력도 끝난다.

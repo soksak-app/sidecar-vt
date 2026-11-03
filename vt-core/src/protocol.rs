@@ -802,6 +802,11 @@ pub trait Engine: Send + 'static {
         0
     }
     fn modes(&self) -> Modes;
+    /// The deadline of the synchronized update (DEC 2026) that holds output, or None when no update
+    /// is held. The caller ends the update with `stop_sync` at the deadline.
+    fn sync_deadline(&self) -> Option<Instant>;
+    /// Ends the synchronized update that holds output, and processes the output that it held.
+    fn stop_sync(&mut self);
 }
 
 /// A neutral event passed between the engine and the service.
@@ -3574,6 +3579,9 @@ async fn surface_task(
 
     // The time at which the frame clock draws the changes that output made since the last frame.
     let mut frame_clock: Option<Instant> = None;
+    // The deadline of the synchronized update that holds output, as the engine reports it. The timer
+    // exists only while an update is held: no event reports the end of an update that never ends.
+    let mut sync_deadline: Option<Instant> = None;
     // The time of the last input or paste, which starts the input window.
     let mut last_input: Option<Instant> = None;
     // The session ended, and the surface ends when the screen that the frame clock holds is drawn.
@@ -3581,6 +3589,7 @@ async fn surface_task(
 
     loop {
         if session_ended
+            && sync_deadline.is_none()
             && image_state
                 .as_ref()
                 .is_none_or(|state| !state.dirty || !state.drawing)
@@ -3597,6 +3606,26 @@ async fn surface_task(
         tokio::select! {
             Some(result) = inputs.next_write_result(), if !inputs.pending_writes.is_empty() => {
                 if !inputs.finish_front_write(result).await { return; }
+            }
+            _ = tokio::time::sleep_until(sync_deadline.unwrap_or_else(Instant::now)), if sync_deadline.is_some() => {
+                // The update ends at its deadline. The output that it held is then handled like the
+                // output of a feed: its events are sent, and the frame clock or a frame draws it.
+                engine.stop_sync();
+                sync_deadline = engine.sync_deadline();
+                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart).await { return; }
+                record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
+                if headless || hold_while_presenting(&mut image_state) { continue; }
+                if let Some(img_state) = image_state.as_mut() {
+                    if let Some(due) = frame_due(img_state, last_input) {
+                        img_state.dirty = true;
+                        frame_clock.get_or_insert(due);
+                        continue;
+                    }
+                    let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
+                    if !present_screen(&surface_id, screen, img_state, &output_tx, "sync", &log, inputs.sequence).await {
+                        return;
+                    }
+                }
             }
             _ = tokio::time::sleep_until(frame_clock.unwrap_or_else(Instant::now)), if frame_clock.is_some() => {
                 frame_clock = None;
@@ -4709,6 +4738,7 @@ async fn surface_task(
                                 crate::engine_trace::record(&log, &surface_id, || format!("feed {}", base64_encode(&data)));
                                 inputs.output(sid, &data);
                                 engine.feed(&data);
+                                sync_deadline = engine.sync_deadline();
                                 record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
                                 if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart).await { return; }
                                 if headless || hold_while_presenting(&mut image_state) { continue; }

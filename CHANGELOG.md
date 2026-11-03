@@ -1,5 +1,6 @@
 # Changelog
 
+- S136: A synchronized update (DEC 2026) ends 150 ms after its opening sequence when it is not closed: the frame clock calls `stop_sync` at the deadline that the library sets, and the output that the update held is drawn. A timer exists only while an update is held.
 - S141: The specification states that a job between its fork and its exec can lose the hangup of zsh, and the close test waits for the report of the job instead of a timer.
 - S140: A flood at the history limit recycles rows: the peak over a full history is 256608 bytes again instead of 65471072.
 - S138: A request line has the 64 MiB message limit: a line over it is refused with `message exceeds 67108864 bytes` and ends the input of its connection, because the line decoder ends its stream after an error.

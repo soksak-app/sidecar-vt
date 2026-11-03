@@ -33,7 +33,14 @@ struct TraceEngine {
     refill: Refill,
     // The screen places its cursor on the row after the last, which the screen hash refuses.
     unhashable: bool,
+    // The deadline of the synchronized update that `?2026h` opens, as the library sets it.
+    held_until: Option<tokio::time::Instant>,
+    // The times at which the surface ended a synchronized update.
+    sync_stops: Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
 }
+
+/// The time after which the library ends a synchronized update that is not ended (150 ms).
+const SYNC_UPDATE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
 
 type Refill =
     Arc<std::sync::Mutex<Option<mpsc::Sender<soksak_sidecar_vt_core::protocol::DaemonEvent>>>>;
@@ -66,6 +73,19 @@ impl Engine for TraceEngine {
         if contains(bytes, b"\x1b[?1006h") {
             self.modes.sgr_mouse = true;
         }
+        if contains(bytes, b"\x1b[?2026h") {
+            self.held_until = Some(tokio::time::Instant::now() + SYNC_UPDATE_TIMEOUT);
+        }
+    }
+    fn sync_deadline(&self) -> Option<tokio::time::Instant> {
+        self.held_until
+    }
+    fn stop_sync(&mut self) {
+        self.held_until = None;
+        self.sync_stops
+            .lock()
+            .unwrap()
+            .push(tokio::time::Instant::now());
     }
     fn drain_events(&mut self) -> Vec<EngineEvent> {
         self.runtime_error
@@ -542,6 +562,12 @@ impl Engine for InlineImageEngine {
     }
     fn modes(&self) -> Modes {
         self.inner.modes()
+    }
+    fn sync_deadline(&self) -> Option<tokio::time::Instant> {
+        self.inner.sync_deadline()
+    }
+    fn stop_sync(&mut self) {
+        self.inner.stop_sync()
     }
 }
 
@@ -1591,6 +1617,7 @@ struct AnsweredSurface {
     frames: Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
     screens: Arc<std::sync::atomic::AtomicUsize>,
     refill: Refill,
+    sync_stops: Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
 }
 
 async fn serve_answered() -> AnsweredSurface {
@@ -1599,10 +1626,13 @@ async fn serve_answered() -> AnsweredSurface {
     let built = Arc::clone(&screens);
     let refill = Refill::default();
     let engine_refill = Arc::clone(&refill);
+    let sync_stops = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let engine_stops = Arc::clone(&sync_stops);
     let engine_factory = Arc::new(move || {
         Box::new(TraceEngine {
             screens: Arc::clone(&built),
             refill: Arc::clone(&engine_refill),
+            sync_stops: Arc::clone(&engine_stops),
             ..TraceEngine::default()
         }) as Box<dyn Engine>
     });
@@ -1654,6 +1684,7 @@ async fn serve_answered() -> AnsweredSurface {
         frames,
         screens,
         refill,
+        sync_stops,
     };
     surface.wait_frames(1).await;
     surface
@@ -1713,6 +1744,37 @@ async fn the_frame_clock_draws_output_without_input_at_most_once_in_33_ms() {
             pair[1] - pair[0]
         );
     }
+}
+
+// A synchronized update that is never ended is ended by the frame clock at its deadline, 150 ms
+// after the opening sequence, and the output that it held is drawn. No event reports the end of an
+// update that never ends, so the timer for the deadline exists only while an update is held.
+#[tokio::test(start_paused = true)]
+async fn the_frame_clock_ends_a_synchronized_update_at_its_deadline() {
+    let surface = serve_answered().await;
+    let started = tokio::time::Instant::now();
+    surface
+        .outputs
+        .send(daemon_output(b"\x1b[?2026hheld"))
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let stops = surface.sync_stops.lock().unwrap().clone();
+    assert_eq!(
+        stops.len(),
+        1,
+        "the held update was not ended at its deadline"
+    );
+    assert_eq!(
+        stops[0] - started,
+        std::time::Duration::from_millis(150),
+        "the held update ended at another time than its deadline"
+    );
+    let frames = surface.frames.lock().unwrap().clone();
+    assert!(
+        frames.iter().any(|frame| *frame >= stops[0]),
+        "no frame draws the output of the ended update: {frames:?}"
+    );
 }
 
 // The end of a session draws the output that the frame clock holds, so the last output of a program

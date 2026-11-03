@@ -306,6 +306,10 @@ impl Engine for MockEngine {
     fn modes(&self) -> Modes {
         self.custom_modes.clone().unwrap_or_default()
     }
+    fn sync_deadline(&self) -> Option<tokio::time::Instant> {
+        None
+    }
+    fn stop_sync(&mut self) {}
 }
 
 #[tokio::test]
@@ -5270,6 +5274,10 @@ async fn test_panicking_surface_reports_error() {
         fn modes(&self) -> Modes {
             Modes::default()
         }
+        fn sync_deadline(&self) -> Option<tokio::time::Instant> {
+            None
+        }
+        fn stop_sync(&mut self) {}
     }
 
     let calls = Arc::new(Mutex::new(Calls::default()));

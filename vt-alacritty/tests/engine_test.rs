@@ -2217,3 +2217,32 @@ fn hex(text: &str) -> Vec<u8> {
         .map(|at| u8::from_str_radix(&text[at..at + 2], 16).expect("hexadecimal byte"))
         .collect()
 }
+
+// A synchronized update (DEC 2026) holds the output after its opening sequence until the update
+// ends. The library sets the deadline of the update 150 ms after the opening sequence, and the
+// caller ends the update with `stop_sync` at that deadline.
+#[test]
+fn a_synchronized_update_holds_output_until_stop_sync_ends_it() {
+    let mut engine = AlacrittyEngine::new();
+    let before = tokio::time::Instant::now();
+    engine.feed(b"\x1b[?2026hheld");
+    let after = tokio::time::Instant::now();
+    let deadline = engine
+        .sync_deadline()
+        .expect("a held update reports its deadline");
+    assert!(
+        deadline >= before + std::time::Duration::from_millis(150)
+            && deadline <= after + std::time::Duration::from_millis(150),
+        "the deadline is not 150 ms after the opening sequence: {deadline:?}"
+    );
+    assert!(
+        !text(&engine.screen()).contains("held"),
+        "the output of the held update is drawn before the update ends"
+    );
+    engine.stop_sync();
+    assert!(
+        text(&engine.screen()).contains("held"),
+        "stop_sync did not process the output of the held update"
+    );
+    assert!(engine.sync_deadline().is_none());
+}

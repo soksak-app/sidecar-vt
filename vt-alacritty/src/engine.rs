@@ -13,6 +13,7 @@ use soksak_sidecar_vt_core::{
 };
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
+use tokio::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OscOutcome {
@@ -591,10 +592,14 @@ pub struct AlacrittyEngine {
     special_enabled: [bool; 5],
 }
 
-/// The input that one raise of the history limit covers. The library frees the rows above its cache
-/// of 1000 rows when the limit returns (`Storage::shrink_lines`), and one byte of a line feed pushes
-/// one row, so a slice of this size recycles those rows instead of allocating them for each chunk.
-const ADVANCE_SLICE_BYTES: usize = 1000;
+/// The rows above the history limit that the engine counts at one time. The library frees the rows
+/// above its cache of 1000 rows when the limit returns (`Storage::shrink_lines`), so the count stays
+/// inside that cache and a flood recycles rows instead of allocating them.
+const COUNTED_ROWS: usize = 1000;
+
+/// The input between two counts. One byte of a line feed pushes one row, so ordinary output stays
+/// below `COUNTED_ROWS`, and reaching that number means that rows may have gone uncounted.
+const ADVANCE_SLICE_BYTES: usize = COUNTED_ROWS - 1;
 
 impl Default for AlacrittyEngine {
     fn default() -> Self {
@@ -1072,13 +1077,12 @@ impl AlacrittyEngine {
     /// numbers of the screen rows and the scroll generation of inline images stop moving. One byte
     /// cannot push up more rows than the screen has.
     fn advance(&mut self, bytes: &[u8]) {
-        let rows = self.term.grid().screen_lines();
         for slice in bytes.chunks(ADVANCE_SLICE_BYTES) {
             self.term
                 .grid_mut()
-                .update_history(self.history_limit + slice.len() * rows);
+                .update_history(self.history_limit + COUNTED_ROWS);
             self.processor.advance(&mut self.term, slice);
-            self.limit_history();
+            self.count_pushed_rows();
         }
     }
 
@@ -1120,6 +1124,17 @@ impl AlacrittyEngine {
             .rev()
             .take_while(|row| grid[Line(*row)].is_clear())
             .count()
+    }
+
+    /// Counts the rows that the input pushed above the limit, and reports when more rows than the
+    /// count covers may have passed, because the library drops those without a record.
+    fn count_pushed_rows(&mut self) {
+        if self.term.grid().history_size() >= self.history_limit + COUNTED_ROWS {
+            self.events.push(QueuedEvent::Neutral(EngineEvent::Error(format!(
+                "one input pushed {COUNTED_ROWS} or more rows above the history limit, so the row count may be low"
+            ))));
+        }
+        self.limit_history();
     }
 
     fn limit_history(&mut self) {
@@ -1755,6 +1770,23 @@ impl Engine for AlacrittyEngine {
 
     fn feed(&mut self, bytes: &[u8]) {
         self.feed_with_inline_images(bytes);
+    }
+
+    fn sync_deadline(&self) -> Option<Instant> {
+        self.processor
+            .sync_timeout()
+            .sync_timeout()
+            .map(Instant::from_std)
+    }
+
+    fn stop_sync(&mut self) {
+        // The library processes the held bytes in one call, so the count covers them as it covers a
+        // slice of a feed.
+        self.term
+            .grid_mut()
+            .update_history(self.history_limit + COUNTED_ROWS);
+        self.processor.stop_sync(&mut self.term);
+        self.count_pushed_rows();
     }
 
     fn drain_events(&mut self) -> Vec<EngineEvent> {

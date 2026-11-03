@@ -146,6 +146,10 @@ impl Engine for FakeEngine {
     fn modes(&self) -> Modes {
         Modes::default()
     }
+    fn sync_deadline(&self) -> Option<Instant> {
+        None
+    }
+    fn stop_sync(&mut self) {}
 }
 
 use crate::pty::{WriteCompletion, WriteOrigin, write_completed};
