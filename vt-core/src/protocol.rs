@@ -2992,6 +2992,8 @@ impl ReplayInputs {
         Some(
             (&mut front.completion)
                 .await
+                // default: a completion that ended without a result is the failed write that this
+                // text reports; it never reads as an accepted write.
                 .unwrap_or_else(|_| Err(WRITE_RESULT_LOST.to_string())),
         )
     }

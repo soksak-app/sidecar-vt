@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S144: 잃어버린 write 결과의 default가 이유를 적으므로 source가 `make test`의 census를 통과한다.
 - S139: ImageIO가 해독하지 못하는 data의 inline image는 저장할 때 거부된다. 페이지는 payload 없이 `sequence.rejected`를 받고, `image.inline` event는 보내지 않으며, frame은 그 image 없이 그린다. draw가 그 image 때문에 frame 전체를 실패시키지 않는다.
 - S136: synchronized update(DEC 2026)가 닫히지 않으면 여는 sequence 뒤 150 ms에 끝난다. frame clock이 라이브러리가 정한 기한에 `stop_sync`를 호출하고, update가 잡고 있던 출력을 그린다. timer는 update가 잡혀 있는 동안에만 존재한다.
 - S141: 명세는 fork와 exec 사이의 job이 zsh의 hangup을 잃을 수 있음을 적고, close test는 timer 대신 job의 보고를 기다린다.
