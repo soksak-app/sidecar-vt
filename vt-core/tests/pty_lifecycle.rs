@@ -517,8 +517,8 @@ fn process_group_members_report_running_and_ended_processes() {
 }
 
 /// When a shell ends with unread PTY output, the kernel closes the slave and waits for the output
-/// to drain. Meanwhile the shell is exiting, not a zombie, and macOS answers signals to its group
-/// with EPERM.
+/// to drain. During that wait the shell is exiting, not a zombie, and macOS answers signals to its
+/// group with EPERM.
 #[test]
 fn a_process_group_whose_members_are_exiting_is_already_terminated() {
     use soksak_sidecar_vt_core::platform::darwin::process_group::members;
@@ -551,18 +551,22 @@ fn a_process_group_whose_members_are_exiting_is_already_terminated() {
         .spawn()
         .expect("the shell must start");
     let group = child.id() as i32;
-    let started = std::time::Instant::now();
+    // No event reports the stage of an exit, so the test reads the answer of the kernel. The kernel
+    // reports PROC_FLAG_INEXIT before it refuses signals, and it accepts a signal in between.
     let exiting = loop {
-        let now = members(group).expect("the group must be readable");
-        if now.iter().any(|member| member.exiting && !member.zombie) {
-            break now;
+        let refused = unsafe { libc::kill(-group, 0) } == -1
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        if refused {
+            break members(group).expect("the group must be readable");
         }
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(2),
-            "the shell never reported an exit in progress: {now:?}"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::thread::yield_now();
     };
+    assert!(
+        exiting
+            .iter()
+            .any(|member| member.exiting && !member.zombie),
+        "the group refused signals without an exit in progress: {exiting:?}"
+    );
     let result = soksak_sidecar_vt_core::platform::pty::kill_process_group(Some(group));
     drop(master);
     child.wait().expect("the shell must be reaped");

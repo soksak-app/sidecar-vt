@@ -1,5 +1,6 @@
 # Changelog
 
+- S143: The exiting group test waits until the kernel refuses signals, so a signal accepted between the exit flag and that refusal no longer fails it.
 - S144: The default of a lost write result states its reason, so the sources pass the census of `make test`.
 - S139: An inline image whose data ImageIO cannot decode is rejected when it is stored: the page receives `sequence.rejected` without the payload, no `image.inline` event is sent, and the frame draws without the image. The draw no longer fails the whole frame for it.
 - S136: A synchronized update (DEC 2026) ends 150 ms after its opening sequence when it is not closed: the frame clock calls `stop_sync` at the deadline that the library sets, and the output that the update held is drawn. A timer exists only while an update is held.
