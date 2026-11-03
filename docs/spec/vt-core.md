@@ -83,7 +83,7 @@ One session has one I/O task. The task owns a non-blocking duplicate of the PTY 
 | Reserved permit of the output channel | Released |
 | Chunk read and not yet sent | Sent when a permit is held; otherwise recorded as `sidecar.vt.buffer_dropped` with its bytes |
 | Close and reap at the same time | Close decides, and `Exit` follows once |
-| Second close | Returns the idempotent result of the first |
+| Second close | Returns `Ok` while the first runs; after the first removed the entry it returns `session <id> not found`, and neither changes a state |
 | Bytes written to the program by closing | None |
 | Master | Both descriptors close before the wait for the child, because a process with unread terminal output exits only after that output drains or the master closes |
 | Child and jobs | SIGHUP to the child, so a shell passes it to its jobs; up to 250 ms for the reaper; then SIGKILL to a remaining child and to the process group. A job started with `nohup` or `disown` keeps running |

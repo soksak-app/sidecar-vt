@@ -273,10 +273,7 @@ async fn close_ends_a_session_whose_held_reads_stop_the_echo_of_its_queue() {
     }
     service.close(&session_id).unwrap();
     let consumer = tokio::spawn(async move { while rx.recv().await.is_some() {} });
-    assert!(
-        !matches!(reply.await, Ok(Ok(()))),
-        "the queued reply reported success after close"
-    );
+    assert_eq!(reply.await.unwrap(), Err("session closed".to_string()));
     consumer.abort();
 }
 
@@ -433,6 +430,158 @@ async fn the_end_of_the_child_fails_the_writes_of_a_job_of_another_session() {
         "ended"
     );
     service.close(&session_id).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn close_releases_the_reserved_permit_of_the_output_channel() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
+    let (tx, mut rx) = crate::pty::output_channel();
+    let probe = tx.clone();
+    let session_id = service
+        .open(
+            "/bin/sh",
+            &["-c".into(), "sleep 60".into()],
+            None,
+            80,
+            24,
+            tx,
+        )
+        .expect("PTY setup failed; environmental PTY errors must fail this test");
+    service.close(&session_id).unwrap();
+    output_until_exit(&mut rx).await;
+    assert_eq!(probe.capacity(), probe.max_capacity());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn last_output_goes_to_a_free_slot_and_a_close_records_what_it_does_not_send() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let events = crate::events::test_support::TestEvents::new();
+    let service = PtyService::new(events.handle());
+    let (session_tx, mut session_rx) = crate::pty::output_channel();
+    let session_id = service
+        .open(
+            "/bin/sh",
+            &["-c".into(), "sleep 60".into()],
+            None,
+            80,
+            24,
+            session_tx,
+        )
+        .expect("PTY setup failed; environmental PTY errors must fail this test");
+    let session = service.session(&session_id).unwrap();
+    // The I/O task waits for the close signal until it ends, so the signal below reaches this call.
+    service.close(&session_id).unwrap();
+    output_until_exit(&mut session_rx).await;
+    let chunk = || DaemonEvent::Output {
+        session_id: session_id.clone(),
+        data: b"last".to_vec(),
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    crate::pty::send_last_output(&session, &tx, chunk(), 4).await;
+    assert!(matches!(
+        next_event(&mut rx).await,
+        DaemonEvent::Output { .. }
+    ));
+    assert!(named(&events, "sidecar.vt.buffer_dropped").is_empty());
+
+    tx.send(chunk()).await.unwrap();
+    session.close.notify_one();
+    crate::pty::send_last_output(&session, &tx, chunk(), 4).await;
+    let dropped = named(&events, "sidecar.vt.buffer_dropped");
+    assert_eq!(dropped.len(), 1, "{dropped:?}");
+    assert_eq!(dropped[0]["fields"]["bytes"], 4);
+}
+
+// The reaper reports the end while close runs, and the report and the close can both be ready.
+// A close that was requested decides the reason whichever of them the task takes first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_close_requested_when_the_child_is_reaped_decides_and_exit_follows_once() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
+    let (tx, mut rx) = crate::pty::output_channel();
+    let session_id = service
+        .open(
+            "/bin/sh",
+            &["-c".into(), "sleep 60".into()],
+            None,
+            80,
+            24,
+            tx,
+        )
+        .expect("PTY setup failed; environmental PTY errors must fail this test");
+    let queued = service
+        .write(&session_id, WriteOrigin::Person, lines(1024 * 1024))
+        .unwrap();
+    let session = service.session(&session_id).unwrap();
+    *session.recover(&session.closed, "closed") = true;
+    let pid = session
+        .recover(&session.child, "child")
+        .child
+        .process_id()
+        .unwrap();
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid as i32),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .unwrap();
+    output_until_exit(&mut rx).await;
+    assert_eq!(queued.await.unwrap(), Err("session closed".to_string()));
+    assert!(rx.recv().await.is_none(), "an event followed the Exit");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_close_returns_ok_while_the_first_runs_and_names_a_removed_session_after_it() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
+    let (tx, _rx) = crate::pty::output_channel();
+    let session_id = service
+        .open(
+            "/bin/sh",
+            &["-c".into(), "sleep 60".into()],
+            None,
+            80,
+            24,
+            tx,
+        )
+        .expect("PTY setup failed; environmental PTY errors must fail this test");
+    let session = service.session(&session_id).unwrap();
+    *session.recover(&session.closed, "closed") = true;
+    assert_eq!(service.close(&session_id), Ok(()));
+    *session.recover(&session.closed, "closed") = false;
+    service.close(&session_id).unwrap();
+    assert_eq!(
+        service.close(&session_id),
+        Err(format!("session {session_id} not found"))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn close_writes_nothing_to_the_program() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let folder = tempfile::tempdir().unwrap();
+    let received = folder.path().join("received");
+    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
+    let (tx, mut rx) = crate::pty::output_channel();
+    let script = format!(
+        "stty -echo; echo ready; while read line; do echo \"$line\" >> '{}'; echo stored; done",
+        received.display()
+    );
+    let session_id = service
+        .open("/bin/sh", &["-c".into(), script], None, 80, 24, tx)
+        .expect("PTY setup failed; environmental PTY errors must fail this test");
+    let mut seen = Vec::new();
+    while !seen.windows(5).any(|part| part == b"ready") {
+        seen.extend(next_output(&mut rx).await);
+    }
+    service
+        .write(&session_id, WriteOrigin::Person, &b"typed\n"[..])
+        .unwrap();
+    while !seen.windows(6).any(|part| part == b"stored") {
+        seen.extend(next_output(&mut rx).await);
+    }
+    service.close(&session_id).unwrap();
+    assert_eq!(std::fs::read_to_string(&received).unwrap(), "typed\n");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

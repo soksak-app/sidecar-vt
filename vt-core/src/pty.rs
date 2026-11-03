@@ -721,16 +721,18 @@ async fn session_io(mut io: SessionIo) {
     while let Ok(write) = input_queue.try_recv() {
         queue.push_back(write);
     }
-    let reason = if ended.is_some() {
-        "child exited"
-    } else {
+    // The report of the reaper and a close can both be ready, and a close that was requested decides.
+    let closing = *session.recover(&session.closed, "closed");
+    let reason = if closing {
         "session closed"
+    } else {
+        "child exited"
     };
     for write in queue.drain(..) {
         complete_write(&session, write, Err(reason.to_string()));
     }
     // The end of the child leaves its last output in the terminal.
-    let last_output = if ended.is_some() {
+    let last_output = if !closing {
         read_remaining_output(&session, stream.get_ref(), &mut buffer)
     } else {
         0

@@ -83,7 +83,7 @@ hook은 프롬프트 앞마다 `133;A`를 보고하고(bash는 readline이 프�
 | 출력 channel의 예약된 permit | 반납된다 |
 | 읽었고 아직 보내지 않은 chunk | permit이 있으면 보낸다. 없으면 바이트 수와 함께 `sidecar.vt.buffer_dropped`로 기록한다 |
 | close와 reap이 동시에 일어남 | close가 결정하고 `Exit`가 한 번 뒤따른다 |
-| 두 번째 close | 첫 close의 idempotent 결과를 돌려준다 |
+| 두 번째 close | 첫 close가 실행 중이면 `Ok`를 돌려준다. 첫 close가 항목을 지운 뒤에는 `session <id> not found`를 돌려주고, 어느 쪽도 상태를 바꾸지 않는다 |
 | close가 프로그램에 쓰는 바이트 | 없다 |
 | master | child를 기다리기 전에 두 descriptor를 닫는다. 읽히지 않은 터미널 출력이 있는 프로세스는 그 출력이 비거나 master가 닫혀야 끝나기 때문이다 |
 | child와 job | child에 SIGHUP을 보내 shell이 job에 전하게 한다. reaper를 최대 250 ms 기다린다. 그다음 남은 child와 process group에 SIGKILL을 보낸다. `nohup`이나 `disown`으로 시작한 job은 계속 돈다 |
