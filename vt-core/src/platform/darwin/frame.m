@@ -235,10 +235,14 @@ int frame_inline_image_decodable(const uint8_t *data, size_t length) {
     return 1;
 }
 
-// Decodes an inline image and gives the size at which the frame draws it, or returns NULL when the data is missing, does
-// not decode, or the image does not fit inside the frame. Both draws use it, so they refuse and size the same images.
-static CGImageRef inline_image_decode(const Frame *frame, const InlineImageRaster *raster, CGFloat *drawn_width,
-                                      CGFloat *drawn_height) {
+// An image whose origin is past the frame has no pixel to draw. Both draws skip it.
+static bool inline_image_outside(const Frame *frame, const InlineImageRaster *raster) {
+    return raster->x >= frame->width || raster->y >= frame->height;
+}
+
+// Decodes an inline image and gives the size at which the frame draws it, or returns NULL when the data is missing or does
+// not decode. The drawing context clips the part past the frame. Both draws use it, so they refuse and size the same images.
+static CGImageRef inline_image_decode(const InlineImageRaster *raster, CGFloat *drawn_width, CGFloat *drawn_height) {
     CGImageRef image = image_decode(raster->data, raster->data_len);
     if (!image) return NULL;
     CGFloat width = raster->width ? raster->width : (CGFloat)CGImageGetWidth(image);
@@ -252,8 +256,7 @@ static CGImageRef inline_image_decode(const Frame *frame, const InlineImageRaste
             width = height * natural_width / natural_height;
         }
     }
-    if (width <= 0 || height <= 0 || raster->x >= frame->width || raster->y >= frame->height ||
-        width > frame->width - raster->x || height > frame->height - raster->y) {
+    if (width <= 0 || height <= 0) {
         CGImageRelease(image);
         return NULL;
     }
@@ -562,10 +565,10 @@ static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Met
 
     for (uint32_t i = 0; !rows && i < image_count; i++) {
         InlineImageRaster *raster = &images[i];
-        if (!raster->visible) continue;
+        if (!raster->visible || inline_image_outside(frame, raster)) continue;
         CGFloat width = 0;
         CGFloat height = 0;
-        CGImageRef image = inline_image_decode(frame, raster, &width, &height);
+        CGImageRef image = inline_image_decode(raster, &width, &height);
         if (!image) {
             CFRelease(font);
             CGContextRelease(ctx);
@@ -659,23 +662,23 @@ static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Met
 
 // Composites the visible inline images into the overlay surface: it copies the strip pixels of each image rectangle into
 // the overlay, then draws every image in order with the CGContextDrawImage call of the CoreGraphics frame, and appends the
-// rectangle of each image to rects. An image that does not decode or fit returns -1.
+// rectangle of each image, limited to the frame, to rects. An image that does not decode returns -1.
 static int frame_draw_overlay(Frame *frame, InlineImageRaster *images, uint32_t image_count, NSMutableData *rects) {
     NSMutableArray *decoded = [NSMutableArray array];
     NSMutableData *sizes = [NSMutableData data];
     for (uint32_t i = 0; i < image_count; i++) {
         InlineImageRaster *raster = &images[i];
-        if (!raster->visible) continue;
+        if (!raster->visible || inline_image_outside(frame, raster)) continue;
         CGFloat size[2] = {0, 0};
-        CGImageRef image = inline_image_decode(frame, raster, &size[0], &size[1]);
+        CGImageRef image = inline_image_decode(raster, &size[0], &size[1]);
         if (!image) return -1;
         [decoded addObject:(__bridge_transfer id)image];
         [sizes appendBytes:size length:sizeof(size)];
         ComposeRect item = {
             .left = raster->x,
             .top = raster->y,
-            .right = raster->x + (uint32_t)ceil(size[0]),
-            .bottom = raster->y + (uint32_t)ceil(size[1]),
+            .right = (uint32_t)MIN((CGFloat)frame->width, raster->x + ceil(size[0])),
+            .bottom = (uint32_t)MIN((CGFloat)frame->height, raster->y + ceil(size[1])),
             .kind = COMPOSE_OVERLAY,
         };
         [rects appendBytes:&item length:sizeof(item)];

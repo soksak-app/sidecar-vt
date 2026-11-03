@@ -241,24 +241,73 @@ fn the_strip_frame_composites_inline_images_with_the_pixels_of_the_coregraphics_
     assert_same_pixels(&coregraphics, &strip, width, height, "inline images");
 }
 
+// A valid image past an edge of the frame is clipped by the drawing context, so the rest of the frame still draws.
 #[test]
-fn the_strip_frame_refuses_an_inline_image_outside_the_frame_as_the_coregraphics_frame_does() {
+fn an_inline_image_past_an_edge_of_the_frame_draws_clipped_on_both_frames() {
     let metrics = metrics(13.0, 1.0);
     let width = metrics.cell_width as u32 * 6;
     let height = metrics.cell_height as u32 * 3;
     let screen = filled_screen(CursorShape::Block);
-    let images = [image(width - 2, 0, 4, 4)];
     let cursor = cursor_render(CursorShape::Block);
     let theme = TerminalTheme::dark();
-    let coregraphics = Frame::new(width, height).expect("coregraphics frame");
-    let strip = Frame::new_strip(width, height).expect("strip frame");
-    let coregraphics_error = coregraphics
-        .draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &images)
-        .expect_err("coregraphics refuses");
-    let strip_error = strip
-        .draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &images)
-        .expect_err("strip refuses");
-    assert_eq!(strip_error, coregraphics_error);
+    let empty = Frame::new(width, height).expect("coregraphics frame without an image");
+    empty
+        .draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &[])
+        .expect("draw without an image");
+    let cases = [
+        ("past the right edge", image(width - 2, 0, 4, 4)),
+        ("past the bottom edge", image(0, height - 2, 4, 4)),
+        ("larger than the frame", image(0, 0, width * 2, height * 2)),
+    ];
+    for (what, placement) in cases {
+        let images = [placement];
+        let coregraphics = Frame::new(width, height).expect("coregraphics frame");
+        let strip = Frame::new_strip(width, height).expect("strip frame");
+        coregraphics
+            .draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &images)
+            .unwrap_or_else(|error| panic!("{what}: coregraphics draw: {error}"));
+        strip
+            .draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &images)
+            .unwrap_or_else(|error| panic!("{what}: strip draw: {error}"));
+        assert_same_pixels(&coregraphics, &strip, width, height, what);
+        assert_ne!(
+            pixels(&coregraphics, width, height),
+            pixels(&empty, width, height),
+            "{what}: the visible part of the image is not drawn"
+        );
+    }
+}
+
+// An image wholly outside the frame has no pixel to draw, so the frame equals the frame without it.
+#[test]
+fn an_inline_image_wholly_outside_the_frame_draws_nothing_on_both_frames() {
+    let metrics = metrics(13.0, 1.0);
+    let width = metrics.cell_width as u32 * 6;
+    let height = metrics.cell_height as u32 * 3;
+    let screen = filled_screen(CursorShape::Block);
+    let cursor = cursor_render(CursorShape::Block);
+    let theme = TerminalTheme::dark();
+    let empty = Frame::new(width, height).expect("coregraphics frame without an image");
+    empty
+        .draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &[])
+        .expect("draw without an image");
+    let cases = [
+        ("right of the frame", image(width, 0, 4, 4)),
+        ("below the frame", image(0, height, 4, 4)),
+    ];
+    for (what, placement) in cases {
+        let images = [placement];
+        let coregraphics = Frame::new(width, height).expect("coregraphics frame");
+        let strip = Frame::new_strip(width, height).expect("strip frame");
+        coregraphics
+            .draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &images)
+            .unwrap_or_else(|error| panic!("{what}: coregraphics draw: {error}"));
+        strip
+            .draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &images)
+            .unwrap_or_else(|error| panic!("{what}: strip draw: {error}"));
+        assert_same_pixels(&empty, &coregraphics, width, height, what);
+        assert_same_pixels(&empty, &strip, width, height, what);
+    }
 }
 
 #[cfg(feature = "diagnostics")]

@@ -1,5 +1,6 @@
 # Changelog
 
+- S142: A valid inline image past an edge of the frame draws clipped, and one wholly outside the frame draws nothing, so such an image no longer fails every frame of its session.
 - S143: The exiting group test waits until the kernel refuses signals, so a signal accepted between the exit flag and that refusal no longer fails it.
 - S144: The default of a lost write result states its reason, so the sources pass the census of `make test`.
 - S139: An inline image whose data ImageIO cannot decode is rejected when it is stored: the page receives `sequence.rejected` without the payload, no `image.inline` event is sent, and the frame draws without the image. The draw no longer fails the whole frame for it.

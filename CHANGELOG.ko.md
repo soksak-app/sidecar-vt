@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S142: frame의 가장자리를 넘는 유효한 inline image는 잘려서 그려지고 완전히 밖에 있는 image는 아무것도 그리지 않는다. 그래서 그런 image가 session의 모든 frame을 실패시키지 않는다.
 - S143: 종료 중인 group의 test는 kernel이 signal을 거부할 때까지 기다린다. 그래서 종료 flag와 거부 사이에 받아들여진 signal이 test를 실패시키지 않는다.
 - S144: 잃어버린 write 결과의 default가 이유를 적으므로 source가 `make test`의 census를 통과한다.
 - S139: ImageIO가 해독하지 못하는 data의 inline image는 저장할 때 거부된다. 페이지는 payload 없이 `sequence.rejected`를 받고, `image.inline` event는 보내지 않으며, frame은 그 image 없이 그린다. draw가 그 image 때문에 frame 전체를 실패시키지 않는다.
