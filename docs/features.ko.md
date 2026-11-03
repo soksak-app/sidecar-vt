@@ -2,7 +2,7 @@
 
 [English](features.md)
 
-- [~] S129 — P0: S122부터 S128까지 담은 VT release를 공개하고 registry에 올리며 terminal plugin이 그것을 요구하게 한다. 진행 중: 이 version의 release run이 돈다. registry와 plugin P107이 그 뒤를 잇는다.
+- [o] S129 — P0: S122부터 S128까지 담은 VT release를 공개하고 registry에 올리며 terminal plugin이 그것을 요구하게 한다. 결과: release run이 v0.0.23을 공개했고, registry가 그것을 올렸으며, terminal 0.0.35가 그것을 요구한다.
 - [o] S128 — P0: release gate는 `Closed:` 사유로 닫은 항목을 받아들인다. 입력: 닫힌 항목 S121. 동작: records kit 0.0.1의 gate가 S121 뒤의 모든 push에서 실패했다. 기대: 그 사유를 받아들이는 kit 0.0.6. Red: `soksak-release-gate`가 `closed checklist item S121 requires either a nonempty Not reproduced record or a complete Platform excluded record`로 실패했다. Green: 같은 명령이 0으로 끝나고 이월 항목 셋을 보고한다.
 - [o] S127 — P0: 세션의 image surface는 바뀐 행의 strip만 다시 그린다. 입력: 한 행만 바뀐 frame. 동작: CoreGraphics frame이 모든 cell을 그렸다. 기대: strip frame은 행마다 strip을 하나 두고 행의 hash가 바뀐 strip만 다시 그리며 pixel은 CoreGraphics frame과 같다. render metadata를 모으는 diagnostic build는 그것을 보고하는 유일한 frame인 CoreGraphics frame을 유지한다. Red: `an_image_surface_of_a_session_draws_on_the_strip_frame`가 그린 strip 수에서 `left: 0`, `right: 3`으로 실패했다. Green: strip test 6개와 workspace의 모든 test 509개가 통과한다.
 - [o] S126 — P0: 엔진은 cell마다 할당하지 않고 화면을 만든다. 입력: 모든 cell에 색과 문자가 있는 24행 100열 화면. 동작: 만드는 데 12147번 할당했다. 기대: cell은 색을 RGB byte로, grapheme을 inline string으로 담고, 글자 형식 `#rrggbb`는 답을 serialize할 때만 쓴다. Red: `building_a_screen_allocates_per_line_not_per_cell`가 `12147 allocations built a 24x100 screen; the bound is 160`로 실패했다. Green: 이 test와 workspace의 모든 test 505개가 통과한다.
