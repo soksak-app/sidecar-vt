@@ -1,9 +1,21 @@
 use super::*;
+use tokio::io::BufReader;
 
 fn test_connection(sender: mpsc::Sender<String>) -> Connection {
     Connection::new(
         sender,
         crate::events::test_support::TestEvents::new().handle(),
+    )
+}
+
+/// The request lines of a connection that reads `reader`, built as `serve` builds them.
+fn request_lines<R: AsyncRead + Unpin>(reader: R) -> FramedRead<PolledReader<R>, LinesCodec> {
+    FramedRead::new(
+        PolledReader::new(
+            reader,
+            crate::events::test_support::TestEvents::new().handle(),
+        ),
+        LinesCodec::new_with_max_length(REQUEST_LINE_LIMIT),
     )
 }
 
@@ -203,7 +215,7 @@ async fn previous_client_eof_preserves_new_attachment_output() {
     let output = OutputSink::detachable(test_connection(previous_sender));
     let (client, reader) = tokio::io::duplex(64);
     let input = run_input_loop(
-        BufReader::new(reader),
+        request_lines(reader),
         output.clone(),
         ServeOptions {
             engine_factory: Arc::new(|| Box::new(FakeEngine::new())),
@@ -571,7 +583,7 @@ async fn a_surface_reopened_after_its_closed_notice_is_not_a_stale_attachment() 
         r#"{"surface":"s1","root":"/tmp","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}"#,
     );
     run_input_loop(
-        BufReader::new(input.as_bytes()),
+        request_lines(input.as_bytes()),
         output,
         ServeOptions {
             engine_factory: Arc::new(|| Box::new(FakeEngine::new())),
@@ -790,7 +802,7 @@ async fn a_surface_reopened_after_its_close_request_is_not_a_stale_attachment() 
         r#"{"surface":"s1","root":"/tmp","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}"#,
     );
     run_input_loop(
-        BufReader::new(input.as_bytes()),
+        request_lines(input.as_bytes()),
         output,
         ServeOptions {
             engine_factory: Arc::new(|| Box::new(FakeEngine::new())),
@@ -833,7 +845,7 @@ async fn a_surface_message_after_its_owner_close_is_not_a_stale_attachment() {
         r#"{"surface":"s1","root":"/tmp","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}"#,
     );
     run_input_loop(
-        BufReader::new(input.as_bytes()),
+        request_lines(input.as_bytes()),
         output,
         ServeOptions {
             engine_factory: Arc::new(|| Box::new(FakeEngine::new())),
@@ -878,7 +890,7 @@ async fn assert_closed_answer_follows_the_session_close(registry: Option<Arc<Per
     let (sender, mut receiver) = mpsc::channel(64);
     let (mut client, reader) = tokio::io::duplex(4096);
     let input = run_input_loop(
-        BufReader::new(reader),
+        request_lines(reader),
         OutputSink::direct(test_connection(sender)),
         ServeOptions {
             engine_factory: Arc::new(|| Box::new(FakeEngine::new())),

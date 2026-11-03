@@ -59,6 +59,8 @@ One persistent terminal service owns PTYs, VT state, scrollback, and rendering f
 
 The service loads the default terminal font before it publishes the endpoint, so the first CoreText call of a service process delays the first terminal of that process and no later one. This cost is accepted because it occurs once per service process and the service outlives application restarts.
 
+The service reads its input as one request per line. A line has a limit of 67108864 bytes (64 MiB) before its newline, the message limit of the sidecar specification. When a line exceeds the limit, the service replies `{"surface": "", "body": {"error": "invalidParams", "reason": "message exceeds 67108864 bytes"}}` and records the error for `request line` in the application log. The line decoder ends the stream after that error, so the input of the connection ends there: a connection that is not persistent closes its sessions, and a persistent connection detaches, as at the end of input.
+
 The terminal sidecar names the reasons of its exit in its `sidecar.vt.session_stop` event: `folder-removed`, `endpoint-removed`, or `endpoint-replaced`.
 
 The terminal page treats this as its reconnection signal: it resolves the stale sidecar error, closes its session gate so input queues again, and re-runs its session bootstrap — `open` (a no-op on a preserved session, a new session on a respawned service) followed by the last theme, the declared font, and the cursor policy.

@@ -21,6 +21,8 @@ fault-injection = []
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 tokio = { version = "1", features = ["io-util", "rt", "time", "net", "process", "sync", "macros", "signal"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+futures-util = "0.3"
 uuid = { version = "1", features = ["v4", "serde"] }
 base64 = "0.21"
 nix = { version = "0.27", features = ["process", "net", "fs", "signal"] }

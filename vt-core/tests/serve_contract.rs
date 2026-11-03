@@ -355,6 +355,66 @@ async fn vendor_event_is_emitted_only_with_the_owning_surface_id() {
     task.await.unwrap().unwrap();
 }
 
+#[tokio::test]
+async fn a_request_line_over_the_message_limit_is_refused_and_ends_the_input() {
+    // The message limit of docs/spec/sidecars.md: 67108864 bytes before the newline.
+    const MESSAGE_LIMIT: usize = 67_108_864;
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let session_port_factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "owned-session".to_string(),
+            calls.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+    let task = tokio::spawn(serve(
+        engine_factory,
+        serve_in,
+        serve_out,
+        session_port_factory,
+    ));
+
+    // A line of one byte over the limit, without a newline: the limit is exceeded before one arrives.
+    let input = vec![b'a'; MESSAGE_LIMIT + 1];
+    to_serve.write_all(&input).await.unwrap();
+
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+    let refusal = next_reply(&mut lines).await;
+    assert_eq!(
+        refusal,
+        serde_json::json!({
+            "surface": "",
+            "body": {
+                "error": "invalidParams",
+                "reason": "message exceeds 67108864 bytes"
+            }
+        }),
+        "the line over the limit is refused with an explicit error"
+    );
+    // The input ends with the refused line, so the output ends after its reply.
+    let end = tokio::time::timeout(std::time::Duration::from_secs(10), lines.next_line())
+        .await
+        .expect("timeout waiting for the end of the output")
+        .unwrap();
+    assert!(end.is_none(), "the output ends after the refusal: {end:?}");
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+}
+
+/// Reads the next reply line of the service, which must arrive within 10 seconds.
+async fn next_reply<R: tokio::io::AsyncBufRead + Unpin>(
+    lines: &mut tokio::io::Lines<R>,
+) -> serde_json::Value {
+    let line = tokio::time::timeout(std::time::Duration::from_secs(10), lines.next_line())
+        .await
+        .expect("timeout waiting for a reply")
+        .unwrap()
+        .expect("the service closed its output");
+    serde_json::from_str(&line).unwrap()
+}
+
 #[derive(Debug, Default, Clone)]
 struct Calls {
     opens: Vec<(u16, u16)>,
