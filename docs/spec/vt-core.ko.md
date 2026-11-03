@@ -88,7 +88,7 @@ hook은 프롬프트 앞마다 `133;A`를 보고하고(bash는 readline이 프�
 | 두 번째 close | 첫 close가 실행 중이면 `Ok`를 돌려준다. 첫 close가 항목을 지운 뒤에는 `session <id> not found`를 돌려주고, 어느 쪽도 상태를 바꾸지 않는다 |
 | close가 프로그램에 쓰는 바이트 | 없다 |
 | master | child를 기다리기 전에 두 descriptor를 닫는다. 읽히지 않은 터미널 출력이 있는 프로세스는 그 출력이 비거나 master가 닫혀야 끝나기 때문이다 |
-| child와 job | child에 SIGHUP을 보내 shell이 job에 전달하게 하고, reaper를 최대 250 ms 기다린 뒤, process group과 남은 child에 SIGKILL을 보낸다. `nohup`이나 `disown`으로 시작한 job은 계속 돈다. zsh의 prompt 뒤 10 ms 안에 도착한 hangup은 job에 전달되지 않고 shell만 끝내므로(macOS 측정) 그런 job은 계속 돈다 |
+| child와 job | child에 SIGHUP을 보내 shell이 job에 전달하게 하고, reaper를 최대 250 ms 기다린 뒤, process group과 남은 child에 SIGKILL을 보낸다. `nohup`이나 `disown`으로 시작한 job은 계속 돈다. fork와 exec 사이의 job은 zsh의 hangup을 잃을 수 있다. zsh가 signal을 exec이 대체하는 메모리에 queue하기 때문이고, 그 job은 계속 돈다. macOS의 zsh 5.9에서 막 fork된 job은 10회 중 9회, exec 뒤의 job은 10회 중 0회 계속 돌았다 |
 
 이 결정은 터미널 구현의 보편적 형태를 따른다. 출력은 무손실이고, reader는 상한에서 멈추고, 쓰기는 읽기와 분리된다. 답한 이의는 다음과 같다.
 

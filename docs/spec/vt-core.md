@@ -88,7 +88,7 @@ One session has one I/O task. The task owns a non-blocking duplicate of the PTY 
 | Second close | Returns `Ok` while the first runs; after the first removed the entry it returns `session <id> not found`, and neither changes a state |
 | Bytes written to the program by closing | None |
 | Master | Both descriptors close before the wait for the child, because a process with unread terminal output exits only after that output drains or the master closes |
-| Child and jobs | SIGHUP to the child, so a shell passes it to its jobs; up to 250 ms for the reaper; then SIGKILL to the process group and to a remaining child. A job started with `nohup` or `disown` keeps running. A hangup that reaches zsh within 10 ms after its prompt ends the shell without passing it to its jobs, as measured on macOS, so such a job keeps running |
+| Child and jobs | SIGHUP to the child, so a shell passes it to its jobs; up to 250 ms for the reaper; then SIGKILL to the process group and to a remaining child. A job started with `nohup` or `disown` keeps running. A job that receives the hangup of zsh between its fork and its exec can lose it, because zsh queues a signal in the memory that the exec replaces; that job keeps running. Measured with zsh 5.9 on macOS, a job that had just forked kept running in 9 of 10 runs, and a job after its exec in 0 of 10 |
 
 The decision follows the common form of terminal implementations: output stays lossless, the reader stops at a bound, and writing is separate from reading. The objections that were answered:
 

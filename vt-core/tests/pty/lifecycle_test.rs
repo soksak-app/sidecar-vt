@@ -787,9 +787,9 @@ impl Drop for Job {
 }
 
 /// Starts an interactive shell without its startup files and a job with the operator `background`,
-/// and returns the session and the process of the job. A hangup within 10 ms after the prompt ends
-/// zsh without passing it to its jobs, as measured on macOS, and the shell reports nothing when
-/// that time ended, so this waits past it with a timer.
+/// and returns the session and the process of the job when the job reports after its exec. A signal
+/// that reaches a job of zsh before its exec can be lost with its signal queue. The report is
+/// computed by the job, so the echo of the command does not contain it.
 async fn shell_with_job(
     service: &PtyService,
     rx: &mut tokio::sync::mpsc::Receiver<DaemonEvent>,
@@ -803,14 +803,14 @@ async fn shell_with_job(
         .write(
             &session_id,
             WriteOrigin::Person,
-            format!("sleep 1000 {background} echo job=$!; PROMPT=at-''prompt\n").into_bytes(),
+            format!("/bin/sh -c 'echo job-$((1+1)); exec sleep 1000' {background} echo job=$!\n")
+                .into_bytes(),
         )
         .unwrap();
     let mut seen = String::new();
-    while !seen.contains("at-prompt") {
+    while !seen.contains("job-2") || !seen.contains("job=") {
         seen.push_str(&String::from_utf8_lossy(&next_output(rx).await));
     }
-    tokio::time::sleep(Duration::from_millis(300)).await;
     let pid = seen
         .split("job=")
         .filter_map(|part| {
