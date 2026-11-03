@@ -1,6 +1,6 @@
 #[path = "support/events_test.rs"]
 mod events_test;
-use soksak_sidecar_vt_core::pty::{WriteCompletion, write_completed};
+use soksak_sidecar_vt_core::pty::{WriteCompletion, WriteOrigin, write_completed};
 #[path = "support/session_port_test.rs"]
 mod tracked_session_port;
 
@@ -440,6 +440,7 @@ impl SessionPort for FakeSessionPort {
     async fn write(
         &self,
         session_id: &str,
+        _origin: soksak_sidecar_vt_core::pty::WriteOrigin,
         data: std::sync::Arc<[u8]>,
     ) -> Result<soksak_sidecar_vt_core::pty::WriteCompletion, String> {
         {

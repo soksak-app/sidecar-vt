@@ -758,6 +758,8 @@ impl PersistentRegistry {
 }
 
 /// The trait that an engine implements. It is the contract of the VT processing engine.
+/// A terminal engine. It returns its replies to the program as `EngineEvent::PtyWrite` from
+/// `drain_events`, and the service queues them in order with the input of the session.
 pub trait Engine: Send + 'static {
     fn resize(&mut self, cols: u16, rows: u16);
     fn set_theme(&mut self, theme: crate::palette::TerminalTheme);
@@ -1180,9 +1182,23 @@ pub struct InlineImagePlacement {
 /// Event received from the daemon
 #[derive(Debug, Clone)]
 pub enum DaemonEvent {
-    Output { session_id: String, data: Vec<u8> },
-    Exit { session_id: String },
-    Error { session_id: String, error: String },
+    Output {
+        session_id: String,
+        data: Vec<u8>,
+    },
+    /// Reads stopped because queued input exceeded its bound (`held` true), or they resumed.
+    InputHeld {
+        session_id: String,
+        queued: usize,
+        held: bool,
+    },
+    Exit {
+        session_id: String,
+    },
+    Error {
+        session_id: String,
+        error: String,
+    },
 }
 
 /// Session port: the abstract interface that communicates with the daemon. The shell and the start
@@ -1204,6 +1220,7 @@ pub trait SessionPort: Send + Sync {
     async fn write(
         &self,
         session_id: &str,
+        origin: crate::pty::WriteOrigin,
         data: Arc<[u8]>,
     ) -> Result<crate::pty::WriteCompletion, String>;
     async fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String>;
@@ -2892,7 +2909,11 @@ impl ReplayInputs {
         after: AfterWrite,
     ) -> bool {
         let data: Arc<[u8]> = Arc::from(data);
-        let completion = match port.write(session, data.clone()).await {
+        let origin = match after {
+            AfterWrite::EngineReply(..) => crate::pty::WriteOrigin::Engine,
+            _ => crate::pty::WriteOrigin::Person,
+        };
+        let completion = match port.write(session, origin, data.clone()).await {
             Ok(completion) => completion,
             Err(error) => crate::pty::write_completed(Err(error)),
         };
@@ -4720,6 +4741,12 @@ async fn surface_task(
                                 }
                             }
                     }
+                    DaemonEvent::InputHeld { session_id: ref recv_sid, queued, held } => {
+                        if session_id.as_deref() == Some(recv_sid) {
+                            let response = json!({"surface": surface_id, "body": {"event": "input_held", "queued": queued, "held": held}});
+                            if output_tx.send(response.to_string()).await.is_err() { return; }
+                        }
+                    }
                     DaemonEvent::Exit { session_id: ref recv_sid } => {
                         if let Some(ref sid) = session_id
                             && recv_sid == sid {
@@ -6256,9 +6283,10 @@ impl SessionPort for LocalSessionPort {
     async fn write(
         &self,
         session_id: &str,
+        origin: crate::pty::WriteOrigin,
         data: Arc<[u8]>,
     ) -> Result<crate::pty::WriteCompletion, String> {
-        self.service.write(session_id, data)
+        self.service.write(session_id, origin, data)
     }
 
     async fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {

@@ -159,7 +159,11 @@ async fn resize_wrapped_input(mut session: Session) -> Result<(), String> {
     // The output row directly above the prompt must also remain unchanged after the resize.
     session
         .service
-        .write(&session.id, &b"printf 'ABOVE\\n'\n"[..])
+        .write(
+            &session.id,
+            soksak_sidecar_vt_core::pty::WriteOrigin::Person,
+            &b"printf 'ABOVE\\n'\n"[..],
+        )
         .unwrap();
     session
         .until(|text, _| text.contains("ABOVE") && text.matches("P> ").count() == 2)
@@ -167,7 +171,11 @@ async fn resize_wrapped_input(mut session: Session) -> Result<(), String> {
         .map_err(|screen| format!("no output line: {screen:?}"))?;
     session
         .service
-        .write(&session.id, input.as_bytes())
+        .write(
+            &session.id,
+            soksak_sidecar_vt_core::pty::WriteOrigin::Person,
+            input.as_bytes(),
+        )
         .unwrap();
     // Each step changes the size once. If the size changes again before the shell redraws, readline
     // redraws at the previous width.

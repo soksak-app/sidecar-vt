@@ -9,7 +9,7 @@ async fn poisoned_closed_writer_stays_closed() {
     poison(&session.input);
     assert_eq!(
         service
-            .write(&session.id, &b"x"[..])
+            .write(&session.id, crate::pty::WriteOrigin::Person, &b"x"[..])
             .expect_err("reject closed writer"),
         "session writer is closed"
     );
@@ -45,7 +45,7 @@ async fn poisoned_closed_flag_rejects_input_and_measurement() {
     poison(&session.closed);
     assert_eq!(
         service
-            .write(&session.id, &b"x"[..])
+            .write(&session.id, crate::pty::WriteOrigin::Person, &b"x"[..])
             .expect_err("reject closed session"),
         "session is closed"
     );

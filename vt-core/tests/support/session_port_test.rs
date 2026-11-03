@@ -1,4 +1,6 @@
-use super::{DaemonEvent, SessionPort, ShellRequest, WriteCompletion, write_completed};
+use super::{
+    DaemonEvent, SessionPort, ShellRequest, WriteCompletion, WriteOrigin, write_completed,
+};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -39,6 +41,7 @@ impl SessionPort for FakeSessionPort {
     async fn write(
         &self,
         session_id: &str,
+        _origin: WriteOrigin,
         data: std::sync::Arc<[u8]>,
     ) -> Result<WriteCompletion, String> {
         let mut calls = self.calls.lock().await;

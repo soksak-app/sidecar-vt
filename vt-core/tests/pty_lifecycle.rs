@@ -81,7 +81,13 @@ async fn real_sessions_are_independent_and_close_removes_session() {
     assert!(String::from_utf8_lossy(&output_b).contains('B'));
     service.close(&a).expect("explicit close failed");
     assert!(
-        service.write(&a, &b"x"[..]).is_err(),
+        service
+            .write(
+                &a,
+                soksak_sidecar_vt_core::pty::WriteOrigin::Person,
+                &b"x"[..]
+            )
+            .is_err(),
         "closed session remained addressable"
     );
 }
@@ -154,7 +160,11 @@ async fn pty_measurement_counts_master_written_bytes_a_non_reading_child_has_not
     let first = b"pending-probe";
     let second = b"-second";
     service
-        .write(&session, &first[..])
+        .write(
+            &session,
+            soksak_sidecar_vt_core::pty::WriteOrigin::Person,
+            &first[..],
+        )
         .expect("first production-path write failed")
         .await
         .expect("the session completes the write")
@@ -168,7 +178,11 @@ async fn pty_measurement_counts_master_written_bytes_a_non_reading_child_has_not
         "a child that reads nothing must leave every written byte pending"
     );
     service
-        .write(&session, &second[..])
+        .write(
+            &session,
+            soksak_sidecar_vt_core::pty::WriteOrigin::Person,
+            &second[..],
+        )
         .expect("second production-path write failed")
         .await
         .expect("the session completes the write")
@@ -222,7 +236,11 @@ async fn pty_measurement_drains_to_zero_as_the_child_reads() {
         "the child never reported its raw mode; output so far: {seen:?}"
     );
     service
-        .write(&session, &b"drain-probe"[..])
+        .write(
+            &session,
+            soksak_sidecar_vt_core::pty::WriteOrigin::Person,
+            &b"drain-probe"[..],
+        )
         .expect("production-path write failed")
         .await
         .expect("the session completes the write")
@@ -377,7 +395,11 @@ async fn child_reads_exact_bytes_written_through_the_production_path() {
     // at the end of the line ends the read of cat.
     let bytes = b"\x1b[<0;5;2M\x1b[<32;6;2m\x1b[<35;7;2m\x1b[<0;7;2m\n";
     service
-        .write(&session, &bytes[..])
+        .write(
+            &session,
+            soksak_sidecar_vt_core::pty::WriteOrigin::Person,
+            &bytes[..],
+        )
         .expect("production-path write failed")
         .await
         .expect("the session completes the write")
@@ -584,7 +606,14 @@ async fn a_write_waiting_for_the_child_does_not_block_the_runtime() {
         // Complete lines fill the canonical queue of the line discipline, which blocks the master
         // write once the child does not read it.
         let data = b"x\n".repeat(1 << 19);
-        tokio::spawn(async move { port.write(&session, Arc::from(data)).await })
+        tokio::spawn(async move {
+            port.write(
+                &session,
+                soksak_sidecar_vt_core::pty::WriteOrigin::Person,
+                Arc::from(data),
+            )
+            .await
+        })
     };
     let (tick_tx, mut tick_rx) = tokio::sync::mpsc::unbounded_channel();
     let ticker = tokio::spawn(async move {
@@ -657,7 +686,14 @@ async fn a_close_ends_a_write_that_waits_for_the_child() {
         let port = Arc::clone(&port);
         let session = session.clone();
         let data = b"x\n".repeat(1 << 19);
-        tokio::spawn(async move { port.write(&session, Arc::from(data)).await })
+        tokio::spawn(async move {
+            port.write(
+                &session,
+                soksak_sidecar_vt_core::pty::WriteOrigin::Person,
+                Arc::from(data),
+            )
+            .await
+        })
     };
     // The write fills the canonical queue of the line discipline within this time and then waits
     // for the child.

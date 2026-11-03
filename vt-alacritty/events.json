@@ -713,6 +713,32 @@
       },
       "description": "Closing a session sent a signal to its process group or its child. target is process group or child, id is the group or the pid, and result is sent, ESRCH (nothing with that identifier exists any more) or EPERM when the members are ending."
     },
+    "sidecar.vt.input_held": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "warn",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "queued": {
+            "type": "number"
+          },
+          "bound": {
+            "type": "number"
+          },
+          "held": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "queued",
+          "bound",
+          "held"
+        ]
+      },
+      "description": "Reads of a session stopped because its queued input exceeded the bound (held true), or they resumed. queued is the bytes of the queue."
+    },
     "sidecar.vt.buffer_dropped": {
       "layer": "sidecar",
       "class": "lifecycle",
