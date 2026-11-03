@@ -1956,6 +1956,11 @@ fn record_frame(
     sequence: u64,
     raster: Option<(u64, String, u32)>,
 ) {
+    // The hash is the cost of a frame record: a record that the policy does not store is not
+    // built, and the gate counts the refusal.
+    if !log.gate(Class::Frame, Level::Debug) {
+        return;
+    }
     let hash = match crate::screen_hash::screen_hash(screen) {
         Ok(hash) => hash,
         Err(error) => return log.record_error("frame", error),

@@ -29,6 +29,8 @@ struct TraceEngine {
     runtime_error: Option<String>,
     // The modes that the output of the program sets with `?1000h`, `?1000l` and `?1006h`.
     modes: Modes,
+    // The screen places its cursor on the row after the last, which the screen hash refuses.
+    unhashable: bool,
 }
 
 fn contains(bytes: &[u8], needle: &[u8]) -> bool {
@@ -108,7 +110,7 @@ impl Engine for TraceEngine {
             rows: self.rows,
             cursor: Cursor {
                 col: 0,
-                row: 0,
+                row: if self.unhashable { self.rows } else { 0 },
                 shape: CursorShape::Block,
                 visible: true,
                 blinking: false,
@@ -757,6 +759,37 @@ async fn the_bytes_of_the_program_are_not_stored_when_the_policy_turns_the_class
             && line["fields"]["count"].as_u64().unwrap() >= 1),
         "{gated:?}"
     );
+}
+
+// The frame record is the only reader of the screen hash of a drawn frame, so a frame whose record
+// the policy does not store is not hashed: a screen that the hash refuses records no error then.
+#[tokio::test]
+async fn a_frame_whose_record_is_not_stored_is_not_hashed() {
+    let events = TestEvents::with_policy(Policy::default().with(Class::Frame, None));
+    let engine_factory = Arc::new(|| {
+        Box::new(TraceEngine {
+            unhashable: true,
+            ..TraceEngine::default()
+        }) as Box<dyn Engine>
+    });
+    let port = Arc::new(TracePort);
+    let factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync> =
+        Arc::new(move || port.clone() as Arc<dyn SessionPort>);
+    serve_with(
+        &events,
+        engine_factory,
+        factory,
+        br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#,
+    )
+    .await;
+    let errors = events.named("sidecar.vt.record.error");
+    assert!(
+        errors.iter().all(|line| line["fields"]["where"] != "frame"),
+        "a frame whose record is not stored was hashed: {errors:?}"
+    );
+    assert!(events.named("sidecar.vt.frame").is_empty());
 }
 
 // The `screen` event that the service sends carries the members of the screen hash, and its
