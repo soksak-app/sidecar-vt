@@ -22,6 +22,8 @@ use tokio::sync::mpsc;
 
 #[derive(Default)]
 struct TraceEngine {
+    // The number of screens that the surface built.
+    screens: Arc<std::sync::atomic::AtomicUsize>,
     cols: u16,
     rows: u16,
     runtime_error: Option<String>,
@@ -99,6 +101,8 @@ impl Engine for TraceEngine {
         }
     }
     fn screen(&mut self) -> Screen {
+        self.screens
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Screen {
             cols: self.cols,
             rows: self.rows,
@@ -1527,11 +1531,19 @@ struct AnsweredSurface {
     outputs: mpsc::Sender<soksak_sidecar_vt_core::protocol::DaemonEvent>,
     requests: mpsc::Sender<Vec<u8>>,
     frames: Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
+    screens: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 async fn serve_answered() -> AnsweredSurface {
     let events = TestEvents::new();
-    let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
+    let screens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let built = Arc::clone(&screens);
+    let engine_factory = Arc::new(move || {
+        Box::new(TraceEngine {
+            screens: Arc::clone(&built),
+            ..TraceEngine::default()
+        }) as Box<dyn Engine>
+    });
     let (outputs, receiver) = mpsc::channel(64);
     let port = Arc::new(OutputPort(std::sync::Mutex::new(Some(receiver))));
     let factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync> =
@@ -1578,6 +1590,7 @@ async fn serve_answered() -> AnsweredSurface {
         outputs,
         requests,
         frames,
+        screens,
     };
     surface.wait_frames(1).await;
     surface
@@ -1637,6 +1650,22 @@ async fn the_frame_clock_draws_output_without_input_at_most_once_in_33_ms() {
             pair[1] - pair[0]
         );
     }
+}
+
+// Output that the frame clock holds builds no screen, because a screen copies the whole grid: the
+// surface builds one screen for each frame that it draws, not one for each chunk of output.
+#[tokio::test(start_paused = true)]
+async fn the_frame_clock_builds_no_screen_for_output_that_it_holds() {
+    let surface = serve_answered().await;
+    let screens = surface.screens.load(std::sync::atomic::Ordering::SeqCst);
+    let frames = surface.events.named("sidecar.vt.frame").len();
+    surface.output(20).await;
+    let built = surface.screens.load(std::sync::atomic::Ordering::SeqCst) - screens;
+    let drawn = surface.events.named("sidecar.vt.frame").len() - frames;
+    assert_eq!(
+        built, drawn,
+        "20 chunks of output built {built} screens for {drawn} frames"
+    );
 }
 
 // The output that follows an input within 200 ms is drawn at once, without the frame clock: a

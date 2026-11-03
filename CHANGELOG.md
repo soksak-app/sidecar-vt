@@ -1,5 +1,6 @@
 # Changelog
 
+- S123: A test measures that output which the frame clock holds builds no screen.
 - S122: Output is drawn on a frame clock of 33 ms, output within 200 ms after an input is drawn at once, and output that the clock holds builds no screen.
 - S120: Version 0.0.22, which carries S119.
 - S119: While the host reports that its image region is not drawing, a surface draws no frame and sends no `screen` event; when the region draws again it draws and sends the changed screen once. A drawing state of an earlier generation is ignored, and an invalid drawing message is answered with `invalidParams`.

@@ -2,6 +2,7 @@
 
 [English](features.md)
 
+- [o] S123 — P0: frame 시계가 잡아 둔 출력이 화면을 만들지 않음을 test가 잰다. 입력: S122가 이 동작을 말하지만 재는 test가 없다. 기대: surface는 그리는 frame마다 화면을 하나 만든다. Red: frame 시계가 정하기 전에 화면을 만들면 `the_frame_clock_builds_no_screen_for_output_that_it_holds`가 `20 chunks of output built 21 screens for 1 frames`로 실패했다. Green: S122의 코드에서 같은 test가 통과한다.
 - [o] S122 — P0: 출력을 frame 시계에 맞춰 그린다. 입력: program이 입력 없이 출력을 여러 조각으로 쓴다. 동작: 조각마다 화면을 만들고 host가 앞 frame에 답하는 즉시 frame을 그려, 33 ms마다 20행을 다시 쓰는 출력에서 123.6 frame/s가 되고 frame당 앱 CPU 14.6 ms를 쓴다. 기대: 출력은 33 ms에 최대 한 번 그리고, 입력 뒤 200 ms 안의 출력은 바로 그리며, 시계가 잡아 둔 출력은 화면을 만들지 않는다. Red: `the_frame_clock_draws_output_without_input_at_most_once_in_33_ms`가 `two frames are 1ms apart`로 실패했다. Green: frame 시계 test 둘과 serve test가 통과한다.
 - [-] S121 — P1: 새 sidecar를 위한 GPU frame, core F386의 lease 응답, frame clock. Closed: 새 sidecar를 이 sidecar와 비교하므로, 이 sidecar는 0.0.22의 동작을 유지하고 그 작업은 새 sidecar의 저장소에 속한다. S121의 변경은 release 전에 되돌렸다.
 - [o] S120 — P0: S119를 담은 VT release를 게시하고 registry에 올리며 terminal plugin이 요구하게 한다. Red: 0.0.22 candidate release의 version 단계가 `candidate release package version differs`(actual `0.0.21`)로 실패했다. Green: 모든 manifest가 0.0.22를 쓰고 candidate release가 통과한다. 결과: release run이 asset 하나와 함께 `v0.0.22`를 게시했고, registry가 그것을 올렸으며(G70), terminal 0.0.32가 그것을 요구한다.
