@@ -29,9 +29,14 @@ struct TraceEngine {
     runtime_error: Option<String>,
     // The modes that the output of the program sets with `?1000h`, `?1000l` and `?1006h`.
     modes: Modes,
+    // Each feed sends one more output through this channel, so output never stops arriving.
+    refill: Refill,
     // The screen places its cursor on the row after the last, which the screen hash refuses.
     unhashable: bool,
 }
+
+type Refill =
+    Arc<std::sync::Mutex<Option<mpsc::Sender<soksak_sidecar_vt_core::protocol::DaemonEvent>>>>;
 
 fn contains(bytes: &[u8], needle: &[u8]) -> bool {
     bytes.windows(needle.len()).any(|window| window == needle)
@@ -48,6 +53,10 @@ impl Engine for TraceEngine {
         Ok(())
     }
     fn feed(&mut self, bytes: &[u8]) {
+        if let Some(refill) = self.refill.lock().unwrap().as_ref() {
+            // A full channel already holds the next output.
+            let _ = refill.try_send(daemon_output(b"x"));
+        }
         if contains(bytes, b"\x1b[?1000h") {
             self.modes.mouse_click = true;
         }
@@ -1581,15 +1590,19 @@ struct AnsweredSurface {
     requests: mpsc::Sender<Vec<u8>>,
     frames: Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
     screens: Arc<std::sync::atomic::AtomicUsize>,
+    refill: Refill,
 }
 
 async fn serve_answered() -> AnsweredSurface {
     let events = TestEvents::new();
     let screens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let built = Arc::clone(&screens);
+    let refill = Refill::default();
+    let engine_refill = Arc::clone(&refill);
     let engine_factory = Arc::new(move || {
         Box::new(TraceEngine {
             screens: Arc::clone(&built),
+            refill: Arc::clone(&engine_refill),
             ..TraceEngine::default()
         }) as Box<dyn Engine>
     });
@@ -1640,6 +1653,7 @@ async fn serve_answered() -> AnsweredSurface {
         requests,
         frames,
         screens,
+        refill,
     };
     surface.wait_frames(1).await;
     surface
@@ -1779,4 +1793,23 @@ async fn the_frame_clock_draws_output_at_once_within_200_ms_after_an_input() {
             ))
             .collect::<Vec<_>>()
     );
+}
+
+// The surface consumes one output per turn, so an input request ends while output keeps arriving.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_input_request_ends_during_a_flood_of_output() {
+    let surface = serve_answered().await;
+    *surface.refill.lock().unwrap() = Some(surface.outputs.clone());
+    surface.outputs.send(daemon_output(b"x")).await.unwrap();
+    surface
+        .requests
+        .send(
+            br#"{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"\ud55ca\n","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+"#
+            .to_vec(),
+        )
+        .await
+        .unwrap();
+    wait_events(&surface.events, "sidecar.vt.pty_write", 1, |_| true).await;
+    surface.refill.lock().unwrap().take();
 }

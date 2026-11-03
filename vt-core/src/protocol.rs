@@ -4053,34 +4053,7 @@ async fn surface_task(
                         focused = next_focused;
                         preedit = Some(next_preedit);
 
-                        let mut queued_output = false;
-                        let mut exited = false;
-                        while let Ok(event) = daemon_events_rx.try_recv() {
-                            match event {
-                                DaemonEvent::Output { session_id: ref received, data }
-                                    if session_id.as_deref() == Some(received) => {
-                                        queued_output = true;
-                                        cursor_activity = Instant::now();
-                                        last_cursor_frame = None;
-                                        crate::engine_trace::record(&log, &surface_id, || format!("feed {}", base64_encode(&data)));
-                                        inputs.output(received, &data);
-                                        engine.feed(&data);
-                                        record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
-                                        if !send_engine_events(
-                                            SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs },
-                                            session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart,
-                                        ).await { return; }
-                                    }
-                                DaemonEvent::Exit { session_id: ref received }
-                                    if session_id.as_deref() == Some(received) => exited = true,
-                                DaemonEvent::Error { session_id: ref received, error }
-                                    if session_id.as_deref() == Some(received)
-                                        && output_tx.send(json!({"surface": surface_id, "body": {"event": "error", "reason": error}}).to_string()).await.is_err() => return,
-                                _ => {}
-                            }
-                        }
-
-                        if (presentation_changed || (queued_output && !headless))
+                        if presentation_changed
                             && let Some(state) = image_state.as_mut() {
                                 if state.pending_draw {
                                     state.dirty = true;
@@ -4097,10 +4070,6 @@ async fn surface_task(
                             None => {
                                 if output_tx.reply(json!({"surface": surface_id, "body": {"ack": true}})).await.is_err() { return; }
                             }
-                        }
-                        if exited {
-                            if !inputs.finish_all_writes().await { return; }
-                            session_ended = true;
                         }
                     }
                     SurfaceCommand::Paste { text, cids } => {
