@@ -4,7 +4,7 @@ use base64::Engine as _;
 use std::collections::BTreeMap;
 
 pub const MAX_IMAGE_BYTES: usize = 1_048_576;
-const MAX_ENCODED_BYTES: usize = 1_398_104;
+pub const MAX_ENCODED_BYTES: usize = 1_398_104;
 const MAX_NAME_BYTES: usize = 255;
 const MAX_DIMENSION: u32 = 100_000;
 

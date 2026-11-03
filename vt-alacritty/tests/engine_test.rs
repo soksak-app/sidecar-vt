@@ -2246,3 +2246,147 @@ fn a_synchronized_update_holds_output_until_stop_sync_ends_it() {
     );
     assert!(engine.sync_deadline().is_none());
 }
+
+fn rejections(engine: &mut AlacrittyEngine) -> Vec<String> {
+    engine
+        .drain_events()
+        .into_iter()
+        .filter_map(|event| match event {
+            EngineEvent::Error(reason) => Some(reason),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn an_osc_ended_by_can_or_sub_leaves_the_mark_after_it_to_the_shell_state() {
+    for end in [b"\x18", b"\x1a"] {
+        let mut engine = AlacrittyEngine::new();
+        engine.feed(b"\x1b]999");
+        engine.feed(end);
+        engine.feed(b"\x1b]133;A\x07");
+        let events = engine.drain_events();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, EngineEvent::Error(reason) if reason == "unsupported OSC selector 999")),
+            "the ended OSC is not rejected: {events:?}"
+        );
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                EngineEvent::ShellState {
+                    marker: ShellMarker::PromptStart,
+                    ..
+                }
+            )),
+            "the mark after the ended OSC is lost: {events:?}"
+        );
+    }
+}
+
+#[test]
+fn an_inline_image_ended_by_can_leaves_the_output_after_it_on_the_screen() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b]1337;File=inline=1:aGVsbG8=\x18after");
+    assert!(
+        text(&engine.screen()).contains("after"),
+        "the output after the ended image is held: {:?}",
+        text(&engine.screen())
+    );
+}
+
+#[test]
+fn a_csi_cancelled_by_can_is_not_a_sequence() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b[\x1818t");
+    assert_eq!(rejections(&mut engine), Vec::<String>::new());
+    assert!(text(&engine.screen()).contains("18t"));
+}
+
+#[test]
+fn an_erase_with_a_control_byte_inside_it_erases_in_place() {
+    let mut engine = AlacrittyEngine::new();
+    engine.resize(20, 3);
+    engine.feed(b"one\r\ntwo\x1b[2\x07J");
+    assert_eq!(
+        engine.scrollback(),
+        (0, 0),
+        "the erase reached the library, which pushes the screen into the history"
+    );
+    assert!(!text(&engine.screen()).contains("one"));
+}
+
+#[test]
+fn an_erase_cut_between_two_inputs_erases_in_place() {
+    let mut engine = AlacrittyEngine::new();
+    engine.resize(20, 3);
+    engine.feed(b"one\x1b");
+    engine.feed(b"[");
+    engine.feed(b"2");
+    engine.feed(b"Jtwo");
+    assert_eq!(engine.scrollback(), (0, 0));
+    let screen = text(&engine.screen());
+    assert!(
+        !screen.contains("one") && screen.contains("two"),
+        "{screen:?}"
+    );
+}
+
+#[test]
+fn a_csi_with_an_unknown_final_is_rejected() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b[1y\x1b[1;2H");
+    assert_eq!(rejections(&mut engine), ["unsupported CSI 1y"]);
+}
+
+#[test]
+fn a_device_control_string_and_an_unknown_escape_are_rejected_without_their_payload() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1bP1$rsecret\x1b\\\x1b#3");
+    assert_eq!(
+        rejections(&mut engine),
+        ["unsupported DCS 1$r", "unsupported ESC #3"]
+    );
+}
+
+#[test]
+fn a_sequence_over_the_bound_is_rejected_and_the_output_after_it_is_drawn() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b]0;");
+    let payload = vec![b'x'; 64 * 1024];
+    for _ in 0..32 {
+        engine.feed(&payload);
+    }
+    assert_eq!(
+        rejections(&mut engine),
+        ["a sequence of more than 1402200 bytes is rejected"]
+    );
+    assert!(
+        !text(&engine.screen()).contains('x'),
+        "the payload is drawn"
+    );
+    engine.feed(&payload);
+    engine.feed(b"\x07after");
+    assert_eq!(rejections(&mut engine), Vec::<String>::new());
+    let screen = text(&engine.screen());
+    assert!(
+        screen.contains("after") && !screen.contains('x'),
+        "{screen:?}"
+    );
+}
+
+#[test]
+fn a_sequence_over_the_bound_ends_at_a_string_terminator() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b]0;");
+    for _ in 0..32 {
+        engine.feed(&vec![b'x'; 64 * 1024]);
+    }
+    engine.feed(b"\x1b\\after");
+    let screen = text(&engine.screen());
+    assert!(
+        screen.contains("after") && !screen.contains('\\'),
+        "{screen:?}"
+    );
+}

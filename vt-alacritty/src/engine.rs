@@ -5,11 +5,12 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::{Cell as GridCell, Flags};
 use alacritty_terminal::term::{Config, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, Handler, NamedColor, Processor, Rgb};
+use alacritty_terminal::vte::{Params, Parser, Perform};
 use soksak_sidecar_vt_core::directory_uri::local_path;
 use soksak_sidecar_vt_core::{
     Cell, ClipboardSelection, Cursor, CursorShape as ProtocolCursorShape, Engine, EngineEvent,
     InlineAnchor, Modes, Screen, ShellMarker, TerminalTheme, default_terminal_color,
-    inline_image::parse as parse_inline_image,
+    inline_image::MAX_ENCODED_BYTES, inline_image::parse as parse_inline_image,
 };
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -335,9 +336,160 @@ enum Erase {
 
 /// Position where an OSC 133 mark ends within an input chunk, and the mark.
 struct ShellMark {
-    end: usize,
     marker: ShellMarker,
     redraw: Option<Redraw>,
+}
+
+/// A sequence over this size is rejected: the largest encoded image and its header. `vte` with `std`
+/// keeps an OSC in a `Vec` without a limit, so the engine bounds what it passes to the parsers.
+const HELD_SEQUENCE_BYTES: usize = MAX_ENCODED_BYTES + 4096;
+
+/// A sequence that the scan found.
+enum Sequence {
+    Osc {
+        body: Vec<u8>,
+        bell: bool,
+    },
+    Csi {
+        params: Vec<Vec<u16>>,
+        intermediates: Vec<u8>,
+        ignored: bool,
+        action: char,
+    },
+    Dcs(String),
+    Esc {
+        intermediates: Vec<u8>,
+        byte: u8,
+    },
+}
+
+/// The `Perform` that receives the first parse of the output. The parser stops at each sequence, so
+/// the engine knows the position of the sequence in its input.
+struct SequenceScan {
+    found: Option<Sequence>,
+    /// False from the last escape byte of an input until the parser returns to its ground state.
+    left_sequence: bool,
+}
+
+impl Default for SequenceScan {
+    fn default() -> Self {
+        Self {
+            found: None,
+            left_sequence: true,
+        }
+    }
+}
+
+impl Perform for SequenceScan {
+    fn print(&mut self, _c: char) {
+        self.left_sequence = true;
+    }
+
+    fn execute(&mut self, byte: u8) {
+        if matches!(byte, 0x18 | 0x1a) {
+            self.left_sequence = true;
+        }
+    }
+
+    fn hook(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
+        self.left_sequence = true;
+        self.found = Some(Sequence::Dcs(sequence_selector(
+            &param_values(params),
+            intermediates,
+            action,
+        )));
+    }
+
+    fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
+        self.left_sequence = true;
+        self.found = Some(Sequence::Osc {
+            body: params.join(&b';'),
+            bell: bell_terminated,
+        });
+    }
+
+    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
+        self.left_sequence = true;
+        self.found = Some(Sequence::Csi {
+            params: param_values(params),
+            intermediates: intermediates.to_vec(),
+            ignored: ignore,
+            action,
+        });
+    }
+
+    fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
+        self.left_sequence = true;
+        self.found = Some(Sequence::Esc {
+            intermediates: intermediates.to_vec(),
+            byte,
+        });
+    }
+
+    fn terminated(&self) -> bool {
+        self.found.is_some()
+    }
+}
+
+fn param_values(params: &Params) -> Vec<Vec<u16>> {
+    params.iter().map(<[u16]>::to_vec).collect()
+}
+
+/// The text of a sequence without its payload: a private marker, the parameters, the other
+/// intermediates and the final.
+fn sequence_selector(params: &[Vec<u16>], intermediates: &[u8], action: char) -> String {
+    let (marker, rest) = match intermediates.split_first() {
+        Some((first, rest)) if (0x3c..=0x3f).contains(first) => {
+            (String::from(*first as char), rest)
+        }
+        _ => (String::new(), intermediates),
+    };
+    // The parser reports an absent parameter as a single 0.
+    let params = if params == [vec![0]] { &[] } else { params };
+    let values = params
+        .iter()
+        .map(|param| {
+            param
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>()
+                .join(":")
+        })
+        .collect::<Vec<_>>()
+        .join(";");
+    format!("{marker}{values}{}{action}", String::from_utf8_lossy(rest))
+}
+
+/// Whether the library executes this CSI. The arms are those of `csi_dispatch` in `vte::ansi`, which
+/// reports another CSI only as a debug line.
+fn csi_executed(params: &[Vec<u16>], intermediates: &[u8], ignored: bool, action: char) -> bool {
+    if ignored || intermediates.len() > 2 {
+        return false;
+    }
+    let first = params.first().and_then(|param| param.first()).copied();
+    match (action, intermediates) {
+        ('c', _) => first.is_none_or(|value| value == 0),
+        ('W', b"?") => first == Some(5),
+        ('@' | 'A' | 'B' | 'a' | 'b' | 'C' | 'D' | 'd' | 'e' | 'E' | 'F' | 'G' | '`', b"") => true,
+        ('g' | 'H' | 'f' | 'h' | 'I' | 'J' | 'K' | 'L' | 'l' | 'M' | 'm' | 'n' | 'P', b"") => true,
+        ('r' | 'S' | 's' | 'T' | 't' | 'u' | 'X' | 'Z', b"") => true,
+        ('h' | 'l' | 'm' | 'u', b"?") | ('m' | 'u', b">") | ('u', b"=" | b"<") => true,
+        ('k' | 'q', b" ") | ('p', b"$" | b"?$") => true,
+        _ => false,
+    }
+}
+
+/// Whether the library executes this escape sequence, from `esc_dispatch` in `vte::ansi`.
+fn esc_executed(intermediates: &[u8], byte: u8) -> bool {
+    matches!(
+        (byte, intermediates),
+        (b'B' | b'0', b"(" | b")" | b"*" | b"+")
+            | (b'8', b"#")
+            | (
+                b'D' | b'E' | b'H' | b'M' | b'Z' | b'c' | b'7' | b'8' | b'=' | b'>' | b'\\',
+                b""
+            )
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -567,10 +719,13 @@ pub struct AlacrittyEngine {
     next_clipboard_request: u64,
     cell_metrics: Option<(u16, u16)>,
     theme: TerminalTheme,
-    pending_input: Vec<u8>,
-    pending_osc: Vec<u8>,
-    pending_csi: Vec<u8>,
-    pending_sequence: Vec<u8>,
+    /// Parses the output a first time, so that the engine acts on a sequence at its position.
+    scanner: Parser,
+    scan: SequenceScan,
+    /// The start of a sequence that has not ended. The terminal receives it when it ends.
+    held: Vec<u8>,
+    /// The rest of a sequence over `HELD_SEQUENCE_BYTES`, which the engine removes from the output.
+    discarding: bool,
     /// Cell where the selection started. Depending on the drag direction, it selects the side of
     /// the boundary so that both this cell and the pointer cell are included.
     selection_anchor: Option<(Point, Side)>,
@@ -624,10 +779,10 @@ impl AlacrittyEngine {
             next_clipboard_request: 1,
             cell_metrics: None,
             theme: TerminalTheme::dark(),
-            pending_input: Vec::new(),
-            pending_osc: Vec::new(),
-            pending_csi: Vec::new(),
-            pending_sequence: Vec::new(),
+            scanner: Parser::new(),
+            scan: SequenceScan::default(),
+            held: Vec::new(),
+            discarding: false,
             selection_anchor: None,
             shell: ShellState::Output,
             prompt_start: None,
@@ -638,53 +793,6 @@ impl AlacrittyEngine {
             special_colors: [None; 5],
             special_enabled: [false; 5],
         }
-    }
-
-    /// Rewrites sequences before the input enters the engine. A prefix cut between input chunks is
-    /// kept until the next chunk.
-    /// - DECSCUSR 7 is rewritten to the initial cursor shape (0).
-    /// - ED 2 and ED 1 are not passed to the engine. Their positions are returned so that the
-    ///   erase happens in place. At ED 2, the engine pushes the visible lines into history, so
-    ///   the history remains after clear. At ED 1, when the cursor is on the second line, the
-    ///   first line is not erased.
-    fn normalize_sequences(&mut self, bytes: &[u8]) -> (Vec<u8>, Vec<(usize, Erase)>) {
-        // Sequence to find, sequence to insert in its place, and the range erased in place.
-        type Rewrite = (&'static [u8], Option<&'static [u8]>, Option<Erase>);
-        const REWRITES: &[Rewrite] = &[
-            (b"\x1b[7 q", Some(b"\x1b[0 q"), None),
-            (b"\x1b[2J", None, Some(Erase::All)),
-            (b"\x1b[1J", None, Some(Erase::Above)),
-            (b"\x1b[3J", None, Some(Erase::History)),
-        ];
-        let mut input = std::mem::take(&mut self.pending_sequence);
-        input.extend_from_slice(bytes);
-        let mut normalized = Vec::with_capacity(input.len());
-        let mut erases = Vec::new();
-        let mut index = 0;
-        'input: while index < input.len() {
-            let remaining = &input[index..];
-            if remaining[0] == 0x1b {
-                for (from, to, erase) in REWRITES {
-                    if remaining.len() < from.len() && from.starts_with(remaining) {
-                        self.pending_sequence.extend_from_slice(remaining);
-                        break 'input;
-                    }
-                    if remaining.starts_with(from) {
-                        if let Some(to) = to {
-                            normalized.extend_from_slice(to);
-                        }
-                        if let Some(erase) = erase {
-                            erases.push((normalized.len(), *erase));
-                        }
-                        index += from.len();
-                        continue 'input;
-                    }
-                }
-            }
-            normalized.push(input[index]);
-            index += 1;
-        }
-        (normalized, erases)
     }
 
     /// Erases with the current background color: ED 2 (whole screen) and ED 1 (from the top of the
@@ -722,80 +830,48 @@ impl AlacrittyEngine {
         self.term.selection = None;
     }
 
-    /// Inspects OSC sequences and pushes their events. An accepted OSC 133 mark is returned with
-    /// its end position, so that the shell state is applied after the output before it is
-    /// processed.
-    fn audit_osc(&mut self, bytes: &[u8]) -> Vec<ShellMark> {
-        let mut marks = Vec::new();
-        let mut index = 0;
-        while index < bytes.len() {
-            if self.pending_osc.is_empty() {
-                if bytes[index..].starts_with(b"\x1b]") {
-                    self.pending_osc.extend_from_slice(b"\x1b]");
-                    index += 2;
-                } else {
-                    index += 1;
-                }
-                continue;
+    /// Pushes the event of one OSC. An accepted OSC 133 mark is returned, so that the shell state is
+    /// applied after the output before it is processed.
+    fn handle_osc(&mut self, body: &[u8], bel: bool) -> Option<ShellMark> {
+        let (selector, payload) = body
+            .iter()
+            .position(|byte| *byte == b';')
+            .map(|position| (&body[..position], &body[position + 1..]))
+            // default: an OSC without a semicolon has only a selector and an empty body.
+            .unwrap_or((body, &[]));
+        let outcome = osc_outcome(selector);
+        let event = if let Some(result) = self.engine_osc(selector, payload, bel) {
+            result
+        } else if outcome == OscOutcome::Vendor {
+            match parse_vendor_osc(selector, payload) {
+                Ok(Some(event)) => Some(event),
+                Ok(None) => None,
+                Err(error) => Some(EngineEvent::Error(error)),
             }
-
-            self.pending_osc.push(bytes[index]);
-            let terminated = bytes[index] == b'\x07'
-                || (self.pending_osc.len() >= 2
-                    && self.pending_osc[self.pending_osc.len() - 2..] == *b"\x1b\\");
-            index += 1;
-            if !terminated {
-                continue;
-            }
-
-            let terminator = if self.pending_osc.last() == Some(&b'\x07') {
-                self.pending_osc.len() - 1
-            } else {
-                self.pending_osc.len() - 2
-            };
-            let owned = self.pending_osc[2..terminator].to_vec();
-            let body = owned.as_slice();
-            let (selector, payload) = body
+        } else if outcome == OscOutcome::Unsupported {
+            let selector = String::from_utf8_lossy(selector);
+            Some(EngineEvent::Error(format!(
+                "unsupported OSC selector {selector}"
+            )))
+        } else {
+            None
+        };
+        let mark = if let Some(EngineEvent::ShellState { marker, params }) = &event {
+            let redraw = params
                 .iter()
-                .position(|byte| *byte == b';')
-                .map(|position| (&body[..position], &body[position + 1..]))
-                // default: an OSC without a semicolon has only a selector and an empty body.
-                .unwrap_or((body, &[]));
-            let outcome = osc_outcome(selector);
-            let bel = self.pending_osc.last() == Some(&b'\x07');
-            let event = if let Some(result) = self.engine_osc(selector, payload, bel) {
-                result
-            } else if outcome == OscOutcome::Vendor {
-                match parse_vendor_osc(selector, payload) {
-                    Ok(Some(event)) => Some(event),
-                    Ok(None) => None,
-                    Err(error) => Some(EngineEvent::Error(error)),
-                }
-            } else if outcome == OscOutcome::Unsupported {
-                let selector = String::from_utf8_lossy(selector);
-                Some(EngineEvent::Error(format!(
-                    "unsupported OSC selector {selector}"
-                )))
-            } else {
-                None
-            };
-            if let Some(EngineEvent::ShellState { marker, params }) = &event {
-                let redraw = params
-                    .iter()
-                    .find_map(|parameter| parameter.strip_prefix("redraw="))
-                    .map(|value| parse_redraw(value).expect("redraw was validated by the parser"));
-                marks.push(ShellMark {
-                    end: index,
-                    marker: *marker,
-                    redraw,
-                });
-            }
-            if let Some(event) = event {
-                self.events.push(QueuedEvent::Neutral(event));
-            }
-            self.pending_osc.clear();
+                .find_map(|parameter| parameter.strip_prefix("redraw="))
+                .map(|value| parse_redraw(value).expect("redraw was validated by the parser"));
+            Some(ShellMark {
+                marker: *marker,
+                redraw,
+            })
+        } else {
+            None
+        };
+        if let Some(event) = event {
+            self.events.push(QueuedEvent::Neutral(event));
         }
-        marks
+        mark
     }
 
     /// OSCs that the engine handles directly: setting and querying the 17/19 highlight colors,
@@ -1200,155 +1276,222 @@ impl AlacrittyEngine {
         start
     }
 
-    fn audit_csi(&mut self, bytes: &[u8]) {
-        let mut input = std::mem::take(&mut self.pending_csi);
-        input.extend_from_slice(bytes);
-        let mut index = 0;
-        while index < input.len() {
-            let Some(relative) = input[index..].windows(2).position(|pair| pair == b"\x1b[") else {
-                if input.last() == Some(&0x1b) {
-                    self.pending_csi.push(0x1b);
+    /// The rejection of a CSI, or None for one that the library executes.
+    fn csi_rejection(
+        params: &[Vec<u16>],
+        intermediates: &[u8],
+        ignored: bool,
+        action: char,
+    ) -> Option<String> {
+        let selector = sequence_selector(params, intermediates, action);
+        let body = &selector[..selector.len() - action.len_utf8()];
+        if action == 't' && body != "14" {
+            Some(format!("window report {selector}"))
+        } else if matches!(action, 'h' | 'l') && matches!(body, "?47" | "?1047" | "?1048") {
+            Some(format!("alternate screen mode {selector}"))
+        } else if action == 'x' && intermediates.contains(&b'$') {
+            Some(format!("rectangle report {selector}"))
+        } else if action == 'q' && intermediates.contains(&b'"') {
+            Some(format!("protected-cell report {selector}"))
+        } else if action == 'p' && intermediates.contains(&b'#') {
+            Some(format!("palette report {selector}"))
+        } else if !csi_executed(params, intermediates, ignored, action) {
+            Some(selector)
+        } else {
+            None
+        }
+    }
+
+    /// Acts on one sequence that ends at `at`, and returns the start of the input that the terminal
+    /// has not received. An erase or a rewrite replaces the sequence, so the terminal never receives
+    /// it: at ED 2 the library pushes the visible lines into history, and at ED 1 it does not erase
+    /// the first line when the cursor is on the second line. An action that depends on the cursor
+    /// runs after the output before it. An OSC ended by an escape byte leaves that byte to the
+    /// sequence that it starts.
+    fn apply_sequence(
+        &mut self,
+        sequence: Sequence,
+        input: &[u8],
+        from: usize,
+        at: usize,
+    ) -> usize {
+        match sequence {
+            Sequence::Csi {
+                params,
+                intermediates,
+                ignored,
+                action,
+            } => {
+                let value = match params.as_slice() {
+                    [param] if !ignored => param.first().copied(),
+                    _ => None,
+                };
+                let erase = match (action, intermediates.as_slice(), value) {
+                    ('J', b"", Some(2)) => Some(Erase::All),
+                    ('J', b"", Some(1)) => Some(Erase::Above),
+                    ('J', b"", Some(3)) => Some(Erase::History),
+                    _ => None,
+                };
+                let initial_cursor =
+                    action == 'q' && intermediates.as_slice() == b" " && value == Some(7);
+                if erase.is_none() && !initial_cursor {
+                    if let Some(reason) =
+                        Self::csi_rejection(&params, &intermediates, ignored, action)
+                    {
+                        self.events
+                            .push(QueuedEvent::Neutral(EngineEvent::Error(format!(
+                                "unsupported CSI {reason}"
+                            ))));
+                    }
+                    return from;
                 }
-                return;
-            };
-            let start = index + relative;
-            let Some(final_offset) = input[start + 2..]
-                .iter()
-                .position(|byte| (0x40..=0x7e).contains(byte))
-            else {
-                self.pending_csi.extend_from_slice(&input[start..]);
-                return;
-            };
-            let final_index = start + 2 + final_offset;
-            let body = &input[start + 2..final_index];
-            let unsupported = if input[final_index] == b't' && body != b"14" {
-                Some(format!("window report {}t", String::from_utf8_lossy(body)))
-            } else if (input[final_index] == b'h' || input[final_index] == b'l')
-                && matches!(body, b"?47" | b"?1047" | b"?1048")
-            {
-                Some(format!(
-                    "alternate screen mode {}{}",
-                    String::from_utf8_lossy(body),
-                    input[final_index] as char
-                ))
-            } else if input[final_index] == b'x' && body.contains(&b'$') {
-                Some(format!(
-                    "rectangle report {}x",
-                    String::from_utf8_lossy(body)
-                ))
-            } else if input[final_index] == b'q' && body.contains(&b'"') {
-                Some(format!(
-                    "protected-cell report {}q",
-                    String::from_utf8_lossy(body)
-                ))
-            } else if input[final_index] == b'p' && body.starts_with(b"#") {
-                Some(format!("palette report {}p", String::from_utf8_lossy(body)))
-            } else {
-                None
-            };
-            if let Some(selector) = unsupported {
+                let start = input[from..at]
+                    .iter()
+                    .rposition(|byte| *byte == 0x1b)
+                    .expect("a CSI starts at an escape byte that the terminal has not received");
+                self.advance(&input[from..from + start]);
+                match erase {
+                    Some(erase) => self.erase(erase),
+                    None => self.advance(b"\x1b[0 q"),
+                }
+                at
+            }
+            Sequence::Osc { body, bell } => {
+                let end = if input[at - 1] == 0x1b {
+                    self.scan.left_sequence = false;
+                    at - 1
+                } else {
+                    at
+                };
+                if body.starts_with(b"1337;") {
+                    self.advance(&input[from..end]);
+                    self.inline_image(&body[b"1337;".len()..]);
+                    return end;
+                }
+                match self.handle_osc(&body, bell) {
+                    Some(mark) => {
+                        self.advance(&input[from..end]);
+                        self.apply_shell_mark(mark.marker, mark.redraw);
+                        end
+                    }
+                    None => from,
+                }
+            }
+            Sequence::Dcs(selector) => {
                 self.events
                     .push(QueuedEvent::Neutral(EngineEvent::Error(format!(
-                        "unsupported CSI {selector}"
+                        "unsupported DCS {selector}"
                     ))));
+                from
             }
-            index = final_index + 1;
+            Sequence::Esc {
+                intermediates,
+                byte,
+            } => {
+                if !esc_executed(&intermediates, byte) {
+                    let intermediates = String::from_utf8_lossy(&intermediates);
+                    self.events
+                        .push(QueuedEvent::Neutral(EngineEvent::Error(format!(
+                            "unsupported ESC {intermediates}{}",
+                            byte as char
+                        ))));
+                }
+                from
+            }
         }
     }
 
-    fn feed_plain(&mut self, bytes: &[u8]) {
-        let (bytes, erases) = self.normalize_sequences(bytes);
-        let marks = self.audit_osc(&bytes);
-        self.audit_csi(&bytes);
-        // Applies the shell marks and the erases in the order of their positions within the input.
-        enum Step {
-            Mark(ShellMark),
-            Erase(Erase),
-        }
-        let mut steps: Vec<(usize, Step)> = marks
-            .into_iter()
-            .map(|mark| (mark.end, Step::Mark(mark)))
-            .collect();
-        steps.extend(
-            erases
-                .into_iter()
-                .map(|(at, erase)| (at, Step::Erase(erase))),
-        );
-        steps.sort_by_key(|(at, _)| *at);
-        let mut from = 0;
-        for (at, step) in steps {
-            self.advance(&bytes[from..at]);
-            from = at;
-            match step {
-                Step::Mark(mark) => self.apply_shell_mark(mark.marker, mark.redraw),
-                Step::Erase(erase) => self.erase(erase),
-            }
-        }
-        self.advance(&bytes[from..]);
+    /// Stores or rejects one OSC 1337. The graphic is placed at the cursor where the sequence was
+    /// met, which the caller reaches before a later output moves the cursor.
+    fn inline_image(&mut self, payload: &[u8]) {
+        let cursor = self.term.grid().cursor.point;
+        let anchor = InlineAnchor {
+            col: cursor.column.0 as u16,
+            row: cursor.line.0.max(0) as u16,
+            scroll: self.scroll_generation(),
+        };
+        let event = match parse_inline_image(payload) {
+            Ok(command) => EngineEvent::InlineImage { command, anchor },
+            Err(error) => EngineEvent::Error(error),
+        };
+        self.events.push(QueuedEvent::Neutral(event));
     }
 
-    fn feed_with_inline_images(&mut self, bytes: &[u8]) {
-        const PREFIX: &[u8] = b"\x1b]1337;";
-        self.pending_input.extend_from_slice(bytes);
-        loop {
-            let Some(start) = self
-                .pending_input
-                .windows(PREFIX.len())
-                .position(|candidate| candidate == PREFIX)
-            else {
-                let keep = (1..PREFIX.len())
-                    .rev()
-                    .find(|length| self.pending_input.ends_with(&PREFIX[..*length]))
-                    // default: when the end of the input does not overlap the start of the prefix,
-                    // no byte is kept.
-                    .unwrap_or(0);
-                let split = self.pending_input.len().saturating_sub(keep);
-                let plain = self.pending_input[..split].to_vec();
-                self.pending_input.drain(..split);
-                self.feed_plain(&plain);
-                return;
-            };
+    /// Scans `input` from `at` to `end`, acts on each sequence, and returns the new `from`.
+    fn scan_range(&mut self, input: &[u8], mut from: usize, at: &mut usize, end: usize) -> usize {
+        while *at < end {
+            *at += self
+                .scanner
+                .advance_until_terminated(&mut self.scan, &input[*at..end]);
+            if let Some(sequence) = self.scan.found.take() {
+                from = self.apply_sequence(sequence, input, from, *at);
+            }
+        }
+        from
+    }
 
-            let before = self.pending_input[..start].to_vec();
-            self.pending_input.drain(..start);
-            self.feed_plain(&before);
+    /// The rest of a sequence over the bound ends at a terminator of a string. An escape byte stays
+    /// in the output, because it starts the next sequence or the string terminator.
+    fn skip_discarded<'a>(&mut self, bytes: &'a [u8]) -> &'a [u8] {
+        if !self.discarding {
+            return bytes;
+        }
+        let Some(end) = bytes
+            .iter()
+            .position(|byte| matches!(byte, 0x07 | 0x18 | 0x1a | 0x1b))
+        else {
+            return &[];
+        };
+        self.discarding = false;
+        if bytes[end] == 0x1b {
+            &bytes[end..]
+        } else {
+            &bytes[end + 1..]
+        }
+    }
 
-            let body_start = PREFIX.len();
-            let terminator = self.pending_input[body_start..]
+    /// Passes the output to the scan and to the terminal. A sequence cut between two inputs waits in
+    /// `held`, so that an erase or a rewrite can still replace it.
+    fn feed_output(&mut self, bytes: &[u8]) {
+        let bytes = self.skip_discarded(bytes);
+        let mut input = std::mem::take(&mut self.held);
+        let mut at = input.len();
+        input.extend_from_slice(bytes);
+        let last_escape = input[at..]
+            .iter()
+            .rposition(|byte| *byte == 0x1b)
+            .map(|position| at + position);
+        // default: an input without an escape byte is one range up to its end.
+        let mut from = self.scan_range(&input, 0, &mut at, last_escape.unwrap_or(input.len()));
+        if last_escape.is_some() {
+            self.scan.left_sequence = false;
+            from = self.scan_range(&input, from, &mut at, input.len());
+        }
+        let held_from = if self.scan.left_sequence {
+            None
+        } else {
+            input[from..]
                 .iter()
-                .enumerate()
-                .find_map(|(offset, byte)| (*byte == b'\x07').then_some((body_start + offset, 1)))
-                .or_else(|| {
-                    self.pending_input[body_start..]
-                        .windows(2)
-                        .position(|pair| pair == b"\x1b\\")
-                        .map(|offset| (body_start + offset, 2))
-                });
-            let Some((end, terminator_len)) = terminator else {
-                return;
-            };
-            let payload = self.pending_input[body_start..end].to_vec();
-            self.pending_input.drain(..end + terminator_len);
-            // The graphic is placed at the cursor where the sequence was met. Its position is
-            // recorded before a later output moves the cursor.
-            let cursor = self.term.grid().cursor.point;
-            let anchor = InlineAnchor {
-                col: cursor.column.0 as u16,
-                row: cursor.line.0.max(0) as u16,
-                scroll: self.scroll_generation(),
-            };
-            match parse_inline_image(&payload) {
-                Ok(command) => self
-                    .events
-                    .push(QueuedEvent::Neutral(EngineEvent::InlineImage {
-                        command,
-                        anchor,
-                    })),
-                Err(error) => self
-                    .events
-                    .push(QueuedEvent::Neutral(EngineEvent::Error(error))),
-            }
+                .rposition(|byte| *byte == 0x1b)
+                .map(|position| from + position)
+        };
+        // default: with no sequence open, the terminal receives the input up to its end.
+        self.advance(&input[from..held_from.unwrap_or(input.len())]);
+        let Some(held_from) = held_from else {
+            return;
+        };
+        if input.len() - held_from > HELD_SEQUENCE_BYTES {
+            self.events
+                .push(QueuedEvent::Neutral(EngineEvent::Error(format!(
+                    "a sequence of more than {HELD_SEQUENCE_BYTES} bytes is rejected"
+                ))));
+            self.scanner = Parser::new();
+            self.scan.left_sequence = true;
+            self.discarding = true;
+            return;
         }
+        input.drain(..held_from);
+        self.held = input;
     }
 
     fn clipboard_selection(
@@ -1769,7 +1912,7 @@ impl Engine for AlacrittyEngine {
     }
 
     fn feed(&mut self, bytes: &[u8]) {
-        self.feed_with_inline_images(bytes);
+        self.feed_output(bytes);
     }
 
     fn sync_deadline(&self) -> Option<Instant> {

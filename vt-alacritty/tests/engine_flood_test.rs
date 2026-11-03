@@ -40,6 +40,9 @@ const CHUNKS: usize = 16;
 const FLOOD_PEAK_BOUND: usize = 4 * 1024 * 1024;
 /// A chunk that recycles the rows of the history allocates no row per line.
 const FLOOD_ALLOCATIONS_PER_CHUNK: usize = 64;
+/// The held sequence and the buffer of the parser each grow by doubling up to the bound of a
+/// sequence, about 1.4 MiB.
+const HELD_SEQUENCE_PEAK_BOUND: usize = 6 * 1024 * 1024;
 
 #[test]
 fn a_flood_at_the_history_limit_allocates_no_rows_per_chunk() {
@@ -120,4 +123,20 @@ fn a_flood_of_line_feeds_reports_no_lost_rows() {
         engine.feed(&b"\n".repeat(30_000));
     }
     assert!(engine.drain_events().is_empty());
+}
+
+/// An OSC that never ends holds at most the bound of a sequence.
+#[test]
+fn an_osc_that_never_ends_holds_at_most_the_bound_of_a_sequence() {
+    let mut engine = AlacrittyEngine::new();
+    let chunk = vec![b'x'; CHUNK_BYTES];
+    let live = LIVE.load(Ordering::Relaxed);
+    PEAK.store(live, Ordering::Relaxed);
+    engine.feed(b"\x1b]0;");
+    for _ in 0..256 {
+        engine.feed(&chunk);
+    }
+    let peak = PEAK.load(Ordering::Relaxed) - live;
+    println!("an OSC of 16 MiB: peak {peak} bytes");
+    assert!(peak <= HELD_SEQUENCE_PEAK_BOUND, "peak {peak} bytes");
 }

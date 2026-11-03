@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S133: `vte::Parser` 하나가 terminal보다 먼저 sequence를 찾는다. 그래서 CAN, SUB, ESC로 끝난 OSC가 뒤의 출력이나 mark를 잡지 않고, 제어 byte가 든 erase가 제자리에서 지우며, 모르는 CSI, DCS, ESC와 1402200 byte를 넘는 sequence가 거부된다. flood의 peak는 65536 byte로 줄었다.
 - S146: 검사와 더하기가 input의 lock 안에서 실행되므로 동시에 쓰는 writer들이 queue 한도를 넘지 않는다.
 - S145: 위쪽 가장자리를 일부 넘어 scroll된 inline image는 anchor 행이 떠날 때 사라지지 않고, 마지막 행이 떠날 때까지 잘려서 그려진다.
 - S142: frame의 가장자리를 넘는 유효한 inline image는 잘려서 그려지고 완전히 밖에 있는 image는 아무것도 그리지 않는다. 그래서 그런 image가 session의 모든 frame을 실패시키지 않는다.
