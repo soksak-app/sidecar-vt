@@ -63,6 +63,40 @@ hook은 프롬프트 앞마다 `133;A`를 보고하고(bash는 readline이 프�
 
 터미널 페이지는 이것을 재연결 신호로 쓴다. 페이지는 오래된 사이드카 오류를 해결하고, 입력이 다시 대기열에 들어가도록 세션 게이트를 닫으며, 세션 부트스트랩을 다시 실행한다. 부트스트랩은 `open`(보존된 세션에서는 아무것도 하지 않고, 새 서비스에서는 새 세션을 만든다)에 이어 마지막 테마, 선언된 글꼴, 커서 정책을 보낸다.
 
+### PTY 출력과 입력
+
+세션 하나에 I/O task가 하나 있다. task는 PTY master의 non-blocking 복제본을 `tokio::io::unix::AsyncFd`로 소유하고, 세션은 resize와 `FIONREAD` 측정을 위해 `portable-pty`의 master를 유지한다. 이 경로는 `Engine::feed(&[u8])` 앞에 있어 모든 엔진이 쓴다. 터미널 라이브러리의 event loop와 `tty` module은 쓰지 않는다. 그 handler는 한 엔진에 타입이 고정되어 있고, 그 프로세스 시작과 resize는 이 명세의 세션 시작과 충돌하기 때문이다.
+
+**출력.** task는 한 번에 최대 64 KiB를 읽고, 세션의 16 chunk 출력 channel의 permit을 쥔 동안에만 읽는다. 그래서 세션은 엔진이 소비하지 않은 출력을 최대 1 MiB까지 쥔다. channel이 차면 읽기만 멈춘다. 그러면 프로그램은 자기 write에서 기다리고 출력은 버려지지 않는다. 지난 출력의 ring과 attach replay는 없다. surface 하나가 세션 하나를 소비하고, persistent service는 바이트가 아니라 세션 상태를 복원한다.
+
+**입력.** write는 task의 FIFO queue 하나를 지나고, surface task 안에서 기다리지 않는다. 어떤 바이트도 앞선 바이트를 앞지르지 않는다. 키와 붙여넣기는 queue의 바이트와 새 바이트의 합이 64 MiB를 넘으면 명시적 오류로 거부된다. 이 상한은 사람이 붙여넣는 양보다 훨씬 큰 붙여넣기를 통과시키고, 멈춘 세션이 쥐는 양을 제한한다. 엔진이 프로그램에 보내는 응답은 거부되지 않는다. 거부된 응답은 프로그램을 계속 기다리게 하기 때문이다. queue의 바이트가 상한을 넘은 동안 task는 출력 읽기를 멈추므로 프로그램은 응답을 더 일으키지 않고, service는 읽기가 멈출 때와 다시 시작할 때 `{event: "input_held", queued, held}`를 보고한다.
+
+**write 결과.** task는 각 write의 결과를 순서 있는 stream 하나로 보고하고, surface는 그 stream에서 acknowledgement와 `sidecar.vt.pty_write` 기록을 보낸다. `ok: true`는 master가 모든 바이트를 받았다는 뜻이다. 완성된 줄이 없는 canonical tty는 바이트를 받고 버릴 수 있으므로, `ok: true`는 프로그램이 읽었다는 뜻이 아니다. `ok: false`는 실패 지점 뒤의 바이트를 프로그램이 받지 못했다는 뜻이고, 기록에 이유가 실린다.
+
+**child 종료.** child가 reap되면 task는 read가 0을 돌려주거나 대기해야 할 때까지, 또는 64 KiB를 더 읽을 때까지 읽는다. queue에 있거나 일부만 쓰인 입력을 각각 `ok: false`와 이유 `child exited`로 끝내고, master descriptor 둘을 닫아 kernel이 slave를 hangup하게 한 다음, chunk와 `Exit`를 출력 channel로 보낸다. 그 뒤 남은 job이 쓰는 바이트는 그 job에서 오류로 실패하거나 hangup으로 그 job을 끝낸다. service는 그 바이트를 읽지 않았고 쥐지 않는다. child 종료는 아무것도 kill하지 않는다. 세션 항목은 명시적 close나 owner close까지 남는다. `Exit` 뒤 write는 `session writer is closed`를, resize와 측정은 `session master is closed`를 돌려준다. `Exit` 뒤 첫 close는 process group을 kill하고 `sidecar.vt.kill`로 기록하고 항목을 지운다. surface는 `Exit`로 끝나기 전에 frame clock이 쥔 화면을 그린다.
+
+**close.**
+
+| close 시점의 상태 | 결과 |
+| --- | --- |
+| queue에 있거나 일부만 쓰인 입력 | `ok: false`와 이유 `session closed`로 끝난다 |
+| 출력 channel의 예약된 permit | 반납된다 |
+| 읽었고 아직 보내지 않은 chunk | permit이 있으면 보낸다. 없으면 바이트 수와 함께 `sidecar.vt.buffer_dropped`로 기록한다 |
+| close와 reap이 동시에 일어남 | close가 결정하고 `Exit`가 한 번 뒤따른다 |
+| 두 번째 close | 첫 close의 idempotent 결과를 돌려준다 |
+| close가 프로그램에 쓰는 바이트 | 없다 |
+| child와 job | child에 SIGHUP을 보내 shell이 job에 전하게 한다. reaper를 최대 250 ms 기다린다. 그다음 남은 child와 process group에 SIGKILL을 보낸다. `nohup`이나 `disown`으로 시작한 job은 계속 돈다 |
+
+이 결정은 터미널 구현의 보편적 형태를 따른다. 출력은 무손실이고, reader는 상한에서 멈추고, 쓰기는 읽기와 분리된다. 답한 이의는 다음과 같다.
+
+- 기각: control byte가 queue를 앞지른다. 프로그램이 순서대로 읽는 바이트 stream의 순서를 바꾸며, 읽지 않는 프로그램에 interrupt가 닿는지는 kernel line discipline이 정하고 tracked test가 밝힌다.
+- 기각: 최신 화면만 쥐는 client task. 출력을 버리거나 엔진 밖에 화면 상태가 필요하다.
+- 기각: 이 변경에 engine thread를 넣는다. 지금 엔진은 모두 `Send`다. `Send`가 아닌 엔진은 surface task를 current-thread runtime과 `LocalSet`의 자기 thread에서 돌린다. channel은 이미 thread를 건너므로 호출부가 바뀌지 않는다.
+- 기각: 상한에서 command channel을 멈춘다. 그 channel은 close와 resize도 실으므로 멈춘 프로그램이 이들까지 멈춘다.
+- 기각: child 종료 때 세션의 모든 프로세스를 kill한다. 자기 group의 job은 터미널이 닫힌 어떤 터미널에서처럼 터미널 없이 계속 돈다.
+- 기각: child 종료 때 64 KiB 상한 뒤의 바이트를 센다. 읽지 않았으므로 셀 값이 없고, 그 바이트를 쓰는 쪽이 오류를 받는다.
+- 수용: child 종료 때 master를 닫고 hangup을 test한다. `Exit` 뒤 첫 close가 kill하고 기록한다. `Exit` 때 쥔 화면을 그린다. 읽기가 멈추면 event를 보낸다. `AsyncFd`는 자기 descriptor를 소유하고 세션은 resize에 master가 필요하므로 복제 descriptor를 `AsyncFd`에 둔다.
+
 ### 터미널 입력과 표시
 
 #### 네이티브 명령 action

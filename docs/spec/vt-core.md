@@ -63,6 +63,40 @@ The terminal sidecar names the reasons of its exit in its `sidecar.vt.session_st
 
 The terminal page treats this as its reconnection signal: it resolves the stale sidecar error, closes its session gate so input queues again, and re-runs its session bootstrap — `open` (a no-op on a preserved session, a new session on a respawned service) followed by the last theme, the declared font, and the cursor policy.
 
+### PTY output and input
+
+One session has one I/O task. The task owns a non-blocking duplicate of the PTY master in `tokio::io::unix::AsyncFd`, and the session keeps the master of `portable-pty` for resize and for the `FIONREAD` measurement. The path sits in front of `Engine::feed(&[u8])`, so every engine uses it; the event loop and the `tty` module of a terminal library are not used, because their handler is typed on one engine and because their process start and resize conflict with the session start of this specification.
+
+**Output.** The task reads at most 64 KiB at a time, and only while it holds a permit of the session's output channel of 16 chunks, so a session holds at most 1 MiB of output that the engine has not consumed. A full channel stops reads and nothing else; the program then waits in its own write and no output is dropped. There is no ring of past output and no attach replay: one surface consumes one session, and a persistent service restores session state, not bytes.
+
+**Input.** Writes go through one first-in, first-out queue of the task, and writing never waits inside the surface task. A byte never passes an earlier byte. Keys and pastes are refused with an explicit error when the queued bytes plus the new bytes exceed 64 MiB. The bound passes a paste far larger than a person pastes and bounds what a stuck session holds. Replies of the engine to the program are never refused, because a refused reply leaves the program waiting; while the queued bytes exceed the bound the task stops reading output, so the program stops producing replies, and the service reports `{event: "input_held", queued, held}` when reads stop and when they resume.
+
+**Write results.** The task reports the result of each write on one ordered stream, and the surface sends the acknowledgement and the `sidecar.vt.pty_write` record from that stream. `ok: true` means that the master accepted every byte. A canonical tty with no complete line can accept and discard bytes, so `ok: true` does not state that the program read them. `ok: false` states that the program did not receive the bytes after the point of failure, and the record carries the reason.
+
+**Child exit.** When the child is reaped the task reads until a read returns 0 or would block, or until 64 KiB more were read. It completes each queued or partly written input with `ok: false` and the reason `child exited`, closes both master descriptors so that the kernel hangs up the slave, and then sends the chunks and `Exit` through the output channel. Bytes that a remaining job writes after that fail in that job with an error or end it with the hangup; the service has not read them and holds nothing of them. Child exit kills nothing. The session entry stays until the explicit close or the owner close. After `Exit`, a write returns `session writer is closed`, and a resize or a measurement returns `session master is closed`. The first close after `Exit` kills the process group, records it through `sidecar.vt.kill` and removes the entry. The surface draws the screen that the frame clock holds before it ends on `Exit`.
+
+**Close.**
+
+| State at close | Result |
+| --- | --- |
+| Input queued or partly written | Completes with `ok: false` and the reason `session closed` |
+| Reserved permit of the output channel | Released |
+| Chunk read and not yet sent | Sent when a permit is held; otherwise recorded as `sidecar.vt.buffer_dropped` with its bytes |
+| Close and reap at the same time | Close decides, and `Exit` follows once |
+| Second close | Returns the idempotent result of the first |
+| Bytes written to the program by closing | None |
+| Child and jobs | SIGHUP to the child, so a shell passes it to its jobs; up to 250 ms for the reaper; then SIGKILL to a remaining child and to the process group. A job started with `nohup` or `disown` keeps running |
+
+The decision follows the common form of terminal implementations: output stays lossless, the reader stops at a bound, and writing is separate from reading. The objections that were answered:
+
+- Rejected: control bytes pass the queue. It reorders a byte stream that the program reads in order, and the kernel line discipline sets whether an interrupt reaches a program that does not read, which a tracked test states.
+- Rejected: a client task that keeps only the latest screen. It drops output or needs the screen state outside the engine.
+- Rejected: an engine thread in this change. Every present engine is `Send`. An engine that is not `Send` runs its surface task on its own thread with a current-thread runtime and `LocalSet`; the channels already cross threads, so no call site changes.
+- Rejected: holding the command channel at a bound. It also carries close and resize, so a stuck program would stop them.
+- Rejected: killing every process of the session at child exit. A job of its own group keeps running without its terminal, as on any terminal that closes.
+- Rejected: counting bytes after the bound of 64 KiB at child exit. They are not read, so no count exists, and the writer of those bytes receives the error.
+- Accepted: closing the master at child exit, with a test of the hangup; the first close after `Exit` kills and records; drawing the held screen at `Exit`; an event for stopped reads; a duplicate descriptor in `AsyncFd`, because `AsyncFd` owns its descriptor and the session needs the master for resize.
+
 ### Terminal input and display
 
 #### Native command actions
