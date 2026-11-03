@@ -7981,3 +7981,76 @@ async fn a_frame_sends_no_screen_message_and_a_screen_read_answers_the_full_scre
         screens[0]
     );
 }
+
+/// Counts the `input_held` events up to the reply that names the marker.
+async fn held_events_until(
+    marker: &str,
+    lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
+) -> usize {
+    let mut held_events = 0;
+    loop {
+        let line = tokio::time::timeout(std::time::Duration::from_secs(10), lines.next_line())
+            .await
+            .expect("the marker must arrive")
+            .unwrap()
+            .expect("the service must stay connected");
+        if line.contains(r#""event":"input_held""#) {
+            held_events += 1;
+        }
+        if line.contains(marker) {
+            return held_events;
+        }
+    }
+}
+
+/// A page that reconnects holds no state of the session, and the session reports its held input only
+/// when that changes, so the reply to the reconnect states it.
+#[tokio::test]
+async fn a_reconnect_reports_the_input_that_the_session_holds() {
+    for (held, expected) in [(true, 1), (false, 0)] {
+        let calls = Arc::new(Mutex::new(Calls::default()));
+        let session = "held-input".to_string();
+        let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+        let port = Arc::new(FakeSessionPort::new(session.clone(), calls));
+        let port_for_factory = port.clone();
+        let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
+        let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+        let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+        let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+        let mut lines = tokio::io::BufReader::new(from_serve).lines();
+        to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+        next_image(&mut lines).await;
+        port.push_event(DaemonEvent::InputHeld {
+            session_id: session.clone(),
+            queued: 4096,
+            held: true,
+        });
+        if !held {
+            port.push_event(DaemonEvent::InputHeld {
+                session_id: session.clone(),
+                queued: 0,
+                held: false,
+            });
+        }
+        // The events reach the page before the reconnect, so the count below holds only its reply.
+        let pushed = if held { 1 } else { 2 };
+        for _ in 0..pushed {
+            held_events_until(r#""event":"input_held""#, &mut lines).await;
+        }
+        to_serve
+            .write_all(b"{\"surface\":\"s1\",\"body\":{\"operation\":\"reconnect\"}}\n")
+            .await
+            .unwrap();
+        held_events_until(r#""event":"session""#, &mut lines).await;
+        // The surface sends what follows the session event before it reads another request.
+        to_serve
+            .write_all(b"{\"surface\":\"s1\",\"body\":{\"operation\":\"marker\"}}\n")
+            .await
+            .unwrap();
+        let after_reconnect = held_events_until("marker", &mut lines).await;
+        assert_eq!(after_reconnect, expected, "held {held}");
+        task.abort();
+    }
+}

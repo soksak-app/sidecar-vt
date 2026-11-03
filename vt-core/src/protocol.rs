@@ -3668,6 +3668,8 @@ async fn surface_task(
     let mut last_input: Option<Instant> = None;
     // The session ended, and the surface ends when the screen that the frame clock holds is drawn.
     let mut session_ended = false;
+    // The bytes queued while the session holds its reads.
+    let mut held_input: Option<usize> = None;
 
     loop {
         if session_ended
@@ -3822,6 +3824,17 @@ async fn surface_task(
                             });
                             if output_tx.send(response.to_string()).await.is_err() {
                                 return;
+                            }
+                            // The session reports held input only when that changes, and the client
+                            // that reconnects holds no state.
+                            if let Some(queued) = held_input {
+                                let response = json!({
+                                    "surface": surface_id,
+                                    "body": {"event": "input_held", "queued": queued, "held": true}
+                                });
+                                if output_tx.send(response.to_string()).await.is_err() {
+                                    return;
+                                }
                             }
                             }
                     }
@@ -4841,6 +4854,7 @@ async fn surface_task(
                     }
                     DaemonEvent::InputHeld { session_id: ref recv_sid, queued, held } => {
                         if session_id.as_deref() == Some(recv_sid) {
+                            held_input = held.then_some(queued);
                             let response = json!({"surface": surface_id, "body": {"event": "input_held", "queued": queued, "held": held}});
                             if output_tx.send(response.to_string()).await.is_err() { return; }
                         }
