@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S148: S131부터 S147까지 담은 version 0.0.24.
 - S147: session은 상태가 바뀔 때만 잡은 입력을 보고하므로, 재연결이 이를 보고한다.
 - S134: OSC 4와 OSC 52의 잘못된 payload는 payload 없이 `sequence.rejected`를 낸다.
 - S133: `vte::Parser` 하나가 terminal보다 먼저 sequence를 찾는다. 그래서 CAN, SUB, ESC로 끝난 OSC가 뒤의 출력이나 mark를 잡지 않고, 제어 byte가 든 erase가 제자리에서 지우며, 모르는 CSI, DCS, ESC와 1402200 byte를 넘는 sequence가 거부된다. flood의 peak는 65536 byte로 줄었다.
