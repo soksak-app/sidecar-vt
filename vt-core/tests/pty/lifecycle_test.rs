@@ -261,6 +261,60 @@ async fn a_reply_of_the_engine_over_the_bound_stops_reads_and_reports_it() {
     service.close(&session_id).unwrap();
 }
 
+/// Writers that race for the last room of the queue accept no more than the bound holds. The program
+/// does not read, so the master takes about 1 KiB and the queue holds the rest.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_input_of_a_person_never_passes_the_bound() {
+    const CHUNK: usize = 256 * 1024;
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    for round in 0..20 {
+        let service = std::sync::Arc::new(
+            PtyService::new(crate::events::test_support::TestEvents::new().handle())
+                .with_input_bound(1024 * 1024),
+        );
+        let (tx, _rx) = crate::pty::output_channel();
+        let session_id = service
+            .open(
+                "/bin/sh",
+                &["-c".into(), "sleep 60".into()],
+                None,
+                80,
+                24,
+                tx,
+            )
+            .expect("PTY setup failed; environmental PTY errors must fail this test");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let chunk: std::sync::Arc<[u8]> = lines(CHUNK).into();
+        let writers = (0..8)
+            .map(|_| {
+                let service = service.clone();
+                let session_id = session_id.clone();
+                let barrier = barrier.clone();
+                let chunk = chunk.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let mut accepted = Vec::new();
+                    while let Ok(completion) =
+                        service.write(&session_id, WriteOrigin::Person, chunk.clone())
+                    {
+                        accepted.push(completion);
+                    }
+                    accepted
+                })
+            })
+            .collect::<Vec<_>>();
+        let accepted = writers
+            .into_iter()
+            .flat_map(|writer| writer.join().unwrap())
+            .count();
+        service.close(&session_id).unwrap();
+        assert!(
+            accepted <= 4,
+            "round {round}: {accepted} chunks of {CHUNK} bytes passed a bound of 1 MiB"
+        );
+    }
+}
+
 /// The echo of the queue is output that nothing reads while reads are held, so neither the program
 /// nor the queue moves. Memory stays bounded, the event shows the state and close ends it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -1,5 +1,6 @@
 # Changelog
 
+- S146: Concurrent writers no longer pass the bound of the queued input, because the check and the addition run under the lock of the input.
 - S145: An inline image scrolled partly past the top edge draws clipped until its last row leaves, instead of disappearing when its anchor row leaves.
 - S142: A valid inline image past an edge of the frame draws clipped, and one wholly outside the frame draws nothing, so such an image no longer fails every frame of its session.
 - S143: The exiting group test waits until the kernel refuses signals, so a signal accepted between the exit flag and that refusal no longer fails it.

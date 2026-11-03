@@ -420,20 +420,21 @@ impl PtyService {
             return Err("session is closed".into());
         }
         let data = data.into();
-        let queued = session.queued_input.load(Ordering::Acquire);
-        if origin == WriteOrigin::Person && queued + data.len() > session.input_bound {
-            return Err(format!(
-                "the session input queue holds {queued} bytes, and {} more exceed its bound of {} bytes",
-                data.len(),
-                session.input_bound
-            ));
-        }
         let (done, completion) = oneshot::channel();
+        // Every writer holds this lock from the check to the addition, so two writers cannot both
+        // take the last room of the queue.
         let input = session.recover(&session.input, "input");
         let input = input
             .as_ref()
             .ok_or_else(|| "session writer is closed".to_string())?;
         let size = data.len();
+        let queued = session.queued_input.load(Ordering::Acquire);
+        if origin == WriteOrigin::Person && queued + size > session.input_bound {
+            return Err(format!(
+                "the session input queue holds {queued} bytes, and {size} more exceed its bound of {} bytes",
+                session.input_bound
+            ));
+        }
         session.queued_input.fetch_add(size, Ordering::AcqRel);
         input
             .send(QueuedWrite {
