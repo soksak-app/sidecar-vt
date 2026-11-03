@@ -38,13 +38,12 @@ fn decode(path: &str) -> Result<String, String> {
     String::from_utf8(decoded).map_err(|_| format!("OSC 7 path is not UTF-8: {path}"))
 }
 
-/// Path of a `file` or `kitty-shell-cwd` URI. When the host is empty, `localhost`, or the host name
-/// of this computer, returns the percent-decoded absolute path. For another host, returns None. Any
-/// other format is an error.
+/// Path of a `file` URI. When the host is empty, `localhost`, or the host name of this computer,
+/// returns the percent-decoded absolute path. For another host, returns None. Any other scheme is an
+/// error.
 pub fn local_path(uri: &str) -> Result<Option<String>, String> {
     let rest = uri
         .strip_prefix("file://")
-        .or_else(|| uri.strip_prefix("kitty-shell-cwd://"))
         .ok_or_else(|| format!("OSC 7 directory URI is not a file URI: {uri:?}"))?;
     let slash = rest
         .find('/')

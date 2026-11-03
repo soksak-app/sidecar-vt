@@ -8,7 +8,6 @@ fn a_local_file_uri_becomes_its_decoded_path() {
         "file:///tmp/a%20b".to_string(),
         "file://localhost/tmp/a%20b".to_string(),
         format!("file://{host}/tmp/a%20b"),
-        format!("kitty-shell-cwd://{host}/tmp/a b"),
     ] {
         assert_eq!(
             local_path(&uri).unwrap().as_deref(),
@@ -28,6 +27,13 @@ fn a_directory_of_another_machine_has_no_local_path() {
         local_path("file://another-machine.invalid/tmp").unwrap(),
         None
     );
+}
+
+#[test]
+fn a_kitty_shell_cwd_uri_is_rejected() {
+    let host = host_name().unwrap();
+    let error = local_path(&format!("kitty-shell-cwd://{host}/tmp/a b")).unwrap_err();
+    assert!(error.contains("OSC 7"), "{error}");
 }
 
 #[test]
