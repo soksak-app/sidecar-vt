@@ -1,5 +1,6 @@
 # Changelog
 
+- S125: The service sends no screen message for a frame, answers `screen.read` with the full form and sends a `view` event when the cursor or the scrollback of a frame changes.
 - S124: A frame whose record the event log does not store is not hashed.
 - S123: A test measures that output which the frame clock holds builds no screen.
 - S122: Output is drawn on a frame clock of 33 ms, output within 200 ms after an input is drawn at once, and output that the clock holds builds no screen.

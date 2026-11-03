@@ -2053,7 +2053,6 @@ async fn end_selection(
     view: ScreenView<'_>,
     output_tx: &OutputSink,
     log: &Events,
-    screens: &mut ScreenStream,
     pending_selection_event: &mut Option<String>,
 ) -> bool {
     match inputs.selection_end(engine, session_id) {
@@ -2074,7 +2073,6 @@ async fn end_selection(
                     output_tx,
                     "selection",
                     log,
-                    screens,
                     inputs.sequence,
                 )
                 .await
@@ -2105,7 +2103,6 @@ async fn present_screen(
     output_tx: &OutputSink,
     reason: &str,
     log: &Events,
-    screens: &mut ScreenStream,
     input_sequence: u64,
 ) -> bool {
     // The host answers consumed after it copies the raster of a display request. If the same raster
@@ -2177,7 +2174,7 @@ async fn present_screen(
         "raster": state.raster,
         "sequence": state.sequence
     });
-    state.render = render.map(|render| render.value(frame));
+    state.render = render.map(|render| render.value(frame.clone()));
     state.pending_draw = true;
     state.sent_at = Some(std::time::Instant::now());
     state.presented_at = Some(Instant::now());
@@ -2204,36 +2201,26 @@ async fn present_screen(
             }
         }
     });
-    // The screen of the page is the screen that this raster drew. Both must be sent together so
-    // that the cursor and glyph state match the screen pixels. The state events of the inline
-    // images that this raster drew are sent after them.
+    // The raster shows the screen, so the page receives no screen for it. The page places the
+    // input method caret and the scrollbar from the cursor and the scrollback of the frame, which
+    // the `view` event sends after the raster when either differs from the last `view` event. The
+    // state events of the inline images that this raster drew are sent after them.
     match output_tx.send_carried(image_envelope.to_string()).await {
         Ok(carrier) => state.carrier = carrier,
         Err(()) => return false,
     }
-    let surface = surface_id.to_string();
-    let segment = log.boot().to_string();
-    let frame = shown_frame(Some(state));
-    // default: render metadata is absent when diagnostic frame tracing is disabled.
-    let render = state.render.clone().unwrap_or(Value::Null);
-    let work = screen_message_work(
-        surface,
-        segment,
-        input_sequence,
-        screens.order(),
-        frame,
-        render,
-        screen,
-        layout,
-    );
-    match prepare_screen_line(work).await {
-        Ok((line, sent)) => {
-            if output_tx.send(line).await.is_err() {
-                return false;
-            }
-            screens.sent(sent);
+    let mut cursor = json!(screen.cursor);
+    cursor["caret"] = json!({"row": layout.screen.cursor.row, "col": layout.screen.cursor.col});
+    let view = json!({"cursor": cursor, "scrollback": screen.scrollback});
+    if state.view_sent.as_ref() != Some(&view) {
+        let event = json!({
+            "surface": surface_id,
+            "body": {"event": "view", "frame": frame, "cursor": view["cursor"], "scrollback": view["scrollback"]}
+        });
+        if output_tx.send(event.to_string()).await.is_err() {
+            return false;
         }
-        Err(error) => log.record_error("screen", error),
+        state.view_sent = Some(view);
     }
     for event in std::mem::take(&mut state.presentation_events) {
         if output_tx.send(event).await.is_err() {
@@ -2241,26 +2228,6 @@ async fn present_screen(
         }
     }
     true
-}
-
-#[allow(clippy::too_many_arguments)]
-fn screen_message_work(
-    surface: String,
-    segment: String,
-    sequence: u64,
-    order: ScreenOrder,
-    frame: Value,
-    render: Value,
-    screen: Screen,
-    layout: crate::platform::darwin::frame::RenderLayout,
-) -> impl FnOnce() -> Result<(String, SentScreen), String> + Send + 'static {
-    move || {
-        let (members, cells) = screen_message_with_layout(
-            &segment, sequence, order, frame, render, &screen, &layout, true,
-        )?;
-        let line = cells.line(&surface, &members)?;
-        Ok((line, cells.sent()))
-    }
 }
 
 /// Records the drawing mode that an `open` or an applied `image.configure` leaves on a surface:
@@ -2707,7 +2674,6 @@ struct SurfacePorts<'a> {
     output_tx: &'a OutputSink,
     log: &'a Events,
     inputs: &'a mut ReplayInputs,
-    screens: &'a mut ScreenStream,
 }
 
 /// The inputs of the engine of one surface, recorded in the order in which the surface task applies
@@ -2920,7 +2886,6 @@ async fn send_engine_events(
         output_tx,
         log,
         inputs,
-        screens: _,
     } = ports;
     for event in engine.drain_events() {
         match event {
@@ -3224,7 +3189,6 @@ async fn open_if_configured(
         output_tx,
         log,
         inputs,
-        screens,
     } = ports;
     if !requested || session_id.is_some() {
         return true;
@@ -3273,7 +3237,6 @@ async fn open_if_configured(
                 output_tx,
                 "open",
                 log,
-                screens,
                 inputs.sequence,
             )
             .await
@@ -3453,7 +3416,7 @@ async fn surface_task(
                     && let Some(state) = image_state.as_mut()
                     && state.dirty && !state.pending_draw && state.drawing {
                         let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-                        if !present_screen(&surface_id, screen, state, &output_tx, "clock", &log, &mut screens, inputs.sequence).await {
+                        if !present_screen(&surface_id, screen, state, &output_tx, "clock", &log, inputs.sequence).await {
                             return;
                         }
                     }
@@ -3496,7 +3459,7 @@ async fn surface_task(
                             state.dirty = true;
                             frame_clock.get_or_insert(due);
                             last_cursor_frame = Some(signature);
-                        } else if !present_screen(&surface_id, screen, state, &output_tx, "blink", &log, &mut screens, inputs.sequence).await {
+                        } else if !present_screen(&surface_id, screen, state, &output_tx, "blink", &log, inputs.sequence).await {
                             return;
                         } else {
                             last_cursor_frame = Some(signature);
@@ -3537,7 +3500,7 @@ async fn surface_task(
                         headless = requested_image.is_none();
                         record_surface_mode(&log, &surface_id, headless, "open");
                         if headless && !open_headless(&surface_id, &requested_shell, &mut session_id, &mut engine, &session_port, &output_tx, &mut inputs).await { return; }
-                        if !open_if_configured(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs, screens: &mut screens }, open_requested, &requested_image, &requested_shell, &mut session_id,
+                        if !open_if_configured(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, open_requested, &requested_image, &requested_shell, &mut session_id,
                             &mut engine, &mut image_state).await {
                             return;
                         }
@@ -3755,7 +3718,7 @@ async fn surface_task(
                         // and sent once. A frame in flight draws it after its answer.
                         if next && state.dirty && !state.pending_draw && session_id.is_some() {
                             let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-                            if !present_screen(&surface_id, screen, state, &output_tx, "drawing", &log, &mut screens, inputs.sequence).await {
+                            if !present_screen(&surface_id, screen, state, &output_tx, "drawing", &log, inputs.sequence).await {
                                 return;
                             }
                         }
@@ -3846,10 +3809,10 @@ async fn surface_task(
                                 return;
                             }
                             let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-                            if !present_screen(&surface_id, screen, image_state.as_mut().unwrap(), &output_tx, "resize", &log, &mut screens, inputs.sequence).await {
+                            if !present_screen(&surface_id, screen, image_state.as_mut().unwrap(), &output_tx, "resize", &log, inputs.sequence).await {
                                 return;
                             }
-                        } else if !open_if_configured(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs, screens: &mut screens }, open_requested, &requested_image, &requested_shell, &mut session_id,
+                        } else if !open_if_configured(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, open_requested, &requested_image, &requested_shell, &mut session_id,
                             &mut engine, &mut image_state).await {
                             return;
                         }
@@ -3925,7 +3888,7 @@ async fn surface_task(
                                         engine.feed(&data);
                                         record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
                                         if !send_engine_events(
-                                            SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs, screens: &mut screens },
+                                            SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs },
                                             session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart,
                                         ).await { return; }
                                     }
@@ -3938,19 +3901,15 @@ async fn surface_task(
                             }
                         }
 
-                        if presentation_changed || (queued_output && !headless) {
-                            if let Some(state) = image_state.as_mut() {
+                        if (presentation_changed || (queued_output && !headless))
+                            && let Some(state) = image_state.as_mut() {
                                 if state.pending_draw {
                                     state.dirty = true;
                                 } else {
                                     let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                                    if !present_screen(&surface_id, screen, state, &output_tx, "input", &log, &mut screens, inputs.sequence).await { return; }
+                                    if !present_screen(&surface_id, screen, state, &output_tx, "input", &log, inputs.sequence).await { return; }
                                 }
-                            } else {
-                                let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                                if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, &mut screens, inputs.sequence, image_state.as_ref()).await { return; }
                             }
-                        }
 
                         let body = match write_result {
                             Ok(()) => json!({"ack": true}),
@@ -3971,9 +3930,8 @@ async fn surface_task(
                             refresh_inline_image_positions(&mut engine, &mut image_state);
                             if !hold_while_presenting(&mut image_state) {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                                if let Some(state) = image_state.as_mut() {
-                                    if !present_screen(&surface_id, screen, state, &output_tx, "paste", &log, &mut screens, inputs.sequence).await { return; }
-                                } else if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, &mut screens, inputs.sequence, image_state.as_ref()).await { return; }
+                                if let Some(state) = image_state.as_mut()
+                                    && !present_screen(&surface_id, screen, state, &output_tx, "paste", &log, inputs.sequence).await { return; }
                             }
                         }
                         if let Some(ref sid) = session_id {
@@ -4052,7 +4010,7 @@ async fn surface_task(
                                     last_cursor_frame = None;
                                     if let Some(state) = image_state.as_mut() {
                                         let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                                        if !present_screen(&surface_id, screen, state, &output_tx, "mouse", &log, &mut screens, inputs.sequence).await { return; }
+                                        if !present_screen(&surface_id, screen, state, &output_tx, "mouse", &log, inputs.sequence).await { return; }
                                     }
                                 }
                                 Some((encoding::MouseButton::Left, encoding::MouseAction::Press))
@@ -4167,7 +4125,7 @@ async fn surface_task(
                             last_cursor_frame = None;
                             if let Some(state) = image_state.as_mut() {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                                if !present_screen(&surface_id, screen, state, &output_tx, "selection", &log, &mut screens, inputs.sequence).await { return; }
+                                if !present_screen(&surface_id, screen, state, &output_tx, "selection", &log, inputs.sequence).await { return; }
                             }
                             let response = json!({"surface": surface_id, "body": {"ack": true, "event": "selection.start"}});
                             if output_tx.reply(response).await.is_err() { return; }
@@ -4185,7 +4143,7 @@ async fn surface_task(
                             last_cursor_frame = None;
                             if let Some(state) = image_state.as_mut() {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                                if !present_screen(&surface_id, screen, state, &output_tx, "selection", &log, &mut screens, inputs.sequence).await { return; }
+                                if !present_screen(&surface_id, screen, state, &output_tx, "selection", &log, inputs.sequence).await { return; }
                             }
                             let response = json!({"surface": surface_id, "body": {"ack": true, "event": "selection.update"}});
                             if output_tx.reply(response).await.is_err() { return; }
@@ -4200,7 +4158,7 @@ async fn surface_task(
                             continue;
                         }
                         let view = ScreenView { focused, preedit: &preedit, policy: &cursor_policy };
-                        if !end_selection(&surface_id, engine.as_mut(), &mut inputs, session_id.as_deref(), &mut image_state, view, &output_tx, &log, &mut screens, &mut pending_selection_event).await {
+                        if !end_selection(&surface_id, engine.as_mut(), &mut inputs, session_id.as_deref(), &mut image_state, view, &output_tx, &log, &mut pending_selection_event).await {
                             return;
                         }
                     }
@@ -4213,9 +4171,8 @@ async fn surface_task(
                         refresh_inline_image_positions(&mut engine, &mut image_state);
                         if hold_while_presenting(&mut image_state) { continue; }
                         let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                        if let Some(state) = image_state.as_mut() {
-                            if !present_screen(&surface_id, screen, state, &output_tx, "viewport", &log, &mut screens, inputs.sequence).await { return; }
-                        } else if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, &mut screens, inputs.sequence, image_state.as_ref()).await { return; }
+                        if let Some(state) = image_state.as_mut()
+                            && !present_screen(&surface_id, screen, state, &output_tx, "viewport", &log, inputs.sequence).await { return; }
                     }
                     SurfaceCommand::Scroll { lines, col, row, shift, cids } => {
                         let modes = engine.modes();
@@ -4260,9 +4217,8 @@ async fn surface_task(
                                 refresh_inline_image_positions(&mut engine, &mut image_state);
                                 if hold_while_presenting(&mut image_state) { continue; }
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                                if let Some(state) = image_state.as_mut() {
-                                    if !present_screen(&surface_id, screen, state, &output_tx, "scroll", &log, &mut screens, inputs.sequence).await { return; }
-                                } else if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, &mut screens, inputs.sequence, image_state.as_ref()).await { return; }
+                                if let Some(state) = image_state.as_mut()
+                                    && !present_screen(&surface_id, screen, state, &output_tx, "scroll", &log, inputs.sequence).await { return; }
                             }
                         }
                     }
@@ -4286,7 +4242,7 @@ async fn surface_task(
                                 state.dirty = true;
                             } else {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-                                if !present_screen(&surface_id, screen, state, &output_tx, "theme", &log, &mut screens, inputs.sequence).await { return; }
+                                if !present_screen(&surface_id, screen, state, &output_tx, "theme", &log, inputs.sequence).await { return; }
                             }
                         }
                         let response = json!({"surface": surface_id, "body": {"ack": true, "event": "theme", "mode": theme.mode.name(), "background": format!("#{:02x}{:02x}{:02x}", theme.background[0], theme.background[1], theme.background[2])}});
@@ -4348,7 +4304,7 @@ async fn surface_task(
                                 state.dirty = true;
                             } else {
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-                                if !present_screen(&surface_id, screen, state, &output_tx, "metrics", &log, &mut screens, inputs.sequence).await { return; }
+                                if !present_screen(&surface_id, screen, state, &output_tx, "metrics", &log, inputs.sequence).await { return; }
                             }
                         } else {
                             terminal_font = font;
@@ -4371,7 +4327,7 @@ async fn surface_task(
                         if let Some(state) = image_state.as_mut() {
                             if state.pending_draw {
                                 state.dirty = true;
-                            } else if !present_screen(&surface_id, screen, state, &output_tx, "cursor", &log, &mut screens, inputs.sequence).await {
+                            } else if !present_screen(&surface_id, screen, state, &output_tx, "cursor", &log, inputs.sequence).await {
                                 return;
                             }
                         }
@@ -4410,7 +4366,7 @@ async fn surface_task(
                         if let Err(error) = engine.resolve_clipboard(request_id, &text) {
                             let response = json!({"surface": surface_id, "body": {"error": error}});
                             if output_tx.reply(response).await.is_err() { return; }
-                        } else if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs, screens: &mut screens }, session_id.as_deref(), &mut engine, true, &mut image_state, &mut multipart).await {
+                        } else if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, true, &mut image_state, &mut multipart).await {
                             return;
                         }
                     }
@@ -4461,7 +4417,7 @@ async fn surface_task(
                             state.dirty = true;
                         } else {
                             let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-                            if !present_screen(&surface_id, screen, state, &output_tx, "image", &log, &mut screens, inputs.sequence).await { return; }
+                            if !present_screen(&surface_id, screen, state, &output_tx, "image", &log, inputs.sequence).await { return; }
                         }
                     }
                     SurfaceCommand::SessionClose { result } => {
@@ -4580,7 +4536,7 @@ async fn surface_task(
                                         return;
                                     }
                                     let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-                                    if !present_screen(&surface_id, screen, image_state.as_mut().unwrap(), &output_tx, "image", &log, &mut screens, inputs.sequence).await {
+                                    if !present_screen(&surface_id, screen, image_state.as_mut().unwrap(), &output_tx, "image", &log, inputs.sequence).await {
                                         return;
                                     }
                                 }
@@ -4592,7 +4548,7 @@ async fn surface_task(
                                 let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
                                 // Sends one screen that holds the changes made during the wait,
                                 // together with the raster.
-                                if !present_screen(&surface_id, screen, image_state.as_mut().unwrap(), &output_tx, "image", &log, &mut screens, inputs.sequence).await {
+                                if !present_screen(&surface_id, screen, image_state.as_mut().unwrap(), &output_tx, "image", &log, inputs.sequence).await {
                                     return;
                                 }
                             }
@@ -4601,7 +4557,7 @@ async fn surface_task(
                                     if output_tx.send(event).await.is_err() { return; }
                                     if let Some(deferred) = deferred_selection_end.take() {
                                         let view = ScreenView { focused, preedit: &preedit, policy: &cursor_policy };
-                                        if !end_selection(&surface_id, engine.as_mut(), &mut inputs, session_id.as_deref(), &mut image_state, view, &deferred, &log, &mut screens, &mut pending_selection_event).await {
+                                        if !end_selection(&surface_id, engine.as_mut(), &mut inputs, session_id.as_deref(), &mut image_state, view, &deferred, &log, &mut pending_selection_event).await {
                                             return;
                                         }
                                     }
@@ -4625,29 +4581,20 @@ async fn surface_task(
                                 inputs.output(sid, &data);
                                 engine.feed(&data);
                                 record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
-                                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs, screens: &mut screens }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart).await { return; }
+                                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart).await { return; }
                                 if headless || hold_while_presenting(&mut image_state) { continue; }
                                 if let Some(ref mut img_state) = image_state {
-                                    // The frame clock holds output that follows a frame within its
-                                    // interval, and that output builds no screen.
+                                    // The frame clock decides first, because a screen copies the
+                                    // whole grid and output that it holds builds none.
                                     if let Some(due) = frame_due(img_state, last_input) {
                                         img_state.dirty = true;
                                         frame_clock.get_or_insert(due);
                                         continue;
                                     }
-                                }
-                                let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-
-                                if let Some(ref mut img_state) = image_state {
-                                    if !present_screen(&surface_id, screen, img_state, &output_tx, "image", &log, &mut screens, inputs.sequence).await {
+                                    let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
+                                    if !present_screen(&surface_id, screen, img_state, &output_tx, "image", &log, inputs.sequence).await {
                                         return;
                                     }
-                                    continue;
-                                }
-
-                                if headless { continue; }
-                                if !send_plain_screen(&surface_id, session_id.as_deref(), &screen, &output_tx, &log, &mut screens, inputs.sequence, image_state.as_ref()).await {
-                                    return;
                                 }
                             }
                     }
@@ -6263,19 +6210,6 @@ fn base64_encode(data: &[u8]) -> String {
 #[cfg(test)]
 #[path = "../tests/support/protocol_test.rs"]
 mod tests;
-
-/// Prepares one complete screen line before its actor submits subsequent events.
-async fn prepare_screen_line<T: Send + 'static>(
-    work: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(work)
-        .await
-        .map_err(|error| format!("screen preparation task failed: {error}"))?
-}
-
-#[cfg(test)]
-#[path = "../tests/support/screen_preparation_test.rs"]
-mod screen_preparation_test;
 
 #[cfg(test)]
 #[path = "../tests/support/transfer_store_poison_test.rs"]

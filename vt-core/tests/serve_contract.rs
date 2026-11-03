@@ -46,7 +46,7 @@ where
 }
 
 /// Reads the next line, skipping the screen line that comes with a presentation.
-async fn next_line_except_screen<R: tokio::io::AsyncBufRead + Unpin>(
+async fn next_line_except_frame_events<R: tokio::io::AsyncBufRead + Unpin>(
     lines: &mut tokio::io::Lines<R>,
 ) -> String {
     loop {
@@ -55,7 +55,8 @@ async fn next_line_except_screen<R: tokio::io::AsyncBufRead + Unpin>(
             .expect("timeout waiting for a sidecar line")
             .expect("failed to read a sidecar line")
             .expect("the sidecar closed its output");
-        if !line.contains(r#""event":"screen""#) {
+        // A screen and the view of a frame describe the frame, not the reply of a request.
+        if !line.contains(r#""event":"screen""#) && !line.contains(r#""event":"view""#) {
             return line;
         }
     }
@@ -1237,10 +1238,13 @@ async fn appkit_cancel_operation_is_one_ordered_escape_and_unknown_selectors_are
     });
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
 {"surface":"s1","cids":["initial-preedit"],"body":{"operation":"input","actions":[],"preedit":{"text":"ㅎ","markedRange":{"location":0,"length":1},"selectedRange":{"location":1,"length":0},"replacementRange":null,"attributed":false}}}
+{"surface":"s1","body":{"operation":"screen.read"}}
 {"surface":"s1","cids":["commit-escape"],"body":{"operation":"input","actions":[{"type":"insert","text":"한","replacementRange":null,"attributed":false},{"type":"command","selector":"cancelOperation:"}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+{"surface":"s1","body":{"operation":"screen.read"}}
 {"surface":"s1","cids":["cancel-only"],"body":{"operation":"input","actions":[{"type":"command","selector":"cancelOperation:"}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 {"surface":"s1","cids":["key-escape"],"body":{"operation":"input","actions":[{"type":"key","key":"Escape","shift":false,"alt":false,"ctrl":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 {"surface":"s1","cids":["unknown-selector"],"body":{"operation":"input","actions":[{"type":"insert","text":"x","replacementRange":null,"attributed":false},{"type":"command","selector":"unsupportedNative:"}],"preedit":{"text":"changed","markedRange":{"location":0,"length":7},"selectedRange":{"location":7,"length":0},"replacementRange":null,"attributed":false}}}
+{"surface":"s1","body":{"operation":"screen.read"}}
 "#;
     let mut writer = Vec::new();
     let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
@@ -1297,11 +1301,15 @@ async fn appkit_cancel_operation_is_one_ordered_escape_and_unknown_selectors_are
         .collect::<Vec<_>>();
     assert_eq!(
         screens.len(),
-        2,
-        "only the seed and cleared preedit submit frames: {screens:?}"
+        3,
+        "each screen read is answered with one screen: {screens:?}"
     );
     assert_eq!(screens[0]["body"]["cursor"]["preedit"]["text"], "ㅎ");
     assert_eq!(screens[1]["body"]["cursor"]["preedit"]["text"], "");
+    assert_eq!(
+        screens[2]["body"]["cursor"]["preedit"]["text"], "",
+        "the refused transaction leaves the preedit unchanged: {screens:?}"
+    );
 }
 
 #[tokio::test]
@@ -1316,6 +1324,7 @@ async fn one_ordered_input_transaction_writes_actions_once_and_applies_final_pre
     });
     let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
 {"surface":"s1","cids":["native-transaction"],"body":{"operation":"input","actions":[{"type":"insert","text":"x","replacementRange":null,"attributed":true},{"type":"key","key":"Up","shift":false,"alt":false,"ctrl":false},{"type":"command","selector":"deleteBackward:"},{"type":"focus","focused":true}],"preedit":{"text":"ㅏㅏㅏ","markedRange":{"location":0,"length":3},"selectedRange":{"location":3,"length":0},"replacementRange":null,"attributed":true}}}
+{"surface":"s1","body":{"operation":"screen.read"}}
 "#;
     let mut writer = Vec::new();
     let engine_factory = Arc::new(|| {
@@ -1378,13 +1387,13 @@ async fn one_ordered_input_transaction_writes_actions_once_and_applies_final_pre
     assert_eq!(
         screens.len(),
         1,
-        "one actor transaction submits one final screen: {screens:?}"
+        "only the screen read is answered with a screen: {screens:?}"
     );
     assert!(
         screens
             .iter()
             .all(|message| message["body"]["cursor"]["preedit"]["text"] == "ㅏㅏㅏ"),
-        "no frame may expose an intermediate preedit: {screens:?}"
+        "the transaction applies its final preedit: {screens:?}"
     );
     assert!(
         screens[0]["body"]["cells"]
@@ -1487,6 +1496,7 @@ async fn ready_pty_echo_is_presented_with_the_transaction_preedit() {
     sequence = next;
 
     let frames_before_transaction = frame_records.lock().unwrap().len();
+    let acknowledgements_before_transaction = acknowledgements;
     let transaction = serde_json::json!({
         "surface":"s1",
         "body":{"operation":"input","actions":[{"type":"insert","text":"ㅏ","replacementRange":null,"attributed":true}],"preedit":preedit}
@@ -1509,9 +1519,12 @@ async fn ready_pty_echo_is_presented_with_the_transaction_preedit() {
         serde_json::json!({"col":16,"row":0})
     );
     assert_eq!(committed["body"]["cursor"]["preedit"]["text"], "ㅏㅏㅏ");
-    let reply: serde_json::Value =
-        serde_json::from_str(&next_line_except_screen(&mut lines).await).unwrap();
-    assert_eq!(reply["body"]["ack"], true);
+    // The acknowledgement of the transaction arrives before or after its frame.
+    if acknowledgements == acknowledgements_before_transaction {
+        let reply: serde_json::Value =
+            serde_json::from_str(&next_line_except_frame_events(&mut lines).await).unwrap();
+        assert_eq!(reply["body"]["ack"], true);
+    }
     let transaction_frames = frame_records.lock().unwrap()[frames_before_transaction..].to_vec();
     assert_eq!(
         transaction_frames.len(),
@@ -1730,8 +1743,8 @@ async fn an_invalid_late_input_action_rejects_the_transaction_before_any_side_ef
         .collect::<Vec<_>>();
     assert_eq!(
         screens.len(),
-        2,
-        "the invalid transaction submits no frame: {screens:?}"
+        1,
+        "only the screen read is answered with a screen: {screens:?}"
     );
     assert!(
         screens
@@ -2151,6 +2164,7 @@ async fn a_scroll_moves_the_primary_viewport_and_input_returns_it_to_the_newest_
         None,
         r#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
 {"surface":"s1","body":{"operation":"scroll","lines":3,"col":2,"row":1}}
+{"surface":"s1","body":{"operation":"screen.read"}}
 {"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"hi","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#,
     )
@@ -2162,7 +2176,7 @@ async fn a_scroll_moves_the_primary_viewport_and_input_returns_it_to_the_newest_
     );
     assert!(
         output.contains(r#""scrollback""#),
-        "the screen event after a scroll carries scrollback: {output}"
+        "the screen read after a scroll carries scrollback: {output}"
     );
     assert_eq!(
         writes,
@@ -2230,6 +2244,7 @@ async fn a_viewport_request_moves_the_viewport_to_the_offset_without_writing() {
         None,
         r#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
 {"surface":"s1","body":{"operation":"viewport","offset":7}}
+{"surface":"s1","body":{"operation":"screen.read"}}
 {"surface":"s1","body":{"operation":"viewport","offset":-1}}
 {"surface":"s1","body":{"operation":"viewport","offset":2.5}}
 "#,
@@ -2238,7 +2253,7 @@ async fn a_viewport_request_moves_the_viewport_to_the_offset_without_writing() {
     assert_eq!(viewport, vec!["viewport 7".to_string()], "{output}");
     assert!(
         output.contains(r#""scrollback""#),
-        "the viewport request is answered with a screen event: {output}"
+        "the screen read after a viewport request carries scrollback: {output}"
     );
     assert_eq!(output.matches("invalidParams").count(), 2, "{output}");
     assert!(
@@ -2792,7 +2807,7 @@ async fn detaching_an_image_keeps_the_session_for_headless_open_and_later_image_
 
     to_serve.write_all(br#"{"surface":"s1","body":{"image":{"detach":{"request":"detach-1","name":"view","generation":1}}}}
 "#).await.unwrap();
-    let detached_line = next_line_except_screen(&mut lines).await;
+    let detached_line = next_line_except_frame_events(&mut lines).await;
     let detached: serde_json::Value = serde_json::from_str(&detached_line).unwrap();
     assert_eq!(detached["surface"], "s1", "{detached_line}");
     assert_eq!(
@@ -2877,7 +2892,7 @@ async fn an_image_response_with_wrong_frame_identity_does_not_release_a_newer_pe
 "#).await.unwrap();
     let mut stale_frames = Vec::new();
     loop {
-        let line = next_line_except_screen(&mut lines).await;
+        let line = next_line_except_frame_events(&mut lines).await;
         let message: serde_json::Value = serde_json::from_str(&line).unwrap();
         if message["body"].get("image").is_some() {
             stale_frames.push(message["body"]["image"].clone());
@@ -3022,7 +3037,7 @@ async fn an_image_detach_request_id_cannot_be_reused_with_another_tuple() {
     to_serve.write_all(br#"{"surface":"first","body":{"image":{"detach":{"request":"invalid","name":"view","generation":0}}}}
 "#).await.unwrap();
     // A malformed detach with a readable request answers that request.
-    let invalid_line = next_line_except_screen(&mut lines).await;
+    let invalid_line = next_line_except_frame_events(&mut lines).await;
     let invalid: serde_json::Value = serde_json::from_str(&invalid_line).unwrap();
     assert_eq!(
         invalid["body"]["image"]["detached"]["request"], "invalid",
@@ -3290,6 +3305,11 @@ async fn test_a2_pushed_output_reaches_screen() {
                     .write_all(format!("{consumed}\n").as_bytes())
                     .await
                     .expect("failed to consume the next image");
+                // The sidecar sends no screen with a frame; a screen read returns the cells.
+                to_serve
+                    .write_all(b"{\"surface\":\"s1\",\"body\":{\"operation\":\"screen.read\"}}\n")
+                    .await
+                    .expect("failed to read the screen");
                 last_consumed = sequence;
             }
         }
@@ -3317,7 +3337,7 @@ async fn test_a2_pushed_output_reaches_screen() {
         }
     }
 
-    assert!(found_hi, "Output 'hi' did not appear in screen event");
+    assert!(found_hi, "Output 'hi' did not appear in a screen read");
 
     // Closes stdin to end serve
     drop(to_serve);
@@ -4309,7 +4329,7 @@ async fn test_configure_with_invalid_width_type() {
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":"800","height":384,"scale":1.0}}}}
 "#).await.unwrap();
 
-    let error_line = next_line_except_screen(&mut lines).await;
+    let error_line = next_line_except_frame_events(&mut lines).await;
 
     let error_json: serde_json::Value =
         serde_json::from_str(&error_line).expect("failed to parse error JSON");
@@ -4379,7 +4399,7 @@ async fn test_input_without_bytes_or_keys_rejected() {
         .await
         .unwrap();
 
-    let error_line = next_line_except_screen(&mut lines).await;
+    let error_line = next_line_except_frame_events(&mut lines).await;
 
     let error_json: serde_json::Value =
         serde_json::from_str(&error_line).expect("failed to parse error JSON");
@@ -4445,7 +4465,7 @@ async fn test_legacy_input_bytes_field_is_rejected() {
         .await
         .unwrap();
 
-    let error_line = next_line_except_screen(&mut lines).await;
+    let error_line = next_line_except_frame_events(&mut lines).await;
 
     let error_json: serde_json::Value =
         serde_json::from_str(&error_line).expect("failed to parse error JSON");
@@ -4511,7 +4531,7 @@ async fn test_legacy_input_keys_field_is_rejected() {
         .await
         .unwrap();
 
-    let error_line = next_line_except_screen(&mut lines).await;
+    let error_line = next_line_except_frame_events(&mut lines).await;
 
     let error_json: serde_json::Value =
         serde_json::from_str(&error_line).expect("failed to parse error JSON");
@@ -4573,7 +4593,7 @@ async fn test_replacement_raster_with_missing_height_is_rejected() {
     to_serve.write_all(br#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":2,"width":1024,"scale":1.0}}}}
 "#).await.unwrap();
 
-    let error_line = next_line_except_screen(&mut lines).await;
+    let error_line = next_line_except_frame_events(&mut lines).await;
 
     let error_json: serde_json::Value =
         serde_json::from_str(&error_line).expect("failed to parse error JSON");
@@ -4786,7 +4806,7 @@ async fn test_zero_sized_configuration_is_rejected() {
 "#).await.unwrap();
 
     // Must receive an error response
-    let error_line = next_line_except_screen(&mut lines).await;
+    let error_line = next_line_except_frame_events(&mut lines).await;
 
     let error_json: serde_json::Value =
         serde_json::from_str(&error_line).expect("failed to parse error JSON");
@@ -4877,7 +4897,7 @@ async fn test_replacement_raster_with_zero_size_is_rejected() {
 "#).await.unwrap();
 
     // Reads the response; it must be an error
-    let error_line = next_line_except_screen(&mut lines).await;
+    let error_line = next_line_except_frame_events(&mut lines).await;
 
     let error_json: serde_json::Value =
         serde_json::from_str(&error_line).expect("failed to parse error response");
@@ -5902,10 +5922,9 @@ fn screen_text(grid: &mut ScreenGrid, line: &str) -> String {
 }
 
 #[tokio::test]
-async fn output_while_the_host_holds_a_raster_sends_one_screen_with_the_next_presentation() {
-    // Output that arrives while the host copies the previous raster does not send screen JSON.
-    // Sending it would make the page process stale screens late when output bursts, which delays
-    // input and scrolling. After the answer, it draws once and sends that one screen.
+async fn output_while_the_host_holds_a_raster_is_drawn_once_after_the_answer() {
+    // Output that arrives while the host holds the previous raster is not drawn over it. After the
+    // answer, it draws once, and a screen read shows the latest output.
     let calls = Arc::new(Mutex::new(Calls::default()));
     let session_id = "held-raster".to_string();
     let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
@@ -5930,18 +5949,7 @@ async fn output_while_the_host_holds_a_raster_sends_one_screen_with_the_next_pre
             break;
         }
     }
-    // The screen of the first presentation comes with that raster.
-    let opened = tokio::time::timeout(std::time::Duration::from_secs(2), lines.next_line())
-        .await
-        .expect("timeout waiting for the first screen")
-        .unwrap()
-        .unwrap();
-    assert!(
-        opened.contains(r#""event":"screen""#),
-        "the first presentation came without its screen: {opened}"
-    );
     let mut grid = ScreenGrid::default();
-    grid.apply_line(&opened);
     for index in 0..50 {
         port.push_event(DaemonEvent::Output {
             session_id: session_id.clone(),
@@ -6005,22 +6013,20 @@ async fn output_while_the_host_holds_a_raster_sends_one_screen_with_the_next_pre
             screens.push(line);
         }
     }
+    let read = read_screen(&mut to_serve, &mut lines).await;
+    assert!(
+        screen_text(&mut grid, &read.to_string()).contains("line49"),
+        "the screen after the presentation is not the latest output: {read}"
+    );
     drop(to_serve);
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), task).await;
     assert_eq!(
         presentations, 1,
         "the held raster must be followed by exactly one presentation"
     );
-    assert_eq!(
-        screens.len(),
-        1,
-        "the answer sent {} screen events",
-        screens.len()
-    );
     assert!(
-        screen_text(&mut grid, &screens[0]).contains("line49"),
-        "the screen after the presentation is not the latest output: {}",
-        screens[0]
+        screens.is_empty(),
+        "the presentation sent screen events: {screens:?}"
     );
 }
 
@@ -6096,9 +6102,9 @@ async fn the_page_screen_event_carries_only_text_width_links_and_set_attributes(
 }
 
 #[tokio::test]
-async fn a_focus_change_sends_the_screen_with_the_presentation_that_draws_it() {
-    // Focus changes the drawn shape of the cursor. The screen must be sent with that raster so that
-    // the page cursor state matches the screen.
+async fn a_focus_change_presents_its_frame_before_its_acknowledgement() {
+    // Focus changes the drawn shape of the cursor. The frame that draws it is presented before the
+    // input is acknowledged, and a screen read after it shows the focused cursor.
     let calls = Arc::new(Mutex::new(Calls::default()));
     let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
     let port = Arc::new(FakeSessionPort::new("focus".to_string(), calls.clone()));
@@ -6145,12 +6151,6 @@ async fn a_focus_change_sends_the_screen_with_the_presentation_that_draws_it() {
             if let Some(sequence) = value["body"]["image"]["sequence"].as_i64() {
                 consume!(sequence);
                 presented = true;
-                // Reads the screen that came with the presentation.
-                let screen = next!();
-                assert!(
-                    screen.contains(r#""event":"screen""#),
-                    "a presentation came without its screen: {screen}"
-                );
                 continue;
             }
             if value["body"]["event"] == "screen" {
@@ -6172,18 +6172,16 @@ async fn a_focus_change_sends_the_screen_with_the_presentation_that_draws_it() {
             presented = true;
             continue;
         }
-        if value["body"]["event"] == "screen" {
+        if value["body"]["ack"] == true {
             assert!(
-                presented && value["body"]["cursor"]["focused"] == true,
-                "the focused screen did not follow its presentation: {seen:#?}"
+                presented,
+                "the focus change was acknowledged before its frame: {seen:#?}"
             );
             break;
         }
-        assert!(
-            value["body"]["ack"] != true,
-            "the focus change was answered without its screen: {seen:#?}"
-        );
     }
+    let screen = read_screen(&mut to_serve, &mut lines).await;
+    assert_eq!(screen["body"]["cursor"]["focused"], true, "{screen}");
     task.abort();
 }
 
@@ -6705,7 +6703,7 @@ async fn wait_for_reply<R: tokio::io::AsyncBufRead + Unpin>(
     letting_go: LettingGo,
 ) {
     loop {
-        let line = next_line_except_screen(lines).await;
+        let line = next_line_except_frame_events(lines).await;
         let message: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert!(message["body"].get("error").is_none(), "{line}");
         let replied = match letting_go {
@@ -6757,7 +6755,7 @@ async fn check_unanswered_transfer(persistent: bool, letting_go: LettingGo, rele
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 "#).await.unwrap();
     let id = loop {
-        let line = next_line_except_screen(&mut lines).await;
+        let line = next_line_except_frame_events(&mut lines).await;
         let message: serde_json::Value = serde_json::from_str(&line).unwrap();
         if let Some(image) = message["body"].get("image") {
             assert_eq!(image["sequence"], 1, "{line}");
@@ -6909,7 +6907,7 @@ async fn next_image<R: tokio::io::AsyncBufRead + Unpin>(
     lines: &mut tokio::io::Lines<R>,
 ) -> serde_json::Value {
     loop {
-        let line = next_line_except_screen(lines).await;
+        let line = next_line_except_frame_events(lines).await;
         let message: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert!(message["body"].get("error").is_none(), "{line}");
         if let Some(image) = message["body"].get("image") {
@@ -6923,7 +6921,7 @@ async fn next_image_detach_reply<R: tokio::io::AsyncBufRead + Unpin>(
     request: &str,
 ) -> serde_json::Value {
     loop {
-        let line = next_line_except_screen(lines).await;
+        let line = next_line_except_frame_events(lines).await;
         let message: serde_json::Value = serde_json::from_str(&line).unwrap();
         if message["body"]["image"]["detached"]["request"] == request {
             return message;
@@ -7018,7 +7016,7 @@ async fn a_detach_refused_as_a_stale_attachment_answers_its_request() {
         .unwrap();
     // The output of a surface goes to the connection that is attached to it, so the refusal of the
     // first connection is read from the second connection.
-    let line = next_line_except_screen(&mut second_lines).await;
+    let line = next_line_except_frame_events(&mut second_lines).await;
     let reply: serde_json::Value = serde_json::from_str(&line).unwrap();
     assert_eq!(
         reply["body"]["image"]["detached"]["request"], "stale-detach",
@@ -7045,7 +7043,7 @@ async fn a_detach_refused_as_a_stale_attachment_answers_its_request() {
         .unwrap();
     // The answer to close is an empty body.
     loop {
-        let line = next_line_except_screen(&mut second_lines).await;
+        let line = next_line_except_frame_events(&mut second_lines).await;
         let message: serde_json::Value = serde_json::from_str(&line).unwrap();
         if message["body"] == serde_json::json!({}) {
             break;
@@ -7085,7 +7083,7 @@ async fn a_malformed_detach_with_a_readable_request_answers_its_request() {
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
 {"surface":"s1","body":{"image":{"detach":{"request":"malformed-detach","name":"view","generation":0}}}}
 "#).await.unwrap();
-    let line = next_line_except_screen(&mut lines).await;
+    let line = next_line_except_frame_events(&mut lines).await;
     let reply: serde_json::Value = serde_json::from_str(&line).unwrap();
     assert_eq!(
         reply["body"]["image"]["detached"]["request"], "malformed-detach",
@@ -7177,8 +7175,19 @@ async fn the_answer_of_a_new_raster_is_not_taken_for_a_retained_transfer_of_the_
     task.await.unwrap().unwrap();
 }
 
-/// Waits for the next `screen` line. That line is the screen line after a presentation, or the
-/// answer to `screen.read`.
+/// Sends `screen.read` for the surface s1 and returns its answer.
+async fn read_screen<R: tokio::io::AsyncBufRead + Unpin>(
+    to_serve: &mut tokio::io::DuplexStream,
+    lines: &mut tokio::io::Lines<R>,
+) -> serde_json::Value {
+    to_serve
+        .write_all(b"{\"surface\":\"s1\",\"body\":{\"operation\":\"screen.read\"}}\n")
+        .await
+        .unwrap();
+    next_screen_line(lines).await
+}
+
+/// Waits for the next `screen` line, which is the answer to `screen.read`.
 async fn next_screen_line<R: tokio::io::AsyncBufRead + Unpin>(
     lines: &mut tokio::io::Lines<R>,
 ) -> serde_json::Value {
@@ -7244,6 +7253,13 @@ async fn next_measured_frame_after(
                     )
                 };
                 images.insert(sequence, counts);
+                // The sidecar sends no screen with a frame. A screen read before the answer names
+                // the frame that shows the screen.
+                let read = serde_json::json!({"surface": message["surface"], "body": {"operation": "screen.read"}});
+                to_serve
+                    .write_all(format!("{read}\n").as_bytes())
+                    .await
+                    .unwrap();
                 acknowledge_image(to_serve, &message).await;
             }
         }
@@ -7345,7 +7361,7 @@ fn rendered_glyph_count(message: &serde_json::Value) -> usize {
 
 #[cfg(feature = "diagnostics")]
 #[tokio::test]
-async fn a_screen_message_publishes_render_metadata_for_its_drawn_frame() {
+async fn a_screen_read_publishes_render_metadata_for_its_drawn_frame() {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let port = Arc::new(FakeSessionPort::new(
         "render-frame-session".into(),
@@ -7372,7 +7388,7 @@ async fn a_screen_message_publishes_render_metadata_for_its_drawn_frame() {
 "#).await.unwrap();
     let image_envelope = next_image_envelope(&mut lines).await;
     let image = &image_envelope["body"]["image"];
-    let screen = next_screen_line(&mut lines).await;
+    let screen = read_screen(&mut to_serve, &mut lines).await;
     let image_identity = serde_json::json!({
         "generation": image["generation"],
         "raster": image["raster"],
@@ -7390,7 +7406,7 @@ async fn a_screen_message_publishes_render_metadata_for_its_drawn_frame() {
     to_serve.write_all(br#"{"surface":"s1","body":{"operation":"font","family":"Menlo","size":14},"cids":["pending-render-input"]}
 "#).await.unwrap();
     loop {
-        let line = next_line_except_screen(&mut lines).await;
+        let line = next_line_except_frame_events(&mut lines).await;
         let message: serde_json::Value = serde_json::from_str(&line).unwrap();
         if message["cids"] == serde_json::json!(["pending-render-input"]) {
             break;
@@ -7415,7 +7431,7 @@ async fn a_screen_message_publishes_render_metadata_for_its_drawn_frame() {
 
     acknowledge_image(&mut to_serve, &image_envelope).await;
     let second_envelope = next_image_envelope(&mut lines).await;
-    let second_screen = next_screen_line(&mut lines).await;
+    let second_screen = read_screen(&mut to_serve, &mut lines).await;
     let second_image = &second_envelope["body"]["image"];
     let second_identity = serde_json::json!({
         "generation": second_image["generation"],
@@ -7460,9 +7476,6 @@ async fn a_screen_read_names_the_answered_frame_that_shows_the_screen() {
         (Some(1), Some(1)),
         "{first}"
     );
-    // The screen line that follows the image is the screen of the frame; the reply to `screen.read`
-    // comes after it.
-    let _presented = next_screen_line(&mut lines).await;
 
     to_serve.write_all(br#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
 {"surface":"s1","body":{"operation":"screen.read"}}
@@ -7500,7 +7513,6 @@ async fn a_screen_read_names_the_next_frame_while_a_change_waits_for_the_answer(
         (Some(1), Some(1)),
         "{first}"
     );
-    let _presented = next_screen_line(&mut lines).await;
 
     // The first frame stays unanswered. A font change resizes the engine and marks the screen as
     // changed, and the reply to `screen.read` follows it in the same order as the requests.
@@ -7550,7 +7562,6 @@ async fn a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it() {
         (Some(1), Some(1)),
         "{first}"
     );
-    let _presented = next_screen_line(&mut lines).await;
     to_serve.write_all(br#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
 "#).await.unwrap();
 
@@ -7570,7 +7581,7 @@ async fn a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it() {
         .write_all(format!("{compose}\n").as_bytes())
         .await
         .unwrap();
-    let failure = next_line_except_screen(&mut lines).await;
+    let failure = next_line_except_frame_events(&mut lines).await;
     assert!(
         failure.contains("frame draw failed by fault-injection"),
         "{failure}"
@@ -7650,139 +7661,6 @@ async fn an_envelope_with_invalid_cids_is_answered_on_its_surface() {
     );
 }
 
-// A screen after output of one row carries that row in the change form, and the reply of a screen read is the full form (core
-// docs/spec/persistent-services.md#screen-message).
-#[tokio::test]
-async fn a_screen_after_output_of_one_row_carries_that_row_and_a_screen_read_the_full_form() {
-    let calls = Arc::new(Mutex::new(Calls::default()));
-    let session_id = "change-form".to_string();
-    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
-    let port = Arc::new(FakeSessionPort::new(session_id.clone(), calls.clone()));
-    let port_for_factory = port.clone();
-    let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
-    let (mut to_serve, serve_in) = tokio::io::duplex(1024 * 1024);
-    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
-    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
-    let mut lines = tokio::io::BufReader::new(from_serve).lines();
-    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
-{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-"#).await.unwrap();
-    let envelope = next_image_envelope(&mut lines).await;
-    let first = next_screen_line(&mut lines).await;
-    assert_eq!(
-        first["body"]["base"], true,
-        "the first screen of the surface: {first}"
-    );
-    assert_eq!(first["body"]["number"], 1);
-    assert!(first["body"]["cells"].is_array());
-    acknowledge_image(&mut to_serve, &envelope).await;
-    port.push_event(DaemonEvent::Output {
-        session_id: session_id.clone(),
-        data: b"abc".to_vec(),
-        sequence: 0,
-        truncated: false,
-    });
-    let mut previous = first["body"]["number"].as_u64().unwrap();
-    let changed = 'changed: {
-        for _ in 0..20 {
-            let envelope = next_image_envelope(&mut lines).await;
-            let screen = next_screen_line(&mut lines).await;
-            acknowledge_image(&mut to_serve, &envelope).await;
-            let body = &screen["body"];
-            assert_eq!(
-                body["base"], false,
-                "a screen after one changed row: {screen}"
-            );
-            assert_eq!(
-                body["previous"].as_u64(),
-                Some(previous),
-                "the change names the sent message: {screen}"
-            );
-            assert!(body.get("cells").is_none(), "a change carries no full grid");
-            previous = body["number"].as_u64().unwrap();
-            let rows = body["changed"].as_array().unwrap();
-            if !rows.is_empty() {
-                break 'changed rows.clone();
-            }
-        }
-        panic!("no screen carried the output");
-    };
-    assert_eq!(
-        changed.len(),
-        1,
-        "only the row of the output changed: {changed:?}"
-    );
-    let graphemes: Vec<&str> = changed[0]["cells"].as_array().unwrap()[..3]
-        .iter()
-        .map(|cell| cell["grapheme"].as_str().unwrap())
-        .collect();
-    assert_eq!(graphemes, ["a", "b", "c"]);
-    assert_eq!(
-        changed[0]["cells"].as_array().unwrap().len() as u64,
-        first["body"]["cols"].as_u64().unwrap(),
-        "a changed row holds every cell of the row"
-    );
-    to_serve
-        .write_all(b"{\"surface\":\"s1\",\"body\":{\"operation\":\"screen.read\"}}\n")
-        .await
-        .unwrap();
-    let read = next_screen_line(&mut lines).await;
-    assert_eq!(
-        read["body"]["base"], true,
-        "the reply of a screen read: {read}"
-    );
-    assert!(read["body"]["number"].as_u64().unwrap() > previous);
-    drop(to_serve);
-    task.await.unwrap().unwrap();
-}
-
-// A client that reconnects to a persistent surface holds no screen of it, so the first screen after the reconnection is the full
-// form (core docs/spec/persistent-services.md#screen-message).
-#[tokio::test]
-async fn the_first_screen_after_a_reconnection_is_the_full_form() {
-    let calls = Arc::new(Mutex::new(Calls::default()));
-    let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
-{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"s1","body":{"operation":"reconnect"}}
-{"surface":"s1","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
-{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":2,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-"#;
-    let reader = std::io::Cursor::new(input.as_bytes());
-    let mut writer = Vec::new();
-    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
-    let calls_for_factory = calls.clone();
-    let session_port_factory = Arc::new(move || {
-        Arc::new(FakeSessionPort::new(
-            "reconnect-screen".to_string(),
-            calls_for_factory.clone(),
-        )) as Arc<dyn SessionPort>
-    });
-    let _ = serve(engine_factory, reader, &mut writer, session_port_factory).await;
-    let output = String::from_utf8(writer).unwrap();
-    let messages: Vec<serde_json::Value> = output
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    let reconnected = messages
-        .iter()
-        .position(|message| message["body"]["event"] == "session")
-        .expect("the reconnection answers the session");
-    let first = messages[..reconnected]
-        .iter()
-        .find(|message| message["body"]["event"] == "screen")
-        .expect("a screen before the reconnection");
-    assert_eq!(first["body"]["base"], true);
-    let after = messages[reconnected..]
-        .iter()
-        .find(|message| message["body"]["event"] == "screen")
-        .expect("a screen after the reconnection");
-    assert_eq!(
-        after["body"]["base"], true,
-        "the first screen after the reconnection: {after}"
-    );
-    assert!(after["body"]["number"].as_u64() > first["body"]["number"].as_u64());
-}
-
 /// Serves an open followed by the requests and returns the output.
 async fn serve_requests(requests: &str) -> String {
     let calls = Arc::new(Mutex::new(Calls::default()));
@@ -7826,7 +7704,7 @@ async fn a_region_that_is_not_drawing_gets_no_raster_and_no_screen() {
 }
 
 #[tokio::test]
-async fn a_region_that_draws_again_gets_one_raster_and_one_screen() {
+async fn a_region_that_draws_again_gets_one_raster_and_no_screen() {
     let output = serve_requests(&format!(
         "{}\n{}\n{}\n",
         r#"{"surface":"s1","body":{"image":{"drawing":{"name":"view","generation":1,"drawing":false}}}}"#,
@@ -7841,8 +7719,8 @@ async fn a_region_that_draws_again_gets_one_raster_and_one_screen() {
     );
     assert_eq!(
         output.matches(r#""event":"screen""#).count(),
-        1,
-        "a region that draws again did not get exactly one screen: {output}"
+        0,
+        "a frame sends no screen message: {output}"
     );
 }
 
@@ -7874,5 +7752,115 @@ async fn an_invalid_drawing_message_is_answered_with_invalid_params() {
     assert!(
         output.contains(r#""reason":"invalid image drawing""#),
         "an invalid drawing message was not answered with invalidParams: {output}"
+    );
+}
+
+// The sidecar sends no screen message for a frame and answers `screen.read` with the full screen
+// (the second screen form of core docs/spec/persistent-services.md): the raster shows the screen,
+// and the page reads the cells only when it needs them.
+#[tokio::test]
+async fn a_frame_sends_its_view_when_the_cursor_or_the_scrollback_changes() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let factory_calls = calls.clone();
+    let factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "view".to_string(),
+            factory_calls.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+    let input = r##"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
+{"surface":"s1","body":{"operation":"theme","mode":"light","background":"#e8f5ee","foreground":"#12684a","cursor":"#12684a","selection":"#d8dbe4"}}
+{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":2}}}}
+{"surface":"s1","body":{"operation":"theme","mode":"dark","background":"#101418","foreground":"#e8f5ee","cursor":"#e8f5ee","selection":"#2a3038"}}
+{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":3}}}}
+"##;
+    let reader = std::io::Cursor::new(input.as_bytes());
+    let mut writer = Vec::new();
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    serve(engine_factory, reader, &mut writer, factory)
+        .await
+        .unwrap();
+    let output = String::from_utf8(writer).unwrap();
+    let lines: Vec<serde_json::Value> = output
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let frames: Vec<u64> = lines
+        .iter()
+        .filter_map(|value| value["body"]["image"]["sequence"].as_u64())
+        .collect();
+    let views: Vec<&serde_json::Value> = lines
+        .iter()
+        .filter(|value| value["body"]["event"] == "view")
+        .map(|value| &value["body"])
+        .collect();
+    assert_eq!(frames, vec![1, 2, 3], "each theme draws a frame: {output}");
+    // The second theme keeps the cursor and the scrollback of the second frame, so the third frame
+    // sends no view.
+    let sequences: Vec<&serde_json::Value> = views
+        .iter()
+        .map(|view| &view["frame"]["sequence"])
+        .collect();
+    assert_eq!(sequences, vec![1, 2], "{output}");
+    assert_ne!(
+        (&views[0]["cursor"], &views[0]["scrollback"]),
+        (&views[1]["cursor"], &views[1]["scrollback"]),
+        "{output}"
+    );
+    let view = views[0];
+    assert_eq!(view["frame"]["generation"], 1, "{view}");
+    assert!(view["cursor"]["caret"]["row"].is_u64(), "{view}");
+    assert!(view["cursor"]["caret"]["col"].is_u64(), "{view}");
+    assert!(view["cursor"]["visible"].is_boolean(), "{view}");
+    assert!(view["scrollback"]["history"].is_u64(), "{view}");
+    assert!(view["scrollback"]["offset"].is_u64(), "{view}");
+}
+
+#[tokio::test]
+async fn a_frame_sends_no_screen_message_and_a_screen_read_answers_the_full_screen() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let factory_calls = calls.clone();
+    let factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "read".to_string(),
+            factory_calls.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+    let input = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
+{"surface":"s1","body":{"operation":"screen.read"}}
+"#;
+    let reader = std::io::Cursor::new(input.as_bytes());
+    let mut writer = Vec::new();
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    serve(engine_factory, reader, &mut writer, factory)
+        .await
+        .unwrap();
+    let output = String::from_utf8(writer).unwrap();
+    let lines: Vec<serde_json::Value> = output
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let frames = lines
+        .iter()
+        .filter(|value| value["body"]["image"]["sequence"].is_number())
+        .count();
+    let screens: Vec<&serde_json::Value> = lines
+        .iter()
+        .filter(|value| value["body"]["event"] == "screen")
+        .collect();
+    assert_eq!(frames, 1, "{output}");
+    assert_eq!(
+        screens.len(),
+        1,
+        "only the reply of screen.read is a screen message: {output}"
+    );
+    assert!(
+        screens[0]["body"]["cells"].is_array(),
+        "the reply is the full form: {}",
+        screens[0]
     );
 }

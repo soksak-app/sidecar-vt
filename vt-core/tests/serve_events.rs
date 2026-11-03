@@ -792,16 +792,17 @@ async fn a_frame_whose_record_is_not_stored_is_not_hashed() {
     assert!(events.named("sidecar.vt.frame").is_empty());
 }
 
-// The `screen` event that the service sends carries the members of the screen hash, and its
+// The `screen` event that answers `screen.read` carries the members of the screen hash, and its
 // `sequence` is the sequence of the frame record that carries the hash of the same screen, so a
 // page compares the two (core docs/spec/terminal-runtime.md).
 #[tokio::test]
-async fn the_screen_event_is_the_screen_of_the_frame_record_of_its_sequence() {
+async fn a_screen_read_is_the_screen_of_the_frame_record_of_its_sequence() {
     let events = TestEvents::new();
     let replies = serve_lines(
         &events,
         br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","body":{"operation":"screen.read"}}
 "#,
     )
     .await;

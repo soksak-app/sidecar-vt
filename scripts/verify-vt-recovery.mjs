@@ -161,6 +161,19 @@ const sendSurface = (client, surface, root, body) => {
   client.write({ surface, root, body });
 };
 
+// The sidecar sends no screen with a frame and answers screen.read (docs/spec/vt-core.md). A read that does not
+// show the text is read again after the next frame of the surface, which the change of its screen causes.
+const waitForScreenText = async (client, surface, root, text, label) => {
+  const started = performance.now();
+  while (performance.now() - started < STEP_TIMEOUT_MS) {
+    sendSurface(client, surface, root, { operation: "screen.read" });
+    const read = await waitFor(client, (value) => value.surface === surface && value.body?.event === "screen", label);
+    if (screenText(read).includes(text)) return read;
+    await waitFor(client, (value) => value.surface === surface && value.body?.image?.sequence !== undefined, label);
+  }
+  fail(`${label} timed out after ${STEP_TIMEOUT_MS}ms`);
+};
+
 const assertServiceAlive = (pid) => {
   try {
     process.kill(pid, 0);
@@ -212,7 +225,7 @@ const worker = async () => {
         actions: [{ type: "insert", text: "echo RECOVERY\n", replacementRange: null, attributed: false }],
         preedit: { text: "", markedRange: null, selectedRange: null, replacementRange: null, attributed: false },
       });
-      await waitFor(client, (value) => value.surface === surface && value.body?.event === "screen" && screenText(value).includes("RECOVERY"), "worker initial output");
+      await waitForScreenText(client, surface, project, "RECOVERY", "worker initial output");
       console.log(`WORKER_SESSION_ID=${sessionId}`);
       return;
     }

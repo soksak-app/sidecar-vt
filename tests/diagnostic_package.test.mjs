@@ -107,6 +107,8 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
     const image = message.body?.image;
     if (message.surface === surface && image?.token) {
       images.push({ generation: image.generation, raster: image.raster, sequence: image.sequence });
+      // The sidecar sends no screen with a frame; a read before the answer names the frame that shows the screen.
+      socket.write(`${JSON.stringify({ surface, root: project, body: { operation: "screen.read" } })}\n`);
       socket.write(`${JSON.stringify({ surface, root: project, body: { image: { consumed: {
         name: image.name, generation: image.generation, raster: image.raster, sequence: image.sequence,
       } } } })}\n`);

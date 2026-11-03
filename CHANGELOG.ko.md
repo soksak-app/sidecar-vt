@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S125: service는 frame마다 screen 메시지를 보내지 않고, `screen.read`에 full form으로 답하며, frame의 커서나 scrollback이 바뀌면 `view` event를 보낸다.
 - S124: event log가 저장하지 않는 record의 frame은 hash하지 않는다.
 - S123: frame 시계가 잡아 둔 출력이 화면을 만들지 않음을 test가 잰다.
 - S122: 출력을 33 ms frame 시계에 맞춰 그리고, 입력 뒤 200 ms 안의 출력은 바로 그리며, 시계가 잡아 둔 출력은 화면을 만들지 않는다.
