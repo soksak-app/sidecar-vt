@@ -2,6 +2,7 @@
 
 [English](features.md)
 
+- [o] S149 — P0: 공개된 release에서 flood의 footprint를 잰다. 입력: core 0.0.33, plugin terminal, 이 sidecar 0.0.24의 108열 17행 터미널에서 `yes`를 45초 실행했고, load average는 35에서 50이었다. 결과: sidecar footprint는 47 MB, host와 sidecar와 page의 합은 139 MB에 머물렀고, 한도를 두기 전에는 약 3 GB였다. Ctrl+C 뒤의 줄은 0.65 초 뒤에 나타났고 오류는 기록되지 않았다.
 - [o] S148 — P0: S131부터 S147까지 담은 VT release를 publish하고 registry에 올린 뒤 terminal plugin이 요구하게 한다. 결과: release run이 v0.0.24를 공개했고, registry가 그것을 올렸으며, terminal 0.0.36과 0.0.37이 그것을 요구한다.
 - [o] S131 — P0: 프로그램이 엔진의 소비보다 빨리 쓰는 출력은 service를 키우지 않는다. 입력: 터미널에서 약 20초 동안 `yes`. 동작: reader가 각 read를 무제한 channel로 보내 service가 약 3 GB에 이르렀다. 기대: `docs/spec/vt-core.md`의 PTY 출력과 입력 절의 계약. Red와 Green: 하위 항목.
   - [o] S131-1 — P0: 세션은 ring과 attach 경로를 쥐지 않는다. 입력: flood가 8 KiB chunk 10,000개를 채운다. 동작: production 경로가 호출하지 않는 `PtyService::attach`를 위해 ring이 세션당 80 MB를 쥔다. 기대: `attach`, ring, `truncated`, 그 경로의 engine reset, `SessionPort::attach`, attachment map이 없다. Green: `output_that_the_consumer_reads_is_not_dropped`. Red에서는 ring이 버린 chunk를 보고했다. persistent가 아닌 연결은 끝날 때 자기 세션을 닫는다. 그 뒤 소비할 곳이 없기 때문이다.
