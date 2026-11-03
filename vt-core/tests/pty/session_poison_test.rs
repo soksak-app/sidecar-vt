@@ -1,23 +1,22 @@
 use super::output_poison_test::{completed, poison, reported_once};
-use super::*;
 use crate::events::test_support::TestEvents;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn poisoned_closed_writer_stays_closed() {
     let events = TestEvents::new();
     let (_lock, service, session, _rx) = completed(&events).await;
-    session.writer.lock().expect("close fixture writer").take();
-    poison(&session.writer);
+    session.input.lock().expect("close fixture writer").take();
+    poison(&session.input);
     assert_eq!(
         service
-            .write(&session.id, b"x")
+            .write(&session.id, &b"x"[..])
             .expect_err("reject closed writer"),
         "session writer is closed"
     );
-    reported_once(&events, &session, "writer");
+    reported_once(&events, &session, "input");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn poisoned_closed_master_stays_closed() {
     let events = TestEvents::new();
     let (_lock, service, session, _rx) = completed(&events).await;
@@ -38,7 +37,7 @@ async fn poisoned_closed_master_stays_closed() {
     reported_once(&events, &session, "master");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn poisoned_closed_flag_rejects_input_and_measurement() {
     let events = TestEvents::new();
     let (_lock, service, session, _rx) = completed(&events).await;
@@ -46,7 +45,7 @@ async fn poisoned_closed_flag_rejects_input_and_measurement() {
     poison(&session.closed);
     assert_eq!(
         service
-            .write(&session.id, b"x")
+            .write(&session.id, &b"x"[..])
             .expect_err("reject closed session"),
         "session is closed"
     );
@@ -61,7 +60,7 @@ async fn poisoned_closed_flag_rejects_input_and_measurement() {
 
 macro_rules! close_field {
     ($test:ident, $field:ident) => {
-        #[tokio::test]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn $test() {
             let events = TestEvents::new();
             let (_lock, service, session, _rx) = completed(&events).await;
@@ -70,7 +69,6 @@ macro_rules! close_field {
                 .close(&session.id)
                 .expect("close poisoned completed session");
             assert_eq!(service.session_count(), 0);
-            assert!(session.reader.lock().expect("reader handle").is_none());
             assert!(session.reaper.lock().expect("reaper handle").is_none());
             assert!(
                 session
@@ -85,22 +83,16 @@ macro_rules! close_field {
         }
     };
 }
-close_field!(poisoned_reader_handle_is_taken_by_close, reader);
 close_field!(poisoned_reaper_handle_is_taken_by_close, reaper);
 close_field!(poisoned_child_result_is_retained_by_close, child);
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn poisoned_written_count_continues_from_its_retained_value() {
     let events = TestEvents::new();
-    let (_lock, _service, session, mut rx) = completed(&events).await;
+    let (_lock, _service, session, _rx) = completed(&events).await;
     let written = *session.written_output.lock().expect("initial output count");
     poison(&session.written_output);
-    read_output(
-        session.clone(),
-        Box::new(std::io::Cursor::new(b"after".to_vec())),
-    );
-    assert!(matches!(rx.recv().await.expect("continued output"),
-        DaemonEvent::Output { data, .. } if data == b"after"));
+    session.count_read(5);
     assert_eq!(
         *session.written_output.lock().expect("continued byte count"),
         written + 5
@@ -108,7 +100,7 @@ async fn poisoned_written_count_continues_from_its_retained_value() {
     reported_once(&events, &session, "written_output");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn poisoned_condition_wake_retains_the_recorded_child_result() {
     let events = TestEvents::new();
     let (_lock, _service, session, _rx) = completed(&events).await;
@@ -134,7 +126,7 @@ async fn poisoned_condition_wake_retains_the_recorded_child_result() {
     reported_once(&events, &session, "child");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn poisoned_condition_wake_rechecks_completion_before_returning() {
     let events = TestEvents::new();
     let (_lock, _service, session, _rx) = completed(&events).await;

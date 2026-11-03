@@ -26,12 +26,12 @@ fn native_pty_test_lock() -> std::fs::File {
 }
 
 // A child whose wait fails, with no view attached, is recorded: the record is the only report of the failure.
-#[test]
-fn a_failed_child_wait_without_a_view_is_recorded() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_child_wait_without_a_view_is_recorded() {
     let _lock = native_pty_test_lock();
     let events = events_test::TestEvents::new();
     let service = PtyService::new(events.handle());
-    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, receiver) = soksak_sidecar_vt_core::pty::output_channel();
     let session = service
         .open("/bin/cat", &[], None, 80, 24, sender)
         .expect("open the session");

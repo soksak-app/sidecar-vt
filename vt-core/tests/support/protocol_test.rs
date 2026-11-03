@@ -136,6 +136,7 @@ impl Engine for FakeEngine {
     }
 }
 
+use crate::pty::{WriteCompletion, write_completed};
 #[path = "session_port_test.rs"]
 mod session_port;
 use session_port::FakeSessionPort;

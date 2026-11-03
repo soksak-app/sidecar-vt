@@ -25,6 +25,24 @@ pub fn process_group_leader(
 
 /// The number of bytes in the PTY input queue that the master wrote and the child has not read yet.
 /// This is a diagnostic measurement.
+/// A non-blocking duplicate of the master, which the session task reads and writes. A duplicate
+/// shares the file status flags of the master, and the master then serves only ioctl calls.
+pub fn master_stream(master: &dyn MasterPty) -> Result<std::fs::File, String> {
+    use std::os::fd::BorrowedFd;
+    let fd = master.as_raw_fd().ok_or("PTY master fd is unavailable")?;
+    // SAFETY: `master` owns `fd` and stays open during this call, and the duplicate owns its own
+    // descriptor.
+    let duplicate = unsafe { BorrowedFd::borrow_raw(fd) }
+        .try_clone_to_owned()
+        .map_err(|error| format!("duplicate the PTY master: {error}"))?;
+    nix::fcntl::fcntl(
+        fd,
+        nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK | nix::fcntl::OFlag::O_RDWR),
+    )
+    .map_err(|error| format!("set the PTY master non-blocking: {error}"))?;
+    Ok(duplicate.into())
+}
+
 pub fn pending_input(
     #[cfg(unix)] master: &dyn MasterPty,
     #[cfg(not(unix))] _master: &dyn MasterPty,

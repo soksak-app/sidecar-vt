@@ -13,14 +13,14 @@ use soksak_sidecar_vt_core::platform::darwin::locale::installed;
 use soksak_sidecar_vt_core::pty::PtyService;
 use tokio::time::{Duration, timeout};
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_shell_without_locale_variables_runs_in_a_utf8_locale() {
     let service = PtyService::new(events_test::TestEvents::new().handle()).with_environment(
         ["LANG", "LC_ALL", "LC_CTYPE"]
             .map(|name| (name.to_string(), None))
             .to_vec(),
     );
-    let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let (events, mut received) = soksak_sidecar_vt_core::pty::output_channel();
     service
         .open(
             "/bin/zsh",

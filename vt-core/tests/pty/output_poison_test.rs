@@ -18,11 +18,11 @@ pub(super) async fn completed(
     crate::platform::pty::NativePtyTestLock,
     PtyService,
     Arc<Session>,
-    tokio::sync::mpsc::UnboundedReceiver<DaemonEvent>,
+    tokio::sync::mpsc::Receiver<DaemonEvent>,
 ) {
     let lock = crate::platform::pty::native_pty_test_lock();
     let service = PtyService::new(events.handle());
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = crate::pty::output_channel();
     let id = service
         .open(
             "/bin/sh",

@@ -85,6 +85,7 @@ hook은 프롬프트 앞마다 `133;A`를 보고하고(bash는 readline이 프�
 | close와 reap이 동시에 일어남 | close가 결정하고 `Exit`가 한 번 뒤따른다 |
 | 두 번째 close | 첫 close의 idempotent 결과를 돌려준다 |
 | close가 프로그램에 쓰는 바이트 | 없다 |
+| master | child를 기다리기 전에 두 descriptor를 닫는다. 읽히지 않은 터미널 출력이 있는 프로세스는 그 출력이 비거나 master가 닫혀야 끝나기 때문이다 |
 | child와 job | child에 SIGHUP을 보내 shell이 job에 전하게 한다. reaper를 최대 250 ms 기다린다. 그다음 남은 child와 process group에 SIGKILL을 보낸다. `nohup`이나 `disown`으로 시작한 job은 계속 돈다 |
 
 이 결정은 터미널 구현의 보편적 형태를 따른다. 출력은 무손실이고, reader는 상한에서 멈추고, 쓰기는 읽기와 분리된다. 답한 이의는 다음과 같다.

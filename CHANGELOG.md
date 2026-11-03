@@ -1,5 +1,6 @@
 # Changelog
 
+- S131-2: One I/O task reads and writes a session: reads stop at 16 chunks of 64 KiB, a write never waits in the surface task, and the surface acknowledges a write from its result.
 - S131-1: The session holds no ring and no attach path, so output that the consumer read leaves no copy; a connection that is not persistent closes its sessions when it ends.
 - S130: The cost of a frame on 0.0.23 is measured: a status line 1.7 ms per frame and 20 rows 3.0 ms per frame.
 - S129: Version 0.0.23, which carries S122 to S128.

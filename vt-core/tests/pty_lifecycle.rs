@@ -31,13 +31,13 @@ fn native_pty_test_lock() -> std::fs::File {
     file
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_sessions_are_independent_and_close_removes_session() {
     let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
     let service = PtyService::new(events_test::TestEvents::new().handle());
-    let (tx_a, mut rx_a) = tokio::sync::mpsc::unbounded_channel();
-    let (tx_b, mut rx_b) = tokio::sync::mpsc::unbounded_channel();
+    let (tx_a, mut rx_a) = soksak_sidecar_vt_core::pty::output_channel();
+    let (tx_b, mut rx_b) = soksak_sidecar_vt_core::pty::output_channel();
     let a = service
         .open(
             "/bin/sh",
@@ -81,19 +81,19 @@ async fn real_sessions_are_independent_and_close_removes_session() {
     assert!(String::from_utf8_lossy(&output_b).contains('B'));
     service.close(&a).expect("explicit close failed");
     assert!(
-        service.write(&a, b"x").is_err(),
+        service.write(&a, &b"x"[..]).is_err(),
         "closed session remained addressable"
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repeated_short_lived_sessions_close_without_process_group_races() {
     let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
     let started = std::time::Instant::now();
     let service = PtyService::new(events_test::TestEvents::new().handle());
     for index in 0..20 {
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, _rx) = soksak_sidecar_vt_core::pty::output_channel();
         let session = service
             .open(
                 "/bin/sh",
@@ -119,12 +119,12 @@ async fn repeated_short_lived_sessions_close_without_process_group_races() {
 // does not read leaves every written byte pending. Writes happen after the child enables raw mode,
 // as a full-screen program that writes mouse reports does. In canonical mode, bytes before their
 // line is complete stay in the line assembly buffer and are not reflected in the queue.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pty_measurement_counts_master_written_bytes_a_non_reading_child_has_not_read() {
     let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
     let service = PtyService::new(events_test::TestEvents::new().handle());
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
     let session = service
         .open(
             "/bin/sh",
@@ -154,7 +154,10 @@ async fn pty_measurement_counts_master_written_bytes_a_non_reading_child_has_not
     let first = b"pending-probe";
     let second = b"-second";
     service
-        .write(&session, first)
+        .write(&session, &first[..])
+        .expect("first production-path write failed")
+        .await
+        .expect("the session completes the write")
         .expect("first production-path write failed");
     assert_eq!(
         service
@@ -165,7 +168,10 @@ async fn pty_measurement_counts_master_written_bytes_a_non_reading_child_has_not
         "a child that reads nothing must leave every written byte pending"
     );
     service
-        .write(&session, second)
+        .write(&session, &second[..])
+        .expect("second production-path write failed")
+        .await
+        .expect("the session completes the write")
         .expect("second production-path write failed");
     assert_eq!(
         service
@@ -180,12 +186,12 @@ async fn pty_measurement_counts_master_written_bytes_a_non_reading_child_has_not
 
 // A child that reads empties the queue. The test fails if the count does not reach 0 within a
 // finite time.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pty_measurement_drains_to_zero_as_the_child_reads() {
     let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
     let service = PtyService::new(events_test::TestEvents::new().handle());
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
     let session = service
         .open(
             "/bin/sh",
@@ -216,7 +222,10 @@ async fn pty_measurement_drains_to_zero_as_the_child_reads() {
         "the child never reported its raw mode; output so far: {seen:?}"
     );
     service
-        .write(&session, b"drain-probe")
+        .write(&session, &b"drain-probe"[..])
+        .expect("production-path write failed")
+        .await
+        .expect("the session completes the write")
         .expect("production-path write failed");
     let started = std::time::Instant::now();
     loop {
@@ -238,7 +247,7 @@ async fn pty_measurement_drains_to_zero_as_the_child_reads() {
 
 // A measurement of a missing session or a closed session is an error. It is reported as an explicit
 // failure, not as 0.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pty_measurement_rejects_unknown_and_closed_sessions() {
     let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
@@ -247,7 +256,7 @@ async fn pty_measurement_rejects_unknown_and_closed_sessions() {
         service.pty_measurement("no-such-session").is_err(),
         "an unknown session must not report a measurement"
     );
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, _rx) = soksak_sidecar_vt_core::pty::output_channel();
     let session = service
         .open(
             "/bin/sh",
@@ -269,12 +278,12 @@ async fn pty_measurement_rejects_unknown_and_closed_sessions() {
 // that prints only known bytes makes the counter reach exactly that number. This verifies the
 // diagnostic question of whether child output followed a mouse-up. stty -opost disables output
 // post-processing, so the bytes that the reader reads match the bytes that the child wrote exactly.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn written_output_counts_exact_child_output_bytes() {
     let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
     let service = PtyService::new(events_test::TestEvents::new().handle());
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
     let session = service
         .open(
             "/bin/sh",
@@ -332,12 +341,12 @@ async fn written_output_counts_exact_child_output_bytes() {
 // path. It writes only after READY, so stty -echo is already applied, and stty -opost disables
 // output post-processing (such as converting \n to \r\n), so the returned bytes are exactly what
 // cat read, with no echo or conversion.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn child_reads_exact_bytes_written_through_the_production_path() {
     let _test_lock = lifecycle_test_lock().await;
     let _native_test_lock = native_pty_test_lock();
     let service = PtyService::new(events_test::TestEvents::new().handle());
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
     let session = service
         .open(
             "/bin/sh",
@@ -368,7 +377,10 @@ async fn child_reads_exact_bytes_written_through_the_production_path() {
     // at the end of the line ends the read of cat.
     let bytes = b"\x1b[<0;5;2M\x1b[<32;6;2m\x1b[<35;7;2m\x1b[<0;7;2m\n";
     service
-        .write(&session, bytes)
+        .write(&session, &bytes[..])
+        .expect("production-path write failed")
+        .await
+        .expect("the session completes the write")
         .expect("production-path write failed");
     let receipt = timeout(Duration::from_secs(2), async {
         loop {
@@ -572,7 +584,7 @@ async fn a_write_waiting_for_the_child_does_not_block_the_runtime() {
         // Complete lines fill the canonical queue of the line discipline, which blocks the master
         // write once the child does not read it.
         let data = b"x\n".repeat(1 << 19);
-        tokio::spawn(async move { port.write(&session, &data).await })
+        tokio::spawn(async move { port.write(&session, Arc::from(data)).await })
     };
     let (tick_tx, mut tick_rx) = tokio::sync::mpsc::unbounded_channel();
     let ticker = tokio::spawn(async move {
@@ -598,9 +610,13 @@ async fn a_write_waiting_for_the_child_does_not_block_the_runtime() {
     port.close(&session)
         .await
         .expect("closing the session must succeed");
-    let written = writer.await.expect("write task must finish");
+    let written = writer
+        .await
+        .expect("write task must finish")
+        .expect("the session queues the write")
+        .await;
     assert!(
-        written.is_err(),
+        !matches!(written, Ok(Ok(()))),
         "a 1 MiB write to a child that never reads must fail when the child ends: {written:?}"
     );
     assert!(
@@ -641,7 +657,7 @@ async fn a_close_ends_a_write_that_waits_for_the_child() {
         let port = Arc::clone(&port);
         let session = session.clone();
         let data = b"x\n".repeat(1 << 19);
-        tokio::spawn(async move { port.write(&session, &data).await })
+        tokio::spawn(async move { port.write(&session, Arc::from(data)).await })
     };
     // The write fills the canonical queue of the line discipline within this time and then waits
     // for the child.
@@ -652,9 +668,13 @@ async fn a_close_ends_a_write_that_waits_for_the_child() {
         .expect("the close did not end within 40 s");
     let elapsed = started.elapsed();
     closed.expect("closing the session must succeed");
-    let written = writer.await.expect("write task must finish");
+    let written = writer
+        .await
+        .expect("write task must finish")
+        .expect("the session queues the write")
+        .await;
     assert!(
-        written.is_err(),
+        !matches!(written, Ok(Ok(()))),
         "a write to a child that the close ended must fail: {written:?}"
     );
     assert!(

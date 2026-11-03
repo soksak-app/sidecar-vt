@@ -13,7 +13,6 @@ use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{Duration, timeout};
 
 // Runs one at a time with the PTY checks of the same workspace. The shell environment comes from
@@ -60,7 +59,7 @@ fn screen_text(screen: &Screen, cols: usize) -> String {
 struct Session {
     service: PtyService,
     id: String,
-    rx: UnboundedReceiver<DaemonEvent>,
+    rx: tokio::sync::mpsc::Receiver<DaemonEvent>,
     engine: AlacrittyEngine,
     cols: u16,
     rows: u16,
@@ -123,7 +122,7 @@ fn open(shell: &str, variable: &str, directory: &Path) -> Session {
         variable.to_string(),
         Some(directory.as_os_str().to_os_string()),
     )]);
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, rx) = soksak_sidecar_vt_core::pty::output_channel();
     let opened = service.open_shell("", shell, None, 60, 12, tx);
     let id = opened.expect("open a shell session");
     let mut engine = AlacrittyEngine::new();
@@ -160,7 +159,7 @@ async fn resize_wrapped_input(mut session: Session) -> Result<(), String> {
     // The output row directly above the prompt must also remain unchanged after the resize.
     session
         .service
-        .write(&session.id, b"printf 'ABOVE\\n'\n")
+        .write(&session.id, &b"printf 'ABOVE\\n'\n"[..])
         .unwrap();
     session
         .until(|text, _| text.contains("ABOVE") && text.matches("P> ").count() == 2)
@@ -200,7 +199,7 @@ async fn resize_wrapped_input(mut session: Session) -> Result<(), String> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_resize_redraws_a_wrapped_zsh_input_line_without_rows_of_the_previous_width() {
     let _lock = native_pty_test_lock();
     let directory = startup_directory("soksak-zsh-redraw-test", &[(".zshrc", "PS1='P> '\n")]);
@@ -209,7 +208,7 @@ async fn a_resize_redraws_a_wrapped_zsh_input_line_without_rows_of_the_previous_
     result.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_resize_redraws_a_wrapped_bash_input_line_without_rows_of_the_previous_width() {
     let _lock = native_pty_test_lock();
     let directory = startup_directory(

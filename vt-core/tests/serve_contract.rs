@@ -1,5 +1,6 @@
 #[path = "support/events_test.rs"]
 mod events_test;
+use soksak_sidecar_vt_core::pty::{WriteCompletion, write_completed};
 #[path = "support/session_port_test.rs"]
 mod tracked_session_port;
 
@@ -436,7 +437,11 @@ impl SessionPort for FakeSessionPort {
         Ok(self.session_id.clone())
     }
 
-    async fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
+    async fn write(
+        &self,
+        session_id: &str,
+        data: std::sync::Arc<[u8]>,
+    ) -> Result<soksak_sidecar_vt_core::pty::WriteCompletion, String> {
         {
             let mut calls = self.calls.lock().unwrap();
             calls.writes.push((session_id.to_string(), data.to_vec()));
@@ -453,7 +458,7 @@ impl SessionPort for FakeSessionPort {
                 echoes_enqueued,
             });
         }
-        if data == b"\x1b]7;file:///tmp/project\x07" {
+        if &*data == b"\x1b]7;file:///tmp/project\x07" {
             let _ = self.event_tx.send(DaemonEvent::Output {
                 session_id: self.session_id.clone(),
                 data: data.to_vec(),
@@ -510,7 +515,10 @@ impl SessionPort for FakeSessionPort {
             writes_completed,
             echoes_enqueued,
         });
-        self.write_error.clone().map_or(Ok(()), Err)
+        self.write_error.clone().map_or(
+            Ok(soksak_sidecar_vt_core::pty::write_completed(Ok(()))),
+            Err,
+        )
     }
 
     async fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {

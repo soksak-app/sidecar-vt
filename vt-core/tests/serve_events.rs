@@ -140,8 +140,12 @@ impl SessionPort for TracePort {
     ) -> Result<String, String> {
         Ok("perf-session".to_string())
     }
-    async fn write(&self, _session_id: &str, _data: &[u8]) -> Result<(), String> {
-        Ok(())
+    async fn write(
+        &self,
+        _session_id: &str,
+        _data: std::sync::Arc<[u8]>,
+    ) -> Result<soksak_sidecar_vt_core::pty::WriteCompletion, String> {
+        Ok(soksak_sidecar_vt_core::pty::write_completed(Ok(())))
     }
     async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
         Ok(())
@@ -529,8 +533,12 @@ impl SessionPort for OutputPort {
     ) -> Result<String, String> {
         Ok("scripted-session".to_string())
     }
-    async fn write(&self, _session_id: &str, _data: &[u8]) -> Result<(), String> {
-        Ok(())
+    async fn write(
+        &self,
+        _session_id: &str,
+        _data: std::sync::Arc<[u8]>,
+    ) -> Result<soksak_sidecar_vt_core::pty::WriteCompletion, String> {
+        Ok(soksak_sidecar_vt_core::pty::write_completed(Ok(())))
     }
     async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
         Ok(())
@@ -999,8 +1007,12 @@ impl SessionPort for FailingOpenPort {
     ) -> Result<String, String> {
         Err("no shell".to_string())
     }
-    async fn write(&self, _session_id: &str, _data: &[u8]) -> Result<(), String> {
-        Ok(())
+    async fn write(
+        &self,
+        _session_id: &str,
+        _data: std::sync::Arc<[u8]>,
+    ) -> Result<soksak_sidecar_vt_core::pty::WriteCompletion, String> {
+        Ok(soksak_sidecar_vt_core::pty::write_completed(Ok(())))
     }
     async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
         Ok(())
@@ -1464,8 +1476,12 @@ impl SessionPort for HeldOpenPort {
             Err(_) => Err("released".to_string()),
         }
     }
-    async fn write(&self, _session_id: &str, _data: &[u8]) -> Result<(), String> {
-        Ok(())
+    async fn write(
+        &self,
+        _session_id: &str,
+        _data: std::sync::Arc<[u8]>,
+    ) -> Result<soksak_sidecar_vt_core::pty::WriteCompletion, String> {
+        Ok(soksak_sidecar_vt_core::pty::write_completed(Ok(())))
     }
     async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
         Ok(())

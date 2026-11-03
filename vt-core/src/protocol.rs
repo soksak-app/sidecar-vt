@@ -6,11 +6,11 @@ use crate::screen_stream::{ScreenCells, ScreenOrder, ScreenStream, SentScreen, s
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, Instant, MissedTickBehavior};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -1199,8 +1199,13 @@ pub struct ShellRequest {
 #[async_trait]
 pub trait SessionPort: Send + Sync {
     async fn open(&self, request: &ShellRequest, cols: u16, rows: u16) -> Result<String, String>;
-    /// Writes `data` to the session. The surface task records the write as a replay input.
-    async fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String>;
+    /// Queues `data` for the session. The surface task records the write as a replay input when the
+    /// completion holds its result.
+    async fn write(
+        &self,
+        session_id: &str,
+        data: Arc<[u8]>,
+    ) -> Result<crate::pty::WriteCompletion, String>;
     async fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String>;
     async fn close(&self, session_id: &str) -> Result<(), String>;
     /// Measures the PTY transfer state at one point in time. pending is the number of input bytes
@@ -2693,9 +2698,29 @@ struct SurfacePorts<'a> {
 /// `sequence` counts them from 1 without a gap, and a frame names the sequence of the last input
 /// that its screen includes. The view changes are applied to the engine through the methods of this
 /// type, so the engine call and its record cannot differ.
+/// What a surface does with the result of a write.
+enum AfterWrite {
+    Input(OutputSink, Value),
+    Paste(OutputSink, Value),
+    EngineReply(OutputSink, Value),
+    Mouse(OutputSink, Value),
+    Scroll(OutputSink, Value),
+}
+
+/// A write whose result the surface has not received.
+struct PendingWrite {
+    session: String,
+    data: Arc<[u8]>,
+    cids: Vec<String>,
+    completion: crate::pty::WriteCompletion,
+    after: AfterWrite,
+}
+
 struct ReplayInputs {
     log: Events,
     sequence: u64,
+    /// The writes in the order that the session queue holds them. The results arrive in this order.
+    pending_writes: VecDeque<PendingWrite>,
     /// The inputs before the session existed: the event and its fields with `sequence`. They are
     /// recorded when it opens.
     deferred: Vec<(&'static str, Value)>,
@@ -2706,6 +2731,7 @@ impl ReplayInputs {
         Self {
             log,
             sequence: 0,
+            pending_writes: VecDeque::new(),
             deferred: Vec::new(),
         }
     }
@@ -2854,20 +2880,79 @@ impl ReplayInputs {
         moved
     }
 
-    /// Writes `data` to the session and records the write with the `cids` of the inputs that caused
-    /// it.
+    /// Queues `data` for the session. The write is recorded with the `cids` of the inputs that
+    /// caused it when its result arrives, and `after` runs then. A write that the session refuses
+    /// takes the same path with its error.
     async fn write(
         &mut self,
         port: &Arc<dyn SessionPort>,
         session: &str,
         data: &[u8],
         cids: &[String],
-    ) -> Result<(), String> {
+        after: AfterWrite,
+    ) -> bool {
+        let data: Arc<[u8]> = Arc::from(data);
+        let completion = match port.write(session, data.clone()).await {
+            Ok(completion) => completion,
+            Err(error) => crate::pty::write_completed(Err(error)),
+        };
+        self.pending_writes.push_back(PendingWrite {
+            session: session.to_string(),
+            data,
+            cids: cids.to_vec(),
+            completion,
+            after,
+        });
+        self.finish_ready_writes().await
+    }
+
+    /// Finishes the writes at the front of the queue whose results already arrived. False when the
+    /// output of the surface closed.
+    async fn finish_ready_writes(&mut self) -> bool {
+        while let Some(front) = self.pending_writes.front_mut() {
+            let result = match front.completion.try_recv() {
+                Err(oneshot::error::TryRecvError::Empty) => return true,
+                Ok(result) => result,
+                Err(oneshot::error::TryRecvError::Closed) => Err(WRITE_RESULT_LOST.to_string()),
+            };
+            if !self.finish_front_write(result).await {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Waits for the result of every queued write and finishes each. The session completes each
+    /// queued write before it reports its end.
+    async fn finish_all_writes(&mut self) -> bool {
+        while let Some(result) = self.next_write_result().await {
+            if !self.finish_front_write(result).await {
+                return false;
+            }
+        }
+        true
+    }
+
+    async fn next_write_result(&mut self) -> Option<Result<(), String>> {
+        let front = self.pending_writes.front_mut()?;
+        Some(
+            (&mut front.completion)
+                .await
+                .unwrap_or_else(|_| Err(WRITE_RESULT_LOST.to_string())),
+        )
+    }
+
+    /// Records the write at the front of the queue with its result and runs what follows it. False
+    /// when the output of the surface closed.
+    async fn finish_front_write(&mut self, result: Result<(), String>) -> bool {
+        let write = self
+            .pending_writes
+            .pop_front()
+            .expect("a result belongs to the write at the front");
         self.sequence += 1;
-        let result = port.write(session, data).await;
         let mut fields = json!({
             "sequence": self.sequence,
-            "hex": crate::events::hex(data),
+            "hex": crate::events::hex(&write.data),
             "ok": result.is_ok(),
         });
         if let Err(error) = &result {
@@ -2876,12 +2961,54 @@ impl ReplayInputs {
         self.log.emit_for(
             Level::Info,
             "sidecar.vt.pty_write",
-            Subject::session(session, cids),
+            Subject::session(&write.session, &write.cids),
             &fields,
         );
-        result
+        match (write.after, result) {
+            (AfterWrite::Input(sink, surface), Ok(())) => sink
+                .reply(json!({"surface": surface, "body": {"ack": true}}))
+                .await
+                .is_ok(),
+            (AfterWrite::Input(sink, surface), Err(error)) => sink
+                .reply(json!({"surface": surface, "body": {"error": format!("Write failed for submitted action batch; PTY write progress is unknown: {error}")}}))
+                .await
+                .is_ok(),
+            (AfterWrite::Paste(sink, surface), Ok(())) => sink
+                .reply(json!({"surface": surface, "body": {"ack": true, "event": "paste"}}))
+                .await
+                .is_ok(),
+            (AfterWrite::Paste(sink, surface), Err(error)) => sink
+                .reply(json!({"surface": surface, "body": {"error": format!("Paste failed: {error}")}}))
+                .await
+                .is_ok(),
+            (AfterWrite::EngineReply(_, _), Ok(())) | (AfterWrite::Scroll(_, _), Ok(())) => true,
+            (AfterWrite::EngineReply(sink, surface), Err(error)) => sink
+                .reply(json!({"surface": surface, "body": {"error": "engine response write failed", "reason": error}}))
+                .await
+                .is_ok(),
+            (AfterWrite::Scroll(sink, surface), Err(error)) => sink
+                .reply(json!({"surface": surface, "body": {"error": "scroll write failed", "reason": error}}))
+                .await
+                .is_ok(),
+            (AfterWrite::Mouse(sink, mut message), result) => {
+                let failed = result.as_ref().err().cloned();
+                message["body"]["written"] = json!(result.is_ok());
+                if let Some(error) = failed
+                    && sink
+                        .reply(json!({"surface": message["surface"], "body": {"error": "mouse write failed", "reason": error}}))
+                        .await
+                        .is_err()
+                {
+                    return false;
+                }
+                sink.send(message.to_string()).await.is_ok()
+            }
+        }
     }
 }
+
+/// The result of a write whose sender ended without an answer: the session ended before it.
+const WRITE_RESULT_LOST: &str = "the session ended before the write completed";
 
 async fn send_engine_events(
     ports: SurfacePorts<'_>,
@@ -2977,9 +3104,17 @@ async fn send_engine_events(
                     let response = json!({"surface": surface_id, "body": {"error": "engine response without session"}});
                     return output_tx.reply(response).await.is_ok();
                 };
-                if let Err(error) = inputs.write(session_port, session_id, &bytes, &[]).await {
-                    let response = json!({"surface": surface_id, "body": {"error": "engine response write failed", "reason": error}});
-                    return output_tx.reply(response).await.is_ok();
+                if !inputs
+                    .write(
+                        session_port,
+                        session_id,
+                        &bytes,
+                        &[],
+                        AfterWrite::EngineReply(output_tx.clone(), json!(surface_id)),
+                    )
+                    .await
+                {
+                    return false;
                 }
             }
             EngineEvent::Title(title) => {
@@ -3421,6 +3556,9 @@ async fn surface_task(
 
     loop {
         tokio::select! {
+            Some(result) = inputs.next_write_result(), if !inputs.pending_writes.is_empty() => {
+                if !inputs.finish_front_write(result).await { return; }
+            }
             _ = tokio::time::sleep_until(frame_clock.unwrap_or_else(Instant::now)), if frame_clock.is_some() => {
                 frame_clock = None;
                 if session_id.is_some()
@@ -3874,10 +4012,7 @@ async fn surface_task(
                         let presentation_changed = viewport_changed
                             || next_focused != focused
                             || preedit_changes_render(&preedit, &next_preedit);
-                        let write_result = match (session_id.as_deref(), bytes.is_empty()) {
-                            (Some(session), false) => inputs.write(&session_port, session, &bytes, &cids).await,
-                            _ => Ok(()),
-                        };
+                        let write_session = session_id.clone().filter(|_| !bytes.is_empty());
                         focused = next_focused;
                         preedit = Some(next_preedit);
 
@@ -3918,12 +4053,16 @@ async fn surface_task(
                                 }
                             }
 
-                        let body = match write_result {
-                            Ok(()) => json!({"ack": true}),
-                            Err(error) => json!({"error": format!("Write failed for submitted action batch; PTY write progress is unknown: {error}")}),
-                        };
-                        if output_tx.reply(json!({"surface": surface_id, "body": body})).await.is_err() { return; }
+                        match write_session {
+                            Some(session) => {
+                                if !inputs.write(&session_port, &session, &bytes, &cids, AfterWrite::Input(output_tx.clone(), json!(surface_id))).await { return; }
+                            }
+                            None => {
+                                if output_tx.reply(json!({"surface": surface_id, "body": {"ack": true}})).await.is_err() { return; }
+                            }
+                        }
                         if exited {
+                            if !inputs.finish_all_writes().await { return; }
                             if output_tx.send(json!({"surface": surface_id, "body": {"event": "exit"}}).to_string()).await.is_err() { return; }
                             return;
                         }
@@ -3955,26 +4094,7 @@ async fn surface_task(
                                     continue;
                                 }
                             };
-                            match inputs.write(&session_port, sid, &bytes, &cids).await {
-                                Ok(()) => {
-                                    let response = json!({
-                                        "surface": surface_id,
-                                        "body": {"ack": true, "event": "paste"}
-                                    });
-                                    if output_tx.reply(response).await.is_err() {
-                                        return;
-                                    }
-                                }
-                                Err(error) => {
-                                    let response = json!({
-                                        "surface": surface_id,
-                                        "body": {"error": format!("Paste failed: {error}")}
-                                    });
-                                    if output_tx.reply(response).await.is_err() {
-                                        return;
-                                    }
-                                }
-                            }
+                            if !inputs.write(&session_port, sid, &bytes, &cids, AfterWrite::Paste(output_tx.clone(), json!(surface_id))).await { return; }
                         } else {
                             let response = json!({
                                 "surface": surface_id,
@@ -4044,21 +4164,21 @@ async fn surface_task(
                             let phase_name = match phase { MousePhase::Down => "down", MousePhase::Move => "move", MousePhase::Up => "up" };
                             match encoded {
                                 Ok(bytes) => {
-                                    let written = if let Some(ref sid) = session_id {
-                                        if let Err(error) = inputs.write(&session_port, sid, &bytes, &cids).await {
-                                            let response = json!({"surface": surface_id, "body": {"error": "mouse write failed", "reason": error}});
-                                            if output_tx.reply(response).await.is_err() { return; }
-                                            false
-                                        } else { true }
-                                    } else { false };
                                     let response = json!({"surface": surface_id, "body": {
                                         "event": "mouse", "inputId": input_id, "phase": phase_name, "x": cell.0, "y": cell.1,
                                         "pressed": pressed, "shift": shift, "alt": alt, "ctrl": ctrl,
-                                        "reported": true, "written": written,
+                                        "reported": true, "written": false,
                                         "modes": {"click": modes.mouse_click, "drag": modes.mouse_drag, "motion": modes.mouse_motion},
                                         "bytes": base64_encode(&bytes)
                                     }});
-                                    if output_tx.send(response.to_string()).await.is_err() { return; }
+                                    match session_id {
+                                        Some(ref sid) => {
+                                            if !inputs.write(&session_port, sid, &bytes, &cids, AfterWrite::Mouse(output_tx.clone(), response)).await { return; }
+                                        }
+                                        None => {
+                                            if output_tx.send(response.to_string()).await.is_err() { return; }
+                                        }
+                                    }
                                 }
                                 Err(reason) => {
                                     let response = json!({"surface": surface_id, "body": {"event": "mouse", "inputId": input_id, "phase": phase_name,
@@ -4214,10 +4334,7 @@ async fn surface_task(
                         match bytes {
                             Some(bytes) => {
                                 if let Some(ref sid) = session_id
-                                    && let Err(error) = inputs.write(&session_port, sid, &bytes, &cids).await {
-                                        let response = json!({"surface": surface_id, "body": {"error": "scroll write failed", "reason": error}});
-                                        if output_tx.reply(response).await.is_err() { return; }
-                                    }
+                                    && !inputs.write(&session_port, sid, &bytes, &cids, AfterWrite::Scroll(output_tx.clone(), json!(surface_id))).await { return; }
                             }
                             None => {
                                 inputs.scroll_viewport(engine.as_mut(), session_id.as_deref(), lines);
@@ -4441,6 +4558,7 @@ async fn surface_task(
                                 .map_err(|error| format!("Close failed: {error}")),
                             None => Ok(()),
                         };
+                        if !inputs.finish_all_writes().await { return; }
                         // If the sender of the close has stopped waiting, that sender has already
                         // reported the timeout. A close error has no receiver, so it is kept as an
                         // error record event.
@@ -4460,6 +4578,7 @@ async fn surface_task(
                                     return;
                                 }
                             }
+                        if !inputs.finish_all_writes().await { return; }
                         break;
                     }
                     SurfaceCommand::ImageResponse { body, dispatched_at } => {
@@ -4604,6 +4723,7 @@ async fn surface_task(
                     DaemonEvent::Exit { session_id: ref recv_sid } => {
                         if let Some(ref sid) = session_id
                             && recv_sid == sid {
+                                if !inputs.finish_all_writes().await { return; }
                                 let response = json!({
                                     "surface": surface_id,
                                     "body": {"event": "exit"}
@@ -6094,8 +6214,8 @@ pub fn make_default_session_port_factory(
 pub struct LocalSessionPort {
     service: Arc<crate::pty::PtyService>,
     owner: String,
-    events_tx: mpsc::UnboundedSender<DaemonEvent>,
-    events_rx: Arc<tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<DaemonEvent>>>>,
+    events_tx: mpsc::Sender<DaemonEvent>,
+    events_rx: std::sync::Mutex<Option<mpsc::Receiver<DaemonEvent>>>,
 }
 
 impl LocalSessionPort {
@@ -6104,12 +6224,12 @@ impl LocalSessionPort {
     }
 
     pub fn new_with_owner(service: Arc<crate::pty::PtyService>, owner: String) -> Self {
-        let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let (events_tx, events_rx) = crate::pty::output_channel();
         Self {
             service,
             owner,
             events_tx,
-            events_rx: Arc::new(tokio::sync::Mutex::new(Some(events_rx))),
+            events_rx: std::sync::Mutex::new(Some(events_rx)),
         }
     }
 }
@@ -6133,14 +6253,12 @@ impl SessionPort for LocalSessionPort {
         .map_err(|error| format!("open PTY task failed: {error}"))?
     }
 
-    async fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
-        // A write waits while the child does not read, so it runs outside the runtime workers.
-        let service = Arc::clone(&self.service);
-        let session_id = session_id.to_string();
-        let data = data.to_vec();
-        tokio::task::spawn_blocking(move || service.write(&session_id, &data))
-            .await
-            .map_err(|error| format!("write PTY task failed: {error}"))?
+    async fn write(
+        &self,
+        session_id: &str,
+        data: Arc<[u8]>,
+    ) -> Result<crate::pty::WriteCompletion, String> {
+        self.service.write(session_id, data)
     }
 
     async fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -6163,18 +6281,12 @@ impl SessionPort for LocalSessionPort {
     }
 
     async fn get_events(&self) -> mpsc::Receiver<DaemonEvent> {
-        let (tx, rx) = mpsc::channel(128);
-        let mut events_rx = self.events_rx.lock().await;
-        if let Some(mut source) = events_rx.take() {
-            tokio::spawn(async move {
-                while let Some(event) = source.recv().await {
-                    if tx.send(event).await.is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-        rx
+        self.events_rx
+            .lock()
+            // default: the slot holds one receiver and taking it cannot leave it inconsistent.
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .expect("one surface task consumes the events of a session port")
     }
 }
 

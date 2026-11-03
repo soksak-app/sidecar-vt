@@ -55,16 +55,16 @@ fn an_explicit_shell_must_be_an_executable_absolute_path() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_session_shell_starts_as_a_login_shell() {
     let _lock = native_pty_test_lock();
     let service = PtyService::new(events_test::TestEvents::new().handle());
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
     let session = service
         .open_shell("", "/bin/sh", None, 80, 24, tx)
         .expect("open a login shell session");
     service
-        .write(&session, b"printf 'ARGV0=%s\\n' \"$0\"\n")
+        .write(&session, &b"printf 'ARGV0=%s\\n' \"$0\"\n"[..])
         .expect("write to the shell");
     let mut output = String::new();
     let found = timeout(Duration::from_secs(10), async {
@@ -87,7 +87,7 @@ async fn a_session_shell_starts_as_a_login_shell() {
 /// Collects output until it satisfies the predicate. If it is not satisfied in time, returns false
 /// with the output collected so far.
 async fn collect_until(
-    rx: &mut tokio::sync::mpsc::UnboundedReceiver<DaemonEvent>,
+    rx: &mut tokio::sync::mpsc::Receiver<DaemonEvent>,
     output: &mut String,
     predicate: impl Fn(&str) -> bool,
 ) -> bool {
@@ -131,7 +131,7 @@ fn startup_directory(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
     directory
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_zsh_session_reads_the_user_startup_files_and_reports_prompt_and_command_marks() {
     let _lock = native_pty_test_lock();
     let home = startup_directory(
@@ -149,7 +149,7 @@ async fn a_zsh_session_reads_the_user_startup_files_and_reports_prompt_and_comma
             "ZDOTDIR".to_string(),
             Some(home.clone().into_os_string()),
         )]);
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
     let opened = service.open_shell("", "/bin/zsh", None, 80, 24, tx);
     let session = opened.expect("open a zsh session");
     let mut output = String::new();
@@ -160,7 +160,7 @@ async fn a_zsh_session_reads_the_user_startup_files_and_reports_prompt_and_comma
     service
         .write(
             &session,
-            b"print -r -- \"STATE=$ZDOTDIR|$ZSHENV_READ$ZPROFILE_READ$ZSHRC_READ$ZLOGIN_READ|${SOKSAK_ZSH_ZDOTDIR-unset}\"\n"
+            &b"print -r -- \"STATE=$ZDOTDIR|$ZSHENV_READ$ZPROFILE_READ$ZSHRC_READ$ZLOGIN_READ|${SOKSAK_ZSH_ZDOTDIR-unset}\"\n"[..]
         )
         .unwrap();
     let state = format!("STATE={}|1111|unset\r\n", home.display());
@@ -176,7 +176,7 @@ async fn a_zsh_session_reads_the_user_startup_files_and_reports_prompt_and_comma
         "zsh did not report {expected:?} in order: {output:?}"
     );
     output.clear();
-    service.write(&session, b"false\n").unwrap();
+    service.write(&session, &b"false\n"[..]).unwrap();
     let failed = collect_until(&mut rx, &mut output, |text| {
         in_order(
             text,
@@ -192,7 +192,7 @@ async fn a_zsh_session_reads_the_user_startup_files_and_reports_prompt_and_comma
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_reports_marks() {
     let _lock = native_pty_test_lock();
     // Appends the user's PROMPT_COMMAND, as macOS recommends.
@@ -208,7 +208,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
             "HOME".to_string(),
             Some(home.clone().into_os_string()),
         )]);
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
     let opened = service.open_shell("", "/bin/bash", None, 80, 24, tx);
     let session = opened.expect("open a bash session");
     let mut output = String::new();
@@ -226,7 +226,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
     service
         .write(
             &session,
-            b"printf 'STATE=%s|%s|%s|%s\\n' \"$0\" \"$PROFILE_READ$USER_HOOK_RAN\" \"${SOKSAK_BASH_INTEGRATION-unset}\" \"$(env | grep -c '^PROMPT_COMMAND=')\"\n"
+            &b"printf 'STATE=%s|%s|%s|%s\\n' \"$0\" \"$PROFILE_READ$USER_HOOK_RAN\" \"${SOKSAK_BASH_INTEGRATION-unset}\" \"$(env | grep -c '^PROMPT_COMMAND=')\"\n"[..]
         )
         .unwrap();
     let expected = [
@@ -241,7 +241,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
         "bash did not report {expected:?} in order: {output:?}"
     );
     output.clear();
-    service.write(&session, b"false\n").unwrap();
+    service.write(&session, &b"false\n"[..]).unwrap();
     let failed = collect_until(&mut rx, &mut output, |text| {
         in_order(
             text,
@@ -259,9 +259,11 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
     );
     output.clear();
     // The trap does not change the last argument ($_) of the previous command.
-    service.write(&session, b"true last-argument\n").unwrap();
     service
-        .write(&session, b"printf 'LAST=%s\\n' \"$_\"\n")
+        .write(&session, &b"true last-argument\n"[..])
+        .unwrap();
+    service
+        .write(&session, &b"printf 'LAST=%s\\n' \"$_\"\n"[..])
         .unwrap();
     let kept = collect_until(&mut rx, &mut output, |text| {
         in_order(
@@ -273,7 +275,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
     assert!(kept, "the trap changed $_: {output:?}");
     output.clear();
     // An empty input line is not a command.
-    service.write(&session, b"\n").unwrap();
+    service.write(&session, &b"\n"[..]).unwrap();
     let empty = collect_until(&mut rx, &mut output, |text| {
         text.contains("\x1b]133;A;redraw=last\x07")
     })
@@ -290,7 +292,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_bash_debug_trap_from_the_startup_files_is_kept_and_no_marks_are_reported() {
     let _lock = native_pty_test_lock();
     let home = startup_directory(
@@ -302,11 +304,11 @@ async fn a_bash_debug_trap_from_the_startup_files_is_kept_and_no_marks_are_repor
             "HOME".to_string(),
             Some(home.clone().into_os_string()),
         )]);
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
     let opened = service.open_shell("", "/bin/bash", None, 80, 24, tx);
     let session = opened.expect("open a bash session");
     service
-        .write(&session, b"printf 'TRAP=%s\\n' \"$(trap -p DEBUG)\"\n")
+        .write(&session, &b"printf 'TRAP=%s\\n' \"$(trap -p DEBUG)\"\n"[..])
         .unwrap();
     let mut output = String::new();
     let shown = collect_until(&mut rx, &mut output, |text| {
@@ -322,7 +324,7 @@ async fn a_bash_debug_trap_from_the_startup_files_is_kept_and_no_marks_are_repor
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_resize_during_bash_startup_does_not_report_a_command_at_the_first_prompt() {
     let _lock = native_pty_test_lock();
     let home = startup_directory(
@@ -334,7 +336,7 @@ async fn a_resize_during_bash_startup_does_not_report_a_command_at_the_first_pro
             "HOME".to_string(),
             Some(home.clone().into_os_string()),
         )]);
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
     let opened = service.open_shell("", "/bin/bash", None, 80, 24, tx);
     let session = opened.expect("open a bash session");
     // The app sends the surface size right after it opens the session. SIGWINCH arrives while the
@@ -367,18 +369,18 @@ fn a_start_directory_must_be_an_existing_absolute_directory() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_session_starts_in_the_requested_directory() {
     let _lock = native_pty_test_lock();
     let directory = startup_directory("soksak-start-directory-test", &[]);
     let directory = std::fs::canonicalize(&directory).unwrap();
     let service = PtyService::new(events_test::TestEvents::new().handle());
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
     let session = service
         .open_shell("", "/bin/sh", Some(directory.to_str().unwrap()), 80, 24, tx)
         .expect("open a shell session");
     service
-        .write(&session, b"printf 'PWD=%s\\n' \"$(pwd -P)\"\n")
+        .write(&session, &b"printf 'PWD=%s\\n' \"$(pwd -P)\"\n"[..])
         .unwrap();
     let mut output = String::new();
     let expected = format!("PWD={}\r\n", directory.display());
@@ -418,14 +420,14 @@ async fn reports_its_directory(shell: &str, variable: &str, files: &[(&str, &str
             variable.to_string(),
             Some(home.clone().into_os_string()),
         )]);
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
     let opened = service.open_shell("", shell, Some(start.to_str().unwrap()), 80, 24, tx);
     let session = opened.expect("open a shell session");
     let expected = directory_uri(&start);
     let mut output = String::new();
     let first = collect_until(&mut rx, &mut output, |text| text.contains(&expected)).await;
     // After a directory change, the shell reports the new directory before the next prompt.
-    service.write(&session, b"cd /\n").unwrap();
+    service.write(&session, &b"cd /\n"[..]).unwrap();
     let changed = collect_until(&mut rx, &mut output, |text| {
         in_order(
             text,
@@ -439,12 +441,12 @@ async fn reports_its_directory(shell: &str, variable: &str, files: &[(&str, &str
     assert!(changed, "{shell} did not report / after cd: {output:?}");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn zsh_reports_its_working_directory_before_each_prompt() {
     reports_its_directory("/bin/zsh", "ZDOTDIR", &[(".zshrc", "PS1='T> '\n")]).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn bash_reports_its_working_directory_before_each_prompt() {
     reports_its_directory("/bin/bash", "HOME", &[(".bash_profile", "PS1='T> '\n")]).await;
 }

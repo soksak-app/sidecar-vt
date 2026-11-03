@@ -5,15 +5,18 @@
 
 use crate::events::{Events, Level, Subject};
 use crate::platform::pty::{
-    KillResult, kill_process_group, pending_input, process_group_leader, wait_for_exit,
+    KillResult, kill_process_group, master_stream, pending_input, process_group_leader,
+    wait_for_exit,
 };
 use crate::protocol::DaemonEvent;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::{ErrorKind, Read, Write};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::thread;
+use tokio::io::unix::AsyncFd;
+use tokio::sync::{Notify, mpsc, oneshot};
 use uuid::Uuid;
 
 /// The shell path that the setting value of the request points to. `login` is the login shell of
@@ -51,6 +54,38 @@ pub fn resolve_directory(request: &str) -> Result<String, String> {
     Ok(request.to_string())
 }
 
+/// The most bytes that one read of the session takes from the PTY.
+const OUTPUT_CHUNK_BYTES: usize = 64 * 1024;
+/// The chunks of output that the engine has not consumed which a session holds. A full channel
+/// stops reads and nothing else, so the program waits in its own write and no output is dropped.
+const OUTPUT_CHUNKS: usize = 16;
+
+/// The channel through which a session delivers its output and its end to the one surface that
+/// consumes it.
+pub fn output_channel() -> (mpsc::Sender<DaemonEvent>, mpsc::Receiver<DaemonEvent>) {
+    mpsc::channel(OUTPUT_CHUNKS)
+}
+
+/// The result of one write: `Ok` means that the master accepted every byte. A canonical tty with no
+/// complete line can accept and discard bytes, so it does not state that the program read them.
+pub type WriteCompletion = oneshot::Receiver<Result<(), String>>;
+
+/// A completion that already holds its result, for a write that never reached the queue.
+pub fn write_completed(result: Result<(), String>) -> WriteCompletion {
+    let (sender, completion) = oneshot::channel();
+    // default: the receiver is held right here, so this send cannot fail.
+    let _ = sender.send(result);
+    completion
+}
+
+/// One write in the queue of a session.
+struct QueuedWrite {
+    data: Arc<[u8]>,
+    /// The bytes that the master has accepted.
+    written: usize,
+    done: oneshot::Sender<Result<(), String>>,
+}
+
 /// The PTY transfer state measured at one point in time. pending is the number of input bytes that
 /// the master wrote and the child has not read yet, and written is the cumulative number of child
 /// output bytes that the session reader has read so far. One measurement round trip returns both
@@ -76,21 +111,26 @@ struct Session {
     owner: String,
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     process_group: Option<i32>,
-    writer: Mutex<Option<Box<dyn Write + Send>>>,
+    /// The queue of writes that the I/O task consumes. None once the writer is closed.
+    input: Mutex<Option<mpsc::UnboundedSender<QueuedWrite>>>,
     child: Mutex<SessionChild>,
     /// The reaper thread notifies after it records reaped of the child.
     child_reaped: Condvar,
     written_output: Mutex<u64>,
-    events: tokio::sync::mpsc::UnboundedSender<DaemonEvent>,
     closed: Mutex<bool>,
-    reader: Mutex<Option<thread::JoinHandle<()>>>,
-    reaper: Mutex<Option<thread::JoinHandle<()>>>,
+    /// Tells the I/O task that close started.
+    close: Notify,
+    reaper: Mutex<Option<std::thread::JoinHandle<()>>>,
     /// The writer of the service that opened the session, which records each write, each read and
     /// the end of the child.
     log: Events,
 }
 
 impl Session {
+    fn count_read(&self, size: usize) {
+        *self.recover(&self.written_output, "written_output") += size as u64;
+    }
+
     fn recovered<'a, T>(
         &self,
         field: &Mutex<T>,
@@ -206,7 +246,7 @@ impl PtyService {
         cwd: Option<&str>,
         cols: u16,
         rows: u16,
-        events: tokio::sync::mpsc::UnboundedSender<DaemonEvent>,
+        events: mpsc::Sender<DaemonEvent>,
     ) -> Result<String, String> {
         let mut command = CommandBuilder::new(program);
         self.apply_environment(&mut command);
@@ -223,7 +263,7 @@ impl PtyService {
         cwd: Option<&str>,
         cols: u16,
         rows: u16,
-        events: tokio::sync::mpsc::UnboundedSender<DaemonEvent>,
+        events: mpsc::Sender<DaemonEvent>,
     ) -> Result<String, String> {
         let mut command = CommandBuilder::new_default_prog();
         self.apply_environment(&mut command);
@@ -239,7 +279,7 @@ impl PtyService {
         cwd: Option<&str>,
         cols: u16,
         rows: u16,
-        events: tokio::sync::mpsc::UnboundedSender<DaemonEvent>,
+        events: mpsc::Sender<DaemonEvent>,
     ) -> Result<String, String> {
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -264,14 +304,15 @@ impl PtyService {
             .spawn_command(command)
             .map_err(|error| format!("spawn PTY session: {error}"))?;
         let process_group = process_group_leader(pair.master.as_ref());
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|error| format!("clone PTY reader: {error}"))?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|error| format!("take PTY writer: {error}"))?;
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|error| format!("start the PTY session task: {error}"))?;
+        let stream = {
+            let _reactor = runtime.enter();
+            AsyncFd::new(master_stream(pair.master.as_ref())?)
+                .map_err(|error| format!("register the PTY master: {error}"))?
+        };
+        let (input, input_queue) = mpsc::unbounded_channel();
+        let (child_reaped, reaped) = oneshot::channel();
 
         let session_id = Uuid::new_v4().to_string();
         let session = Arc::new(Session {
@@ -279,16 +320,15 @@ impl PtyService {
             owner: owner.to_string(),
             master: Mutex::new(Some(pair.master)),
             process_group,
-            writer: Mutex::new(Some(writer)),
+            input: Mutex::new(Some(input)),
             child: Mutex::new(SessionChild {
                 child,
                 reaped: None,
             }),
             child_reaped: Condvar::new(),
             written_output: Mutex::new(0),
-            events,
             closed: Mutex::new(false),
-            reader: Mutex::new(None),
+            close: Notify::new(),
             reaper: Mutex::new(None),
             log: self.log.clone(),
         });
@@ -306,35 +346,45 @@ impl PtyService {
                 "pid": session.recover(&session.child, "child").child.process_id(),
             }),
         );
-        let reader_handle = crate::thread::start(&self.log, "pty-reader", move || {
-            read_output(session, reader)
-        })?;
-        // The handle is installed after the session is published. Close separates its join from the
-        // request path, so a stalled PTY reader cannot block a later session open.
-        let session = self.sessions().get(&session_id).cloned().unwrap();
-        *session.recover(&session.reader, "reader") = Some(reader_handle);
+        runtime.spawn(session_io(SessionIo {
+            session: session.clone(),
+            stream,
+            input_queue,
+            output: events,
+            reaped,
+        }));
         let session_for_reaper = session.clone();
         let reaper_handle = crate::thread::start(&self.log, "pty-reaper", move || {
-            reap_child(session_for_reaper)
+            reap_child(session_for_reaper, child_reaped)
         })?;
         *session.recover(&session.reaper, "reaper") = Some(reaper_handle);
 
         Ok(session_id)
     }
 
-    /// Writes `data` to the session. The surface that sends it records the write as a replay input.
-    pub fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
+    /// Queues `data` for the session and returns without waiting for the program. The surface that
+    /// sends it records the write as a replay input when the completion holds its result.
+    pub fn write(
+        &self,
+        session_id: &str,
+        data: impl Into<Arc<[u8]>>,
+    ) -> Result<WriteCompletion, String> {
         let session = self.session(session_id)?;
         if *session.recover(&session.closed, "closed") {
             return Err("session is closed".into());
         }
-
+        let (done, completion) = oneshot::channel();
         session
-            .recover(&session.writer, "writer")
-            .as_mut()
+            .recover(&session.input, "input")
+            .as_ref()
             .ok_or_else(|| "session writer is closed".to_string())?
-            .write_all(data)
-            .map_err(|error| format!("write PTY: {error}"))
+            .send(QueuedWrite {
+                data: data.into(),
+                written: 0,
+                done,
+            })
+            .map_err(|_| "session writer is closed".to_string())?;
+        Ok(completion)
     }
 
     pub fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -382,13 +432,15 @@ impl PtyService {
             }
             *closed = true;
         }
-        // The child ends before the writer is taken: a write that waits for a child that does not
-        // read holds the writer and ends only when the child ends.
+        session.close.notify_one();
         let kill_result = {
             let process_group_result = kill_process_group(session.process_group);
             if let (Ok(result), Some(group)) = (&process_group_result, session.process_group) {
                 record_kill(&session, "process group", group, *result);
             }
+            // A process with unread terminal output exits only after that output drains or the
+            // master closes, so the master closes before the wait for the child.
+            session.recover(&session.master, "master").take();
             // A signal to the process group may not reach the child, so SIGKILL is sent to the
             // child by pid, and this returns after the reaper thread reaps the child. The reaper
             // thread waits without holding the child lock and reaps while holding this lock, so a
@@ -412,21 +464,14 @@ impl PtyService {
                 (Ok(_), Ok(())) => Ok(()),
             }
         };
-        session.recover(&session.writer, "writer").take();
-        session.recover(&session.master, "master").take();
-        let reader = session.recover(&session.reader, "reader").take();
+        session.recover(&session.input, "input").take();
         let reaper = session.recover(&session.reaper, "reaper").take();
         let log = session.log.clone();
-        // The threads end without a panic (the entrance records one), so the join fails only when
+        // The thread ends without a panic (the entrance records one), so the join fails only when
         // the entrance itself failed.
         let joined = crate::thread::start(&log, "pty-joiner", {
             let log = log.clone();
             move || {
-                if let Some(reader) = reader
-                    && reader.join().is_err()
-                {
-                    log.record_error("pty close", "the reader thread panicked");
-                }
                 if let Some(reaper) = reaper
                     && reaper.join().is_err()
                 {
@@ -484,47 +529,192 @@ impl PtyService {
     }
 }
 
-fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
-    let mut buffer = [0u8; 8192];
-    loop {
-        match reader.read(&mut buffer) {
-            Ok(0) => {
-                session.log.emit_for(
-                    Level::Info,
-                    "sidecar.vt.pty_eof",
-                    Subject::session(&session.id, &[]),
-                    &serde_json::json!({}),
-                );
-                break;
+/// What the I/O task of a session owns. The session keeps the master for resize and for the
+/// measurement, and the task owns a non-blocking duplicate of it.
+struct SessionIo {
+    session: Arc<Session>,
+    stream: AsyncFd<File>,
+    input_queue: mpsc::UnboundedReceiver<QueuedWrite>,
+    output: mpsc::Sender<DaemonEvent>,
+    reaped: oneshot::Receiver<Result<(), String>>,
+}
+
+/// Reads and writes one session. It reads only while it holds a permit of the output channel, so a
+/// consumer that falls behind stops reads and nothing else, and it writes the queued input in order
+/// whenever the master accepts bytes. It ends at the end of the child or at close.
+async fn session_io(mut io: SessionIo) {
+    let mut queue = VecDeque::<QueuedWrite>::new();
+    let mut permit = None;
+    let mut reading = true;
+    let mut consumer_ended = false;
+    let mut input_open = true;
+    let mut buffer = vec![0; OUTPUT_CHUNK_BYTES];
+    let session = io.session.clone();
+    let ended = loop {
+        tokio::select! {
+            reserved = io.output.clone().reserve_owned(), if permit.is_none() && reading && !consumer_ended => {
+                match reserved {
+                    Ok(reserved) => permit = Some(reserved),
+                    Err(_) => consumer_ended = true,
+                }
             }
-            Ok(size) => {
-                let data = buffer[..size].to_vec();
-                *session.recover(&session.written_output, "written_output") += size as u64;
-                broadcast(
-                    &session,
-                    DaemonEvent::Output {
-                        session_id: session.id.clone(),
-                        data,
-                    },
-                );
+            ready = io.stream.readable(), if reading && (permit.is_some() || consumer_ended) => {
+                let mut ready = match ready {
+                    Ok(ready) => ready,
+                    Err(error) => {
+                        read_failed(&session, &mut permit, &error);
+                        reading = false;
+                        continue;
+                    }
+                };
+                match ready.try_io(|stream| stream.get_ref().read(&mut buffer)) {
+                    Err(_would_block) => {}
+                    Ok(Ok(0)) => {
+                        session.log.emit_for(
+                            Level::Info,
+                            "sidecar.vt.pty_eof",
+                            Subject::session(&session.id, &[]),
+                            &serde_json::json!({}),
+                        );
+                        reading = false;
+                    }
+                    Ok(Ok(size)) => {
+                        session.count_read(size);
+                        match permit.take() {
+                            Some(reserved) => {
+                                reserved.send(DaemonEvent::Output {
+                                    session_id: session.id.clone(),
+                                    data: buffer[..size].to_vec(),
+                                });
+                            }
+                            None => record_dropped_output(&session, size),
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        read_failed(&session, &mut permit, &error);
+                        reading = false;
+                    }
+                }
             }
-            Err(error) => {
-                session.log.emit_for(
-                    Level::Info,
-                    "sidecar.vt.pty_read_error",
-                    Subject::session(&session.id, &[]),
-                    &serde_json::json!({"error": error.to_string()}),
-                );
-                broadcast(
-                    &session,
-                    DaemonEvent::Error {
-                        session_id: session.id.clone(),
-                        error: format!("read PTY: {error}"),
-                    },
-                );
-                break;
+            ready = io.stream.writable(), if !queue.is_empty() => {
+                let mut ready = match ready {
+                    Ok(ready) => ready,
+                    Err(error) => {
+                        for write in queue.drain(..) {
+                            complete_write(write, Err(format!("write PTY: {error}")));
+                        }
+                        continue;
+                    }
+                };
+                let write = queue.front_mut().expect("this branch runs only with queued input");
+                let (data, written) = (write.data.clone(), write.written);
+                match ready.try_io(|stream| stream.get_ref().write(&data[written..])) {
+                    Err(_would_block) => {}
+                    Ok(Ok(size)) => {
+                        write.written += size;
+                        if write.written == write.data.len() {
+                            let write = queue.pop_front().expect("the front write exists");
+                            complete_write(write, Ok(()));
+                        }
+                    }
+                    Ok(Err(error)) if error.kind() == ErrorKind::Interrupted => {}
+                    Ok(Err(error)) => {
+                        let write = queue.pop_front().expect("the front write exists");
+                        complete_write(write, Err(format!("write PTY: {error}")));
+                    }
+                }
             }
+            write = io.input_queue.recv(), if input_open => match write {
+                Some(write) => queue.push_back(write),
+                None => input_open = false,
+            },
+            reaped = &mut io.reaped => break Some(reaped),
+            _ = session.close.notified() => break None,
         }
+    };
+    session.recover(&session.input, "input").take();
+    drop(permit);
+    let SessionIo {
+        output,
+        stream,
+        reaped,
+        ..
+    } = io;
+    // A process with unread terminal output exits only after that output drains or the master
+    // closes, and the reads may have stopped, so the descriptor closes before the wait for the child.
+    drop(stream);
+    let wait_failed = match ended {
+        Some(reaped) => reaped,
+        None => reaped.await,
+    };
+    if let Ok(Err(error)) = wait_failed {
+        send_end(
+            &session,
+            &output,
+            DaemonEvent::Error {
+                session_id: session.id.clone(),
+                error,
+            },
+        )
+        .await;
+    }
+    send_end(
+        &session,
+        &output,
+        DaemonEvent::Exit {
+            session_id: session.id.clone(),
+        },
+    )
+    .await;
+}
+
+/// Hands a write its result. A surface that ended no longer holds the receiver, and the write has
+/// its record through the error of that surface.
+fn complete_write(write: QueuedWrite, result: Result<(), String>) {
+    // default: a surface that ended has no use for the result of its write.
+    let _ = write.done.send(result);
+}
+
+/// Records a read that failed and reports it to the consumer through the permit that the task holds.
+fn read_failed(
+    session: &Session,
+    permit: &mut Option<mpsc::OwnedPermit<DaemonEvent>>,
+    error: &std::io::Error,
+) {
+    session.log.emit_for(
+        Level::Info,
+        "sidecar.vt.pty_read_error",
+        Subject::session(&session.id, &[]),
+        &serde_json::json!({"error": error.to_string()}),
+    );
+    if let Some(reserved) = permit.take() {
+        reserved.send(DaemonEvent::Error {
+            session_id: session.id.clone(),
+            error: format!("read PTY: {error}"),
+        });
+    }
+}
+
+/// Records output that was read after the surface that consumes the session ended.
+fn record_dropped_output(session: &Session, bytes: usize) {
+    session.log.emit_for(
+        Level::Warn,
+        "sidecar.vt.buffer_dropped",
+        Subject::session(&session.id, &[]),
+        &serde_json::json!({
+            "buffer": "session events",
+            "count": 1,
+            "bytes": bytes,
+            "reason": "the surface that consumes the session ended",
+        }),
+    );
+}
+
+/// Sends an event of the end of a session. It waits until the consumer takes it or ends, and the
+/// task holds nothing of the PTY by then.
+async fn send_end(session: &Session, output: &mpsc::Sender<DaemonEvent>, event: DaemonEvent) {
+    if output.send(event).await.is_err() {
+        record_dropped_output(session, 0);
     }
 }
 
@@ -551,7 +741,7 @@ fn kill_child(child: &(dyn Child + Send)) -> Result<(i32, KillResult), String> {
 /// during that time close can take the lock and send a signal to the child. An ended child stays a
 /// zombie until it is reaped, so its pid is not reused. The reaping and its result are recorded
 /// under the same lock and notified with child_reaped.
-fn reap_child(session: Arc<Session>) {
+fn reap_child(session: Arc<Session>, child_reaped: oneshot::Sender<Result<(), String>>) {
     let process_id = session.recover(&session.child, "child").child.process_id();
     let exited = process_id
         .ok_or_else(|| "PTY child has no process id".to_string())
@@ -576,7 +766,7 @@ fn reap_child(session: Arc<Session>) {
         result
     };
     session.child_reaped.notify_all();
-    if let Err(error) = result {
+    if let Err(error) = &result {
         // The record is stored whether or not a surface still consumes the events.
         session.log.emit_for(
             Level::Error,
@@ -584,20 +774,10 @@ fn reap_child(session: Arc<Session>) {
             Subject::session(&session.id, &[]),
             &serde_json::json!({"error": error}),
         );
-        broadcast(
-            &session,
-            DaemonEvent::Error {
-                session_id: session.id.clone(),
-                error,
-            },
-        );
     }
-    broadcast(
-        &session,
-        DaemonEvent::Exit {
-            session_id: session.id.clone(),
-        },
-    );
+    // default: the I/O task ends only after it received this result, except when the runtime that
+    // ran it stopped, and then nothing consumes the session.
+    let _ = child_reaped.send(result);
 }
 
 /// Waits for the child of the session to exit. A build with the fault-injection feature fails the
@@ -642,26 +822,6 @@ fn record_kill(session: &Session, target: &str, id: i32, result: KillResult) {
             "result": result.name(),
         }),
     );
-}
-
-fn broadcast(session: &Session, event: DaemonEvent) {
-    if let Err(unsent) = session.events.send(event) {
-        let bytes = match &unsent.0 {
-            DaemonEvent::Output { data, .. } => data.len(),
-            _ => 0,
-        };
-        session.log.emit_for(
-            Level::Warn,
-            "sidecar.vt.buffer_dropped",
-            Subject::session(&session.id, &[]),
-            &serde_json::json!({
-                "buffer": "session events",
-                "count": 1,
-                "bytes": bytes,
-                "reason": "the surface that consumes the session ended",
-            }),
-        );
-    }
 }
 
 #[cfg(test)]

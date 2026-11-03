@@ -85,6 +85,7 @@ One session has one I/O task. The task owns a non-blocking duplicate of the PTY 
 | Close and reap at the same time | Close decides, and `Exit` follows once |
 | Second close | Returns the idempotent result of the first |
 | Bytes written to the program by closing | None |
+| Master | Both descriptors close before the wait for the child, because a process with unread terminal output exits only after that output drains or the master closes |
 | Child and jobs | SIGHUP to the child, so a shell passes it to its jobs; up to 250 ms for the reaper; then SIGKILL to a remaining child and to the process group. A job started with `nohup` or `disown` keeps running |
 
 The decision follows the common form of terminal implementations: output stays lossless, the reader stops at a bound, and writing is separate from reading. The objections that were answered:
