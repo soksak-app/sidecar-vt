@@ -594,6 +594,9 @@ async fn session_io(mut io: SessionIo) {
     let mut input_open = true;
     let mut held = false;
     let mut held_report = None;
+    // A write to a master whose slave no process holds fails with EIO. That happens before the
+    // reaper reports the end of the child, so the queue waits for that report or for close.
+    let mut hung_up = false;
     let mut buffer = vec![0; OUTPUT_CHUNK_BYTES];
     let session = io.session.clone();
     let ended = loop {
@@ -665,7 +668,7 @@ async fn session_io(mut io: SessionIo) {
                     }
                 }
             }
-            ready = io.stream.writable(), if !queue.is_empty() => {
+            ready = io.stream.writable(), if !queue.is_empty() && !hung_up => {
                 let mut ready = match ready {
                     Ok(ready) => ready,
                     Err(error) => {
@@ -688,6 +691,9 @@ async fn session_io(mut io: SessionIo) {
                         }
                     }
                     Ok(Err(error)) if error.kind() == ErrorKind::Interrupted => {}
+                    Ok(Err(error)) if error.raw_os_error() == Some(nix::errno::Errno::EIO as i32) => {
+                        hung_up = true;
+                    }
                     Ok(Err(error)) => {
                         let write = queue.pop_front().expect("the front write exists");
                         complete_write(&session, write, Err(format!("write PTY: {error}")));
@@ -707,12 +713,45 @@ async fn session_io(mut io: SessionIo) {
     let SessionIo {
         output,
         stream,
+        mut input_queue,
         reaped,
         ..
     } = io;
+    input_queue.close();
+    while let Ok(write) = input_queue.try_recv() {
+        queue.push_back(write);
+    }
+    let reason = if ended.is_some() {
+        "child exited"
+    } else {
+        "session closed"
+    };
+    for write in queue.drain(..) {
+        complete_write(&session, write, Err(reason.to_string()));
+    }
+    // The end of the child leaves its last output in the terminal.
+    let last_output = if ended.is_some() {
+        read_remaining_output(&session, stream.get_ref(), &mut buffer)
+    } else {
+        0
+    };
     // A process with unread terminal output exits only after that output drains or the master
-    // closes, and the reads may have stopped, so the descriptor closes before the wait for the child.
+    // closes, and the reads may have stopped, so the descriptors close before the wait for the child.
+    session.recover(&session.master, "master").take();
     drop(stream);
+    if last_output > 0 {
+        buffer.truncate(last_output);
+        send_last_output(
+            &session,
+            &output,
+            DaemonEvent::Output {
+                session_id: session.id.clone(),
+                data: buffer,
+            },
+            last_output,
+        )
+        .await;
+    }
     let wait_failed = match ended {
         Some(reaped) => reaped,
         None => reaped.await,
@@ -747,6 +786,56 @@ fn complete_write(session: &Session, write: QueuedWrite, result: Result<(), Stri
         .fetch_sub(write.data.len() - write.written, Ordering::AcqRel);
     // default: a surface that ended has no use for the result of its write.
     let _ = write.done.send(result);
+}
+
+/// Reads the output that remains in the terminal after the end of the child, until a read returns 0
+/// or would block or the buffer is full, and returns its size. Bytes that a job of the session
+/// writes later are not read: that write fails with EIO or the hangup ends the job.
+fn read_remaining_output(session: &Session, stream: &File, buffer: &mut [u8]) -> usize {
+    let mut stream = stream;
+    let mut read = 0;
+    while read < buffer.len() {
+        match stream.read(&mut buffer[read..]) {
+            Ok(0) => break,
+            Ok(size) => {
+                session.count_read(size);
+                read += size;
+            }
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == ErrorKind::WouldBlock => break,
+            // Reading the master after the last slave closed can fail with EIO, which is its end.
+            Err(error) if error.raw_os_error() == Some(nix::errno::Errno::EIO as i32) => break,
+            Err(error) => {
+                session.log.emit_for(
+                    Level::Info,
+                    "sidecar.vt.pty_read_error",
+                    Subject::session(&session.id, &[]),
+                    &serde_json::json!({"error": error.to_string()}),
+                );
+                break;
+            }
+        }
+    }
+    read
+}
+
+/// Sends the last output of a child. A close that comes while the consumer holds no free slot ends
+/// the wait, and the bytes that were read and not sent are recorded.
+async fn send_last_output(
+    session: &Session,
+    output: &mpsc::Sender<DaemonEvent>,
+    event: DaemonEvent,
+    bytes: usize,
+) {
+    tokio::select! {
+        biased;
+        sent = output.send(event) => {
+            if sent.is_err() {
+                record_dropped_output(session, bytes);
+            }
+        }
+        _ = session.close.notified() => record_dropped_output(session, bytes),
+    }
 }
 
 /// Records a read that failed and reports it to the consumer through the permit that the task holds.
