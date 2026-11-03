@@ -1,5 +1,6 @@
 # Changelog
 
+- S151: A pointer point past the terminal region maps to the nearest cell instead of failing the input.
 - S150: The `view` event carries the grid of its frame.
 - S149: A flood of 45 seconds on the published 0.0.24 holds the sidecar at 47 MB and the application at 139 MB, against about 3 GB before the bound.
 - S148: Version 0.0.24, which carries S131 to S147.

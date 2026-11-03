@@ -2463,8 +2463,8 @@ async fn test_selection_release_emits_one_user_copy_event() {
 }
 
 /// A point past the last complete row or column of the region selects up to the right edge of the
-/// last row and the last column. The same holds for a point less than one device pixel past the
-/// region; a point farther out is an error.
+/// last row and the last column. The same holds for a point past the region: the page view follows
+/// a resize before the region does, so such a point is an ordinary input and not an error.
 #[tokio::test]
 async fn test_selection_in_the_region_padding_selects_to_the_last_edge() {
     let calls = Arc::new(Mutex::new(Calls::default()));
@@ -2510,17 +2510,12 @@ async fn test_selection_in_the_region_padding_selects_to_the_last_edge() {
     );
     assert_eq!(
         *cells.lock().unwrap(),
-        vec![(0, 0), (cols, rows - 1), (0, rows - 1)],
-        "the padding point selects to the right edge of the last cell and the band point the last row: {output}"
+        vec![(0, 0), (cols, rows - 1), (0, rows - 1), (0, rows - 1)],
+        "the padding point selects to the right edge of the last cell and a point past the region the last row: {output}"
     );
-    let errors: Vec<&str> = output
-        .lines()
-        .filter(|line| line.contains("outside the terminal region"))
-        .collect();
-    assert_eq!(
-        errors.len(),
-        1,
-        "only the point below the region is an error: {output}"
+    assert!(
+        !output.contains("selection coordinates"),
+        "a point past the region is not an error: {output}"
     );
 }
 
@@ -6665,7 +6660,7 @@ async fn mouse_without_an_input_identity_is_rejected() {
 /// one device pixel smaller than the view. A point in that band is not an error. A point farther
 /// out reports an error in a result that carries the inputId of that mouse operation.
 #[tokio::test]
-async fn a_mouse_point_in_the_snapping_band_is_accepted_and_a_failure_keeps_its_input_identity() {
+async fn a_mouse_point_past_the_region_is_accepted_and_a_failure_keeps_its_input_identity() {
     let request = |id: &str, y: f64| {
         serde_json::json!({"surface":"s1","body": {
             "operation":"mouse", "inputId":id, "phase":"move", "x":1.0, "y":y, "pressed":false,
@@ -6674,7 +6669,10 @@ async fn a_mouse_point_in_the_snapping_band_is_accepted_and_a_failure_keeps_its_
         .to_string()
             + "\n"
     };
-    let requests = request("band", 384.5) + &request("outside", 385.0) + &request("after", 1.0);
+    let requests = request("band", 384.5)
+        + &request("outside", 385.0)
+        + &request("negative", -1.0)
+        + &request("after", 1.0);
     let (output, _, _) = serve_scroll(None, &requests).await;
     let results = output
         .lines()
@@ -6691,10 +6689,11 @@ async fn a_mouse_point_in_the_snapping_band_is_accepted_and_a_failure_keeps_its_
         results,
         vec![
             (serde_json::json!("band"), serde_json::Value::Null),
+            (serde_json::json!("outside"), serde_json::Value::Null),
             (
-                serde_json::json!("outside"),
+                serde_json::json!("negative"),
                 serde_json::json!(
-                    "invalidParams: selection coordinates are outside the terminal region: 1,385"
+                    "invalidParams: selection coordinates must be finite and non-negative"
                 )
             ),
             (serde_json::json!("after"), serde_json::Value::Null),

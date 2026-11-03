@@ -2,6 +2,7 @@
 
 [English](features.md)
 
+- [o] S151 — P0: 터미널 영역을 벗어난 포인터 점은 가장 가까운 칸에 속한다. 입력: page view가 이미 네이티브 영역보다 커진 창 크기 변경 중의 hover 이동. 동작: 그 점이 `selection coordinates are outside the terminal region`로 실패하여 터미널이 오류로 표시했다. 기대: 그 점은 마지막 열이나 행에 속하고, 유한하지 않거나 음수인 점은 오류로 남는다. Red: 변경 전 mapping에서 `a_mouse_point_past_the_region_is_accepted_and_a_failure_keeps_its_input_identity`와 `test_selection_in_the_region_padding_selects_to_the_last_edge`가 실패했다. Green: 같은 test가 통과한다.
 - [o] S150 — P0: `view` 이벤트가 그 frame의 격자를 싣는다. 입력: 새 격자의 frame에서 그 격자의 `state` 이벤트보다 `view` 이벤트가 먼저 page에 도착한 경우. 동작: 이벤트에 격자가 없어 page가 마지막으로 아는 격자로 caret을 판정해 거부했다. 기대: `view`가 `rows`와 `cols`를 싣는다. Red: tracked test `a_frame_sends_its_view_when_the_cursor_or_the_scrollback_changes`가 `view["rows"].is_u64()`에서 실패했다. Green: 통과한다.
 - [o] S149 — P0: 공개된 release에서 flood의 footprint를 잰다. 입력: core 0.0.33, plugin terminal, 이 sidecar 0.0.24의 108열 17행 터미널에서 `yes`를 45초 실행했고, load average는 35에서 50이었다. 결과: sidecar footprint는 47 MB, host와 sidecar와 page의 합은 139 MB에 머물렀고, 한도를 두기 전에는 약 3 GB였다. Ctrl+C 뒤의 줄은 0.65 초 뒤에 나타났고 오류는 기록되지 않았다.
 - [o] S148 — P0: S131부터 S147까지 담은 VT release를 publish하고 registry에 올린 뒤 terminal plugin이 요구하게 한다. 결과: release run이 v0.0.24를 공개했고, registry가 그것을 올렸으며, terminal 0.0.36과 0.0.37이 그것을 요구한다.
