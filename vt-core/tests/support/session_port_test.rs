@@ -11,7 +11,6 @@ pub struct CallTracker {
     pub opens: Vec<String>,
     pub writes: Vec<(String, Vec<u8>)>,
     pub resizes: Vec<(String, u16, u16)>,
-    pub detaches: Vec<String>,
     pub closes: Vec<String>,
 }
 
@@ -22,7 +21,6 @@ impl FakeSessionPort {
                 opens: Vec::new(),
                 writes: Vec::new(),
                 resizes: Vec::new(),
-                detaches: Vec::new(),
                 closes: Vec::new(),
             })),
         }
@@ -47,12 +45,6 @@ impl SessionPort for FakeSessionPort {
     async fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
         let mut calls = self.calls.lock().await;
         calls.resizes.push((session_id.to_string(), cols, rows));
-        Ok(())
-    }
-
-    async fn detach(&self, session_id: &str) -> Result<(), String> {
-        let mut calls = self.calls.lock().await;
-        calls.detaches.push(session_id.to_string());
         Ok(())
     }
 

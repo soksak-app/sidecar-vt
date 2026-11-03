@@ -89,40 +89,23 @@ close_field!(poisoned_reader_handle_is_taken_by_close, reader);
 close_field!(poisoned_reaper_handle_is_taken_by_close, reaper);
 close_field!(poisoned_child_result_is_retained_by_close, child);
 
-async fn counter(field: &str) {
+#[tokio::test]
+async fn poisoned_written_count_continues_from_its_retained_value() {
     let events = TestEvents::new();
     let (_lock, _service, session, mut rx) = completed(&events).await;
-    let sequence = *session.next_sequence.lock().expect("initial sequence");
     let written = *session.written_output.lock().expect("initial output count");
-    match field {
-        "next_sequence" => poison(&session.next_sequence),
-        "written_output" => poison(&session.written_output),
-        other => panic!("unknown fixture counter {other}"),
-    }
+    poison(&session.written_output);
     read_output(
         session.clone(),
         Box::new(std::io::Cursor::new(b"after".to_vec())),
     );
     assert!(matches!(rx.recv().await.expect("continued output"),
-        DaemonEvent::Output { data, sequence: next, .. } if data == b"after" && next == sequence));
-    assert_eq!(
-        *session.next_sequence.lock().expect("continued sequence"),
-        sequence + 1
-    );
+        DaemonEvent::Output { data, .. } if data == b"after"));
     assert_eq!(
         *session.written_output.lock().expect("continued byte count"),
         written + 5
     );
-    reported_once(&events, &session, field);
-}
-
-#[tokio::test]
-async fn poisoned_sequence_continues_from_its_retained_value() {
-    counter("next_sequence").await;
-}
-#[tokio::test]
-async fn poisoned_written_count_continues_from_its_retained_value() {
-    counter("written_output").await;
+    reported_once(&events, &session, "written_output");
 }
 
 #[tokio::test]

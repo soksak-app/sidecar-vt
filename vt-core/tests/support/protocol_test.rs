@@ -134,10 +134,6 @@ impl Engine for FakeEngine {
     fn modes(&self) -> Modes {
         Modes::default()
     }
-
-    fn reset(&mut self) {
-        self.content.clear();
-    }
 }
 
 #[path = "session_port_test.rs"]

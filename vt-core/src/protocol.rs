@@ -798,7 +798,6 @@ pub trait Engine: Send + 'static {
         0
     }
     fn modes(&self) -> Modes;
-    fn reset(&mut self);
 }
 
 /// A neutral event passed between the engine and the service.
@@ -1181,19 +1180,9 @@ pub struct InlineImagePlacement {
 /// Event received from the daemon
 #[derive(Debug, Clone)]
 pub enum DaemonEvent {
-    Output {
-        session_id: String,
-        data: Vec<u8>,
-        sequence: i64,
-        truncated: bool,
-    },
-    Exit {
-        session_id: String,
-    },
-    Error {
-        session_id: String,
-        error: String,
-    },
+    Output { session_id: String, data: Vec<u8> },
+    Exit { session_id: String },
+    Error { session_id: String, error: String },
 }
 
 /// Session port: the abstract interface that communicates with the daemon. The shell and the start
@@ -1213,12 +1202,7 @@ pub trait SessionPort: Send + Sync {
     /// Writes `data` to the session. The surface task records the write as a replay input.
     async fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String>;
     async fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String>;
-    async fn detach(&self, session_id: &str) -> Result<(), String>;
     async fn close(&self, session_id: &str) -> Result<(), String>;
-    /// Attaches a new view to an existing session and replays the retained output.
-    async fn attach(&self, _session_id: &str, _from: i64) -> Result<String, String> {
-        Err("session attach is not supported".to_string())
-    }
     /// Measures the PTY transfer state at one point in time. pending is the number of input bytes
     /// that the master wrote and the child has not read yet, and written is the cumulative number
     /// of child output bytes that the reader has read. Because this is a measurement observation, a
@@ -1295,7 +1279,7 @@ enum SurfaceCommand {
     SessionClose {
         result: tokio::sync::oneshot::Sender<Result<(), String>>,
     },
-    SessionDetach,
+    ConnectionEnded,
     ImageResponse {
         body: Value,
         dispatched_at: Option<std::time::Instant>,
@@ -3901,15 +3885,11 @@ async fn surface_task(
                         let mut exited = false;
                         while let Ok(event) = daemon_events_rx.try_recv() {
                             match event {
-                                DaemonEvent::Output { session_id: ref received, data, truncated, .. }
+                                DaemonEvent::Output { session_id: ref received, data }
                                     if session_id.as_deref() == Some(received) => {
                                         queued_output = true;
                                         cursor_activity = Instant::now();
                                         last_cursor_frame = None;
-                                        if truncated {
-                                            crate::engine_trace::record(&log, &surface_id, || "reset".to_string());
-                                            engine.reset();
-                                        }
                                         crate::engine_trace::record(&log, &surface_id, || format!("feed {}", base64_encode(&data)));
                                         inputs.output(received, &data);
                                         engine.feed(&data);
@@ -4469,12 +4449,12 @@ async fn surface_task(
                         }
                         break;
                     }
-                    SurfaceCommand::SessionDetach => {
+                    SurfaceCommand::ConnectionEnded => {
                         if let Some(ref sid) = session_id
-                            && let Err(error) = session_port.detach(sid).await {
+                            && let Err(error) = session_port.close(sid).await {
                                 let response = json!({
                                     "surface": surface_id,
-                                    "body": {"error": format!("Detach failed: {error}")}
+                                    "body": {"error": format!("Close failed: {error}")}
                                 });
                                 if output_tx.reply(response).await.is_err() {
                                     return;
@@ -4595,15 +4575,11 @@ async fn surface_task(
             }
             Some(event) = daemon_events_rx.recv() => {
                 match event {
-                    DaemonEvent::Output { session_id: ref recv_sid, data, sequence: _, truncated } => {
+                    DaemonEvent::Output { session_id: ref recv_sid, data } => {
                         if let Some(ref sid) = session_id
                             && recv_sid == sid {
                                 cursor_activity = Instant::now();
                                 last_cursor_frame = None;
-                                if truncated {
-                                    crate::engine_trace::record(&log, &surface_id, || "reset".to_string());
-                                    engine.reset();
-                                }
                                 crate::engine_trace::record(&log, &surface_id, || format!("feed {}", base64_encode(&data)));
                                 inputs.output(sid, &data);
                                 engine.feed(&data);
@@ -4842,11 +4818,11 @@ where
 
         if n == 0 {
             if registry.is_none() {
-                // The surface actions of a connection that is not persistent are detached from
-                // their sessions and end.
+                // The surface actions of a connection that is not persistent close their sessions
+                // and end, because nothing can consume those sessions afterward.
                 for (key, tx) in &surface_txs {
                     if tx
-                        .send(Dispatch::internal(SurfaceCommand::SessionDetach))
+                        .send(Dispatch::internal(SurfaceCommand::ConnectionEnded))
                         .await
                         .is_err()
                     {
@@ -6120,7 +6096,6 @@ pub struct LocalSessionPort {
     owner: String,
     events_tx: mpsc::UnboundedSender<DaemonEvent>,
     events_rx: Arc<tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<DaemonEvent>>>>,
-    attachments: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
 }
 
 impl LocalSessionPort {
@@ -6135,7 +6110,6 @@ impl LocalSessionPort {
             owner,
             events_tx,
             events_rx: Arc::new(tokio::sync::Mutex::new(Some(events_rx))),
-            attachments: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 }
@@ -6152,16 +6126,11 @@ impl SessionPort for LocalSessionPort {
             .map(crate::pty::resolve_directory)
             .transpose()?;
         let events = self.events_tx.clone();
-        let (session_id, attachment_id) = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             service.open_shell(&owner, &shell, directory.as_deref(), cols, rows, events)
         })
         .await
-        .map_err(|error| format!("open PTY task failed: {error}"))??;
-        self.attachments
-            .lock()
-            .await
-            .insert(session_id.clone(), attachment_id);
-        Ok(session_id)
+        .map_err(|error| format!("open PTY task failed: {error}"))?
     }
 
     async fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
@@ -6178,31 +6147,12 @@ impl SessionPort for LocalSessionPort {
         self.service.resize(session_id, cols, rows)
     }
 
-    async fn detach(&self, session_id: &str) -> Result<(), String> {
-        if let Some(attachment_id) = self.attachments.lock().await.remove(session_id) {
-            self.service.detach(session_id, &attachment_id)?;
-        }
-        Ok(())
-    }
-
     async fn close(&self, session_id: &str) -> Result<(), String> {
-        self.attachments.lock().await.remove(session_id);
         let service = Arc::clone(&self.service);
         let session_id = session_id.to_string();
         tokio::task::spawn_blocking(move || service.close(&session_id))
             .await
             .map_err(|error| format!("close PTY task failed: {error}"))?
-    }
-
-    async fn attach(&self, session_id: &str, from: i64) -> Result<String, String> {
-        let attachment_id = self
-            .service
-            .attach(session_id, from, self.events_tx.clone())?;
-        self.attachments
-            .lock()
-            .await
-            .insert(session_id.to_string(), attachment_id.clone());
-        Ok(attachment_id)
     }
 
     async fn pty_measurement(

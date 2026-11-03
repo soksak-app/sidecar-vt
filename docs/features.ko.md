@@ -3,8 +3,8 @@
 [English](features.md)
 
 - [~] S131 — P0: 프로그램이 엔진의 소비보다 빨리 쓰는 출력은 service를 키우지 않는다. 입력: 터미널에서 약 20초 동안 `yes`. 동작: reader가 각 read를 무제한 channel로 보내 service가 약 3 GB에 이르렀다. 기대: `docs/spec/vt-core.md`의 PTY 출력과 입력 절의 계약. 남은 일: 하위 항목.
-  - [ ] S131-1 — P0: 세션은 ring과 attach 경로를 쥐지 않는다. 입력: flood가 8 KiB chunk 10,000개를 채운다. 동작: production 경로가 호출하지 않는 `PtyService::attach`를 위해 ring이 세션당 80 MB를 쥔다. 기대: `attach`, ring, `truncated`, 그 경로의 engine reset, `SessionPort::attach`, attachment map, bridge task가 없다.
-  - [ ] S131-2 — P0: I/O task 하나가 세션을 읽고 쓴다. 입력: 아무도 소비하지 않는 16 MiB 출력, echo하는 프로그램에 쓰는 4 MiB의 줄. 동작: reader가 전부 읽고 surface task가 write를 기다린다. 기대: 읽기가 64 KiB 16 chunk에서 멈추고, write가 deadlock 없이 끝나고, write 결과가 순서대로 오고, surface가 거기서 acknowledgement와 `pty_write` 기록을 보낸다.
+  - [o] S131-1 — P0: 세션은 ring과 attach 경로를 쥐지 않는다. 입력: flood가 8 KiB chunk 10,000개를 채운다. 동작: production 경로가 호출하지 않는 `PtyService::attach`를 위해 ring이 세션당 80 MB를 쥔다. 기대: `attach`, ring, `truncated`, 그 경로의 engine reset, `SessionPort::attach`, attachment map이 없다. Green: `output_that_the_consumer_reads_is_not_dropped`. Red에서는 ring이 버린 chunk를 보고했다. persistent가 아닌 연결은 끝날 때 자기 세션을 닫는다. 그 뒤 소비할 곳이 없기 때문이다.
+  - [ ] S131-2 — P0: I/O task 하나가 세션을 읽고 쓴다. 입력: 아무도 소비하지 않는 16 MiB 출력, echo하는 프로그램에 쓰는 4 MiB의 줄. 동작: reader가 전부 읽고 surface task가 write를 기다린다. 기대: 읽기가 64 KiB 16 chunk에서 멈추고, write가 deadlock 없이 끝나고, write 결과가 순서대로 오고, surface가 거기서 acknowledgement와 `pty_write` 기록을 보낸다. bridge task가 없다.
   - [ ] S131-3 — P0: queue의 입력에 상한이 있다. 입력: 읽지 않는 프로그램에 64 MiB를 넘는 write. 기대: 키와 붙여넣기는 명시적 오류로 거부되고, 엔진 응답은 받아들여지고 읽기가 멈추고, `input_held`가 멈춤과 재개를 보고하고, queue가 찬 동안 읽지 않는 프로그램에 interrupt가 닿는지 tracked test가 밝힌다. `Engine`의 doc comment는 엔진이 응답을 `EngineEvent::PtyWrite`로 돌려준다고 밝힌다.
   - [ ] S131-4 — P0: child 종료는 세션을 순서대로 끝낸다. 입력: 4 MiB를 쓰고 끝나는 child, queue의 입력. 동작: reaper가 `Exit`를 출력과 순서 없이 보내고, surface는 clock이 쥔 frame을 남기고 끝날 수 있다. 기대: 모든 chunk가 `Exit`보다 앞서고, queue의 입력이 `ok: false`로 끝나고, slave가 hangup되고, write와 resize가 각 오류를 돌려주고, 첫 close가 kill하고 기록하고, surface가 쥔 화면을 그린다.
   - [ ] S131-5 — P0: close는 명세의 표를 따른다. 입력: 표의 각 상태. 기대: 각 행의 test가 있고, close는 프로그램에 아무것도 쓰지 않는다.

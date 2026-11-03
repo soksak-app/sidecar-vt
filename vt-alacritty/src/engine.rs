@@ -1893,10 +1893,6 @@ impl Engine for AlacrittyEngine {
             alt_screen: mode.contains(TermMode::ALT_SCREEN),
         }
     }
-
-    fn reset(&mut self) {
-        *self = Self::new();
-    }
 }
 
 #[cfg(test)]

@@ -125,7 +125,7 @@ fn open(shell: &str, variable: &str, directory: &Path) -> Session {
     )]);
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", shell, None, 60, 12, tx);
-    let (id, _) = opened.expect("open a shell session");
+    let id = opened.expect("open a shell session");
     let mut engine = AlacrittyEngine::new();
     engine.resize(60, 12);
     Session {

@@ -1,8 +1,7 @@
 //! The in-process PTY session that the terminal service uses.
 //!
-//! The service owns one PTY and one VT stream per session. The attachment is intentionally not
-//! represented as a PTY handle. Dropping an attachment only stops the delivery to that client, and
-//! the session end is handled by an explicit close.
+//! The service owns one PTY and one VT stream per session, and one surface consumes the output of
+//! a session. The session end is handled by an explicit close.
 
 use crate::events::{Events, Level, Subject};
 use crate::platform::pty::{
@@ -10,7 +9,7 @@ use crate::platform::pty::{
 };
 use crate::protocol::DaemonEvent;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -52,10 +51,6 @@ pub fn resolve_directory(request: &str) -> Result<String, String> {
     Ok(request.to_string())
 }
 
-/// The chunks of output that a session keeps for a client that attaches later; the oldest chunk
-/// leaves when it is exceeded.
-const RETAINED_OUTPUT: usize = 10_000;
-
 /// The PTY transfer state measured at one point in time. pending is the number of input bytes that
 /// the master wrote and the child has not read yet, and written is the cumulative number of child
 /// output bytes that the session reader has read so far. One measurement round trip returns both
@@ -85,15 +80,11 @@ struct Session {
     child: Mutex<SessionChild>,
     /// The reaper thread notifies after it records reaped of the child.
     child_reaped: Condvar,
-    next_sequence: Mutex<i64>,
     written_output: Mutex<u64>,
-    output: Mutex<VecDeque<(i64, Vec<u8>)>>,
-    attachments: Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<DaemonEvent>>>,
+    events: tokio::sync::mpsc::UnboundedSender<DaemonEvent>,
     closed: Mutex<bool>,
     reader: Mutex<Option<thread::JoinHandle<()>>>,
     reaper: Mutex<Option<thread::JoinHandle<()>>>,
-    /// The chunks of output that the ring keeps.
-    retained_output: usize,
     /// The writer of the service that opened the session, which records each write, each read and
     /// the end of the child.
     log: Events,
@@ -153,7 +144,6 @@ impl Session {
 #[derive(Clone)]
 pub struct PtyService {
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
-    retained_output: usize,
     /// The variables set in the environment of each child before the shell integration and the
     /// locale read it; `None` removes the variable that the child would inherit.
     environment: Vec<(String, Option<OsString>)>,
@@ -188,16 +178,9 @@ impl PtyService {
     pub fn new(log: Events) -> Self {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
-            retained_output: RETAINED_OUTPUT,
             environment: Vec::new(),
             log,
         }
-    }
-
-    /// The service whose sessions keep `chunks` chunks of output in the ring.
-    pub fn with_retained_output(mut self, chunks: usize) -> Self {
-        self.retained_output = chunks;
-        self
     }
 
     /// The service whose children get `variables` in their environment: a `Some` value is set and a
@@ -224,7 +207,7 @@ impl PtyService {
         cols: u16,
         rows: u16,
         events: tokio::sync::mpsc::UnboundedSender<DaemonEvent>,
-    ) -> Result<(String, String), String> {
+    ) -> Result<String, String> {
         let mut command = CommandBuilder::new(program);
         self.apply_environment(&mut command);
         command.args(args);
@@ -241,7 +224,7 @@ impl PtyService {
         cols: u16,
         rows: u16,
         events: tokio::sync::mpsc::UnboundedSender<DaemonEvent>,
-    ) -> Result<(String, String), String> {
+    ) -> Result<String, String> {
         let mut command = CommandBuilder::new_default_prog();
         self.apply_environment(&mut command);
         command.env("SHELL", shell);
@@ -257,7 +240,7 @@ impl PtyService {
         cols: u16,
         rows: u16,
         events: tokio::sync::mpsc::UnboundedSender<DaemonEvent>,
-    ) -> Result<(String, String), String> {
+    ) -> Result<String, String> {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -291,7 +274,6 @@ impl PtyService {
             .map_err(|error| format!("take PTY writer: {error}"))?;
 
         let session_id = Uuid::new_v4().to_string();
-        let attachment_id = Uuid::new_v4().to_string();
         let session = Arc::new(Session {
             id: session_id.clone(),
             owner: owner.to_string(),
@@ -303,19 +285,13 @@ impl PtyService {
                 reaped: None,
             }),
             child_reaped: Condvar::new(),
-            next_sequence: Mutex::new(0),
             written_output: Mutex::new(0),
-            output: Mutex::new(VecDeque::with_capacity(self.retained_output)),
-            attachments: Mutex::new(HashMap::new()),
+            events,
             closed: Mutex::new(false),
             reader: Mutex::new(None),
             reaper: Mutex::new(None),
-            retained_output: self.retained_output,
             log: self.log.clone(),
         });
-        session
-            .recover(&session.attachments, "attachments")
-            .insert(attachment_id.clone(), events);
 
         self.sessions().insert(session_id.clone(), session.clone());
         session.log.emit_for(
@@ -343,64 +319,7 @@ impl PtyService {
         })?;
         *session.recover(&session.reaper, "reaper") = Some(reaper_handle);
 
-        Ok((session_id, attachment_id))
-    }
-
-    pub fn attach(
-        &self,
-        session_id: &str,
-        from: i64,
-        events: tokio::sync::mpsc::UnboundedSender<DaemonEvent>,
-    ) -> Result<String, String> {
-        let session = self.session(session_id)?;
-        let attachment_id = Uuid::new_v4().to_string();
-        let replay = {
-            let output = session.recover(&session.output, "output");
-            let oldest = output
-                .front()
-                .map(|(sequence, _)| *sequence)
-                // default: without retained output nothing was cut off.
-                .unwrap_or(from);
-            let truncated = from < oldest;
-            output
-                .iter()
-                .filter(|(sequence, _)| *sequence >= from.max(oldest))
-                .map(|(sequence, data)| {
-                    (
-                        *sequence,
-                        data.clone(),
-                        truncated && *sequence == from.max(oldest),
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
-        session
-            .recover(&session.attachments, "attachments")
-            .insert(attachment_id.clone(), events.clone());
-        for (sequence, data, truncated) in replay {
-            events
-                .send(DaemonEvent::Output {
-                    session_id: session_id.to_string(),
-                    data,
-                    sequence,
-                    truncated,
-                })
-                .map_err(|_| {
-                    session
-                        .recover(&session.attachments, "attachments")
-                        .remove(&attachment_id);
-                    "PTY attachment closed during replay".to_string()
-                })?;
-        }
-        Ok(attachment_id)
-    }
-
-    pub fn detach(&self, session_id: &str, attachment_id: &str) -> Result<(), String> {
-        let session = self.session(session_id)?;
-        session
-            .recover(&session.attachments, "attachments")
-            .remove(attachment_id);
-        Ok(())
+        Ok(session_id)
     }
 
     /// Writes `data` to the session. The surface that sends it records the write as a replay input.
@@ -581,38 +500,11 @@ fn read_output(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
             Ok(size) => {
                 let data = buffer[..size].to_vec();
                 *session.recover(&session.written_output, "written_output") += size as u64;
-                let sequence = {
-                    let mut next = session.recover(&session.next_sequence, "next_sequence");
-                    let sequence = *next;
-                    *next += 1;
-                    sequence
-                };
-                {
-                    let mut output = session.recover(&session.output, "output");
-                    output.push_back((sequence, data.clone()));
-                    while output.len() > session.retained_output {
-                        if let Some((_, left)) = output.pop_front() {
-                            session.log.emit_for(
-                                Level::Warn,
-                                "sidecar.vt.buffer_dropped",
-                                Subject::session(&session.id, &[]),
-                                &serde_json::json!({
-                                    "buffer": "output ring",
-                                    "count": 1,
-                                    "bytes": left.len(),
-                                    "reason": format!("the ring holds {} chunks", session.retained_output),
-                                }),
-                            );
-                        }
-                    }
-                }
                 broadcast(
                     &session,
                     DaemonEvent::Output {
                         session_id: session.id.clone(),
                         data,
-                        sequence,
-                        truncated: false,
                     },
                 );
             }
@@ -685,8 +577,7 @@ fn reap_child(session: Arc<Session>) {
     };
     session.child_reaped.notify_all();
     if let Err(error) = result {
-        // The record is stored whether or not a view is attached; a broadcast reaches only the
-        // attached views.
+        // The record is stored whether or not a surface still consumes the events.
         session.log.emit_for(
             Level::Error,
             "sidecar.vt.wait_failed",
@@ -754,12 +645,8 @@ fn record_kill(session: &Session, target: &str, id: i32, result: KillResult) {
 }
 
 fn broadcast(session: &Session, event: DaemonEvent) {
-    let mut attachments = session.recover(&session.attachments, "attachments");
-    let before = attachments.len();
-    attachments.retain(|_, sender| sender.send(event.clone()).is_ok());
-    let removed = before - attachments.len();
-    if removed > 0 {
-        let bytes = match &event {
+    if let Err(unsent) = session.events.send(event) {
+        let bytes = match &unsent.0 {
             DaemonEvent::Output { data, .. } => data.len(),
             _ => 0,
         };
@@ -768,10 +655,10 @@ fn broadcast(session: &Session, event: DaemonEvent) {
             "sidecar.vt.buffer_dropped",
             Subject::session(&session.id, &[]),
             &serde_json::json!({
-                "buffer": "broadcast",
-                "count": removed,
-                "bytes": bytes * removed,
-                "reason": "the receiver of the attachment was closed",
+                "buffer": "session events",
+                "count": 1,
+                "bytes": bytes,
+                "reason": "the surface that consumes the session ended",
             }),
         );
     }

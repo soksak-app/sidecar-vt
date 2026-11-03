@@ -38,7 +38,7 @@ async fn real_sessions_are_independent_and_close_removes_session() {
     let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx_a, mut rx_a) = tokio::sync::mpsc::unbounded_channel();
     let (tx_b, mut rx_b) = tokio::sync::mpsc::unbounded_channel();
-    let (a, _) = service
+    let a = service
         .open(
             "/bin/sh",
             &["-c".into(), "printf A".into()],
@@ -48,7 +48,7 @@ async fn real_sessions_are_independent_and_close_removes_session() {
             tx_a,
         )
         .expect("PTY setup failed; this is an environmental test failure");
-    let (b, _) = service
+    let b = service
         .open(
             "/bin/sh",
             &["-c".into(), "printf B".into()],
@@ -94,7 +94,7 @@ async fn repeated_short_lived_sessions_close_without_process_group_races() {
     let service = PtyService::new(events_test::TestEvents::new().handle());
     for index in 0..20 {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let (session, _) = service
+        let session = service
             .open(
                 "/bin/sh",
                 &["-c".into(), format!("printf short-{index}")],
@@ -115,64 +115,6 @@ async fn repeated_short_lived_sessions_close_without_process_group_races() {
     );
 }
 
-#[tokio::test]
-async fn three_real_sessions_reconnect_with_same_pid_and_retained_output() {
-    let _test_lock = lifecycle_test_lock().await;
-    let _native_test_lock = native_pty_test_lock();
-    let service = PtyService::new(events_test::TestEvents::new().handle());
-    let mut sessions = Vec::new();
-    for label in ["A", "B", "C"] {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let (session, attachment) = service
-            .open(
-                "/bin/sh",
-                &["-c".into(), format!("printf {label}")],
-                None,
-                80,
-                24,
-                tx,
-            )
-            .expect("PTY setup failed; real PTY errors must fail this test");
-        let pid = service.process_id(&session).expect("missing child pid");
-        let output = timeout(Duration::from_secs(2), async {
-            loop {
-                if let Some(DaemonEvent::Output { data, .. }) = rx.recv().await {
-                    break data;
-                }
-            }
-        })
-        .await
-        .expect("session output timeout");
-        service
-            .detach(&session, &attachment)
-            .expect("detach failed");
-        sessions.push((session, pid, output));
-    }
-    for (session, pid, output) in sessions {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let _attachment = service
-            .attach(&session, 0, tx)
-            .expect("reconnect attach failed");
-        assert_eq!(
-            service
-                .process_id(&session)
-                .expect("reconnected pid missing"),
-            pid
-        );
-        let replay = timeout(Duration::from_secs(2), async {
-            loop {
-                if let Some(DaemonEvent::Output { data, .. }) = rx.recv().await {
-                    break data;
-                }
-            }
-        })
-        .await
-        .expect("replay timeout");
-        assert_eq!(replay, output);
-        service.close(&session).expect("close failed");
-    }
-}
-
 // The contract for the bytes that the master wrote and the child has not read yet. A child that
 // does not read leaves every written byte pending. Writes happen after the child enables raw mode,
 // as a full-screen program that writes mouse reports does. In canonical mode, bytes before their
@@ -183,7 +125,7 @@ async fn pty_measurement_counts_master_written_bytes_a_non_reading_child_has_not
     let _native_test_lock = native_pty_test_lock();
     let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let (session, _) = service
+    let session = service
         .open(
             "/bin/sh",
             &["-c".into(), "stty raw; printf READY; sleep 30".into()],
@@ -244,7 +186,7 @@ async fn pty_measurement_drains_to_zero_as_the_child_reads() {
     let _native_test_lock = native_pty_test_lock();
     let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let (session, _) = service
+    let session = service
         .open(
             "/bin/sh",
             &[
@@ -306,7 +248,7 @@ async fn pty_measurement_rejects_unknown_and_closed_sessions() {
         "an unknown session must not report a measurement"
     );
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let (session, _) = service
+    let session = service
         .open(
             "/bin/sh",
             &["-c".into(), "sleep 30".into()],
@@ -333,7 +275,7 @@ async fn written_output_counts_exact_child_output_bytes() {
     let _native_test_lock = native_pty_test_lock();
     let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let (session, _) = service
+    let session = service
         .open(
             "/bin/sh",
             &["-c".into(), "stty -opost; printf MEASURED; sleep 30".into()],
@@ -396,7 +338,7 @@ async fn child_reads_exact_bytes_written_through_the_production_path() {
     let _native_test_lock = native_pty_test_lock();
     let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let (session, _) = service
+    let session = service
         .open(
             "/bin/sh",
             &["-c".into(), "stty -echo -opost; printf READY; cat".into()],

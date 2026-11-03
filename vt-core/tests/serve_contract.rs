@@ -305,10 +305,6 @@ impl Engine for MockEngine {
     fn modes(&self) -> Modes {
         self.custom_modes.clone().unwrap_or_default()
     }
-
-    fn reset(&mut self) {
-        self.feed_history.clear();
-    }
 }
 
 #[tokio::test]
@@ -367,7 +363,6 @@ struct Calls {
     echoes_enqueued: usize,
     timeline: Vec<TimelineEntry>,
     resizes: Vec<(String, u16, u16)>,
-    detaches: Vec<String>,
     closes: Vec<String>,
     pendings: Vec<String>,
 }
@@ -442,10 +437,9 @@ impl SessionPort for FakeSessionPort {
     }
 
     async fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
-        let sequence = {
+        {
             let mut calls = self.calls.lock().unwrap();
             calls.writes.push((session_id.to_string(), data.to_vec()));
-            let sequence = calls.writes.len() as i64;
             let writes_started = calls.writes.len();
             let writes_completed = calls.writes_completed;
             let echoes_enqueued = calls.echoes_enqueued;
@@ -458,22 +452,17 @@ impl SessionPort for FakeSessionPort {
                 writes_completed,
                 echoes_enqueued,
             });
-            sequence
-        };
+        }
         if data == b"\x1b]7;file:///tmp/project\x07" {
             let _ = self.event_tx.send(DaemonEvent::Output {
                 session_id: self.session_id.clone(),
                 data: data.to_vec(),
-                sequence: 0,
-                truncated: false,
             });
         }
         if self.echo_input.load(std::sync::atomic::Ordering::SeqCst) {
             let event = DaemonEvent::Output {
                 session_id: self.session_id.clone(),
                 data: data.to_vec(),
-                sequence,
-                truncated: false,
             };
             if self.deliver_echo_before_write_completes {
                 let ready_events = self.ready_events.lock().unwrap().clone();
@@ -530,15 +519,6 @@ impl SessionPort for FakeSessionPort {
             .unwrap()
             .resizes
             .push((session_id.to_string(), cols, rows));
-        Ok(())
-    }
-
-    async fn detach(&self, session_id: &str) -> Result<(), String> {
-        self.calls
-            .lock()
-            .unwrap()
-            .detaches
-            .push(session_id.to_string());
         Ok(())
     }
 
@@ -1458,8 +1438,6 @@ async fn ready_pty_echo_is_presented_with_the_transaction_preedit() {
     port.push_event(DaemonEvent::Output {
         session_id: "ready-echo".to_string(),
         data: "가가가가".as_bytes().to_vec(),
-        sequence: 1,
-        truncated: false,
     });
     let (next, _, _, _, _, _, baseline) = next_measured_frame_after(
         &mut lines,
@@ -2548,7 +2526,7 @@ async fn a_release_during_the_presentation_of_the_previous_release_waits_for_it(
     assert_eq!(ends, 2, "each gesture reports its end: {output}");
 }
 
-/// Test A-7: the close operation ends the session (it calls close, not detach)
+/// Test A-7: the close operation ends the session
 #[tokio::test]
 async fn test_a7_close_op_ends_the_session() {
     let calls = Arc::new(Mutex::new(Calls::default()));
@@ -2591,16 +2569,12 @@ async fn test_a7_close_op_ends_the_session() {
             .all(|message| message["surface"] == "s1")
     );
 
-    // Verifies that close was called and detach was not called
+    // Verifies that close was called
     let calls_lock = calls.lock().unwrap();
     assert_eq!(calls_lock.closes.len(), 1, "close not called exactly once");
     assert_eq!(
         calls_lock.closes[0], fake_session_id,
         "close session_id mismatch"
-    );
-    assert!(
-        calls_lock.detaches.is_empty(),
-        "detach should not be called for close op"
     );
 }
 
@@ -2629,16 +2603,12 @@ async fn test_a8_closed_surface_closes_session() {
 
     let _ = serve(engine_factory, reader, &mut writer, session_port_factory).await;
 
-    // Verifies that close was called and detach was not called
+    // Verifies that close was called
     let calls_lock = calls.lock().unwrap();
     assert_eq!(calls_lock.closes.len(), 1, "close not called exactly once");
     assert_eq!(
         calls_lock.closes[0], fake_session_id,
         "close session_id mismatch"
-    );
-    assert!(
-        calls_lock.detaches.is_empty(),
-        "detach should not be called for closed:true flag"
     );
     // After the close finishes, the sidecar sends the closed answer defined in the core sidecar
     // specification.
@@ -3268,8 +3238,6 @@ async fn test_a2_pushed_output_reaches_screen() {
     port.push_event(DaemonEvent::Output {
         session_id: fake_session_id.clone(),
         data: b"hi\r\n".to_vec(),
-        sequence: 0,
-        truncated: false,
     });
 
     // Waits for a screen event (it must contain "hi")
@@ -3369,8 +3337,6 @@ async fn test_inline_image_event_is_explicit_and_base64_encoded() {
     port.push_event(DaemonEvent::Output {
         session_id: fake_session_id,
         data: b"\x1b]1337;File=name=ZmlsZS5wbmc=;size=5;inline=1;width=2px:aGVsbG8=\x07".to_vec(),
-        sequence: 0,
-        truncated: false,
     });
 
     let mut found = false;
@@ -3970,8 +3936,6 @@ async fn test_i1_image_envelope_on_output() {
     port.push_event(DaemonEvent::Output {
         session_id: fake_session_id.clone(),
         data: b"hi\r\n".to_vec(),
-        sequence: 0,
-        truncated: false,
     });
 
     // Waits for the image envelope
@@ -4056,8 +4020,6 @@ async fn test_i2_no_image_envelope_until_consumed() {
     port.push_event(DaemonEvent::Output {
         session_id: fake_session_id.clone(),
         data: b"test1\r\n".to_vec(),
-        sequence: 0,
-        truncated: false,
     });
 
     // Waits for the first image envelope
@@ -4072,8 +4034,6 @@ async fn test_i2_no_image_envelope_until_consumed() {
     port.push_event(DaemonEvent::Output {
         session_id: fake_session_id.clone(),
         data: b"test2\r\n".to_vec(),
-        sequence: 1,
-        truncated: false,
     });
 
     // Absence has no event source: observe the entire existing 300 ms interval, including every
@@ -4185,8 +4145,6 @@ async fn test_i3_image_response_no_error() {
     port.push_event(DaemonEvent::Output {
         session_id: fake_session_id.clone(),
         data: b"test\r\n".to_vec(),
-        sequence: 0,
-        truncated: false,
     });
 
     // Waits for the image envelope
@@ -5243,8 +5201,6 @@ async fn test_panicking_surface_reports_error() {
         fn modes(&self) -> Modes {
             Modes::default()
         }
-
-        fn reset(&mut self) {}
     }
 
     let calls = Arc::new(Mutex::new(Calls::default()));
@@ -5490,8 +5446,6 @@ async fn test_no_image_envelope_while_outstanding_after_release() {
     port.push_event(DaemonEvent::Output {
         session_id: fake_session_id.clone(),
         data: b"one\r\n".to_vec(),
-        sequence: 0,
-        truncated: false,
     });
     let first = next_image_envelope(&mut lines).await;
     assert_eq!(
@@ -5508,8 +5462,6 @@ async fn test_no_image_envelope_while_outstanding_after_release() {
     port.push_event(DaemonEvent::Output {
         session_id: fake_session_id.clone(),
         data: b"two\r\n".to_vec(),
-        sequence: 1,
-        truncated: false,
     });
     let second = next_image_envelope(&mut lines).await;
     assert_eq!(
@@ -5522,8 +5474,6 @@ async fn test_no_image_envelope_while_outstanding_after_release() {
     port.push_event(DaemonEvent::Output {
         session_id: fake_session_id.clone(),
         data: b"three\r\n".to_vec(),
-        sequence: 2,
-        truncated: false,
     });
 
     let result =
@@ -5597,8 +5547,6 @@ async fn test_image_error_response_reenables_drawing() {
     port.push_event(DaemonEvent::Output {
         session_id: fake_session_id.clone(),
         data: b"one\r\n".to_vec(),
-        sequence: 0,
-        truncated: false,
     });
     let first = next_image_envelope(&mut lines).await;
     assert_eq!(
@@ -5615,8 +5563,6 @@ async fn test_image_error_response_reenables_drawing() {
     port.push_event(DaemonEvent::Output {
         session_id: fake_session_id.clone(),
         data: b"two\r\n".to_vec(),
-        sequence: 1,
-        truncated: false,
     });
 
     let mut drew_again = false;
@@ -5956,8 +5902,6 @@ async fn output_while_the_host_holds_a_raster_is_drawn_once_after_the_answer() {
         port.push_event(DaemonEvent::Output {
             session_id: session_id.clone(),
             data: format!("line{index}\r\n").into_bytes(),
-            sequence: index,
-            truncated: false,
         });
     }
     // The output channel and the request channel have no ordering, so consumed is sent only after
@@ -6053,8 +5997,6 @@ async fn the_page_screen_event_carries_only_text_width_links_and_set_attributes(
     port.push_event(DaemonEvent::Output {
         session_id: session_id.clone(),
         data: b"text".to_vec(),
-        sequence: 0,
-        truncated: false,
     });
     let mut screen = None;
     let mut grid = ScreenGrid::default();
@@ -6402,8 +6344,6 @@ async fn an_inline_image_event_follows_the_presentation_that_draws_the_image() {
     port.push_event(DaemonEvent::Output {
         session_id: session,
         data: b"\x1b]1337;File=name=cmVkLnBuZw==;inline=1:RED\x07".to_vec(),
-        sequence: 0,
-        truncated: false,
     });
     let consumed = |sequence: i64| {
         format!(

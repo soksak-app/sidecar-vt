@@ -31,13 +31,11 @@ fn a_failed_child_wait_without_a_view_is_recorded() {
     let _lock = native_pty_test_lock();
     let events = events_test::TestEvents::new();
     let service = PtyService::new(events.handle());
-    let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
-    let (session, attachment) = service
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let session = service
         .open("/bin/cat", &[], None, 80, 24, sender)
         .expect("open the session");
-    service
-        .detach(&session, &attachment)
-        .expect("detach the only view");
+    drop(receiver);
     fault::fail_wait_of(&session);
     let _ = service.close(&session);
     let lines = events.lines();

@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S131-1: 세션은 ring과 attach 경로를 쥐지 않아 소비된 출력의 복사본을 남기지 않는다. persistent가 아닌 연결은 끝날 때 자기 세션을 닫는다.
 - S130: 0.0.23의 frame 비용을 쟀다. status line은 frame당 1.7 ms, 20행은 frame당 3.0 ms다.
 - S129: S122부터 S128까지 담은 version 0.0.23.
 - S110: 서비스 start의 status 5는 process identity library의 readback 결과이며, pin된 library 0.0.25는 찾은 값을 적는다.

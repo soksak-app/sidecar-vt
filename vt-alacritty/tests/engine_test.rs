@@ -658,16 +658,6 @@ fn resize_updates_screen_dimensions() {
 }
 
 #[test]
-fn reset_clears_the_screen() {
-    let mut engine = AlacrittyEngine::new();
-    engine.feed(b"hello");
-    engine.reset();
-    let screen = engine.screen();
-    assert_eq!(screen.lines.len() as u16, screen.rows);
-    assert!(screen.lines.iter().all(Vec::is_empty));
-}
-
-#[test]
 fn empty_lines_in_the_middle_are_retained() {
     let mut engine = AlacrittyEngine::new();
     engine.feed(b"a\r\n\r\nb");
@@ -1300,7 +1290,7 @@ fn csi_scroll_moves_the_visible_grid_and_respects_a_scroll_region() {
     assert_eq!(after_full_scroll.lines[0][0].ch.as_deref(), Some("C"));
     assert_eq!(after_full_scroll.lines[1][0].ch.as_deref(), Some("D"));
 
-    engine.reset();
+    engine = AlacrittyEngine::new();
     engine.resize(10, 4);
     engine.feed(b"A\r\nB\r\nC\r\nD");
     engine.feed(b"\x1b[2;3r\x1b[1S");
@@ -1327,7 +1317,7 @@ fn csi_erase_display_and_line_change_only_the_requested_cells() {
     );
     assert!(after_display_erase.lines[2].is_empty());
 
-    engine.reset();
+    engine = AlacrittyEngine::new();
     engine.resize(8, 3);
     engine.feed(b"abcdef");
     engine.feed(b"\x1b[1;4H\x1b[0K");
@@ -1368,7 +1358,7 @@ fn csi_insert_delete_characters_and_lines_preserve_requested_cells() {
     assert_eq!(after_insert.lines[0][4].ch.as_deref(), Some("c"));
     assert_eq!(after_insert.lines[0][5].ch.as_deref(), Some("d"));
 
-    engine.reset();
+    engine = AlacrittyEngine::new();
     engine.resize(8, 4);
     engine.feed(b"abcd\x1b[1;3H\x1b[1P");
     let after_delete = engine.screen();
@@ -1381,7 +1371,7 @@ fn csi_insert_delete_characters_and_lines_preserve_requested_cells() {
             .is_none_or(|cell| cell.ch.is_none())
     );
 
-    engine.reset();
+    engine = AlacrittyEngine::new();
     engine.resize(8, 4);
     engine.feed(b"A\r\nB\r\nC");
     engine.feed(b"\x1b[2;1H\x1b[1L");

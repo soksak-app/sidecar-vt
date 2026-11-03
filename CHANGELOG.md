@@ -1,5 +1,6 @@
 # Changelog
 
+- S131-1: The session holds no ring and no attach path, so output that the consumer read leaves no copy; a connection that is not persistent closes its sessions when it ends.
 - S130: The cost of a frame on 0.0.23 is measured: a status line 1.7 ms per frame and 20 rows 3.0 ms per frame.
 - S129: Version 0.0.23, which carries S122 to S128.
 - S110: Status 5 of the service start is the readback result of the process identity library, and the pinned library 0.0.25 names the value it found.

@@ -37,7 +37,7 @@ async fn closing_a_running_session_records_the_kill_of_its_process_group() {
     let events = crate::events::test_support::TestEvents::new();
     let service = PtyService::new(events.handle());
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let (session_id, _) = service
+    let session_id = service
         .open("/bin/sh", &["-c".into(), "cat".into()], None, 80, 24, tx)
         .expect("PTY setup failed; environmental PTY errors must fail this test");
     service.close(&session_id).unwrap();
@@ -59,7 +59,7 @@ async fn a_kill_of_a_group_that_ended_is_recorded_as_esrch() {
     let events = crate::events::test_support::TestEvents::new();
     let service = PtyService::new(events.handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let (session_id, _) = service
+    let session_id = service
         .open("/bin/sh", &["-c".into(), "true".into()], None, 80, 24, tx)
         .expect("PTY setup failed; environmental PTY errors must fail this test");
     // The exit event follows the reaping of the child, so the group no longer exists.
@@ -75,49 +75,49 @@ async fn a_kill_of_a_group_that_ended_is_recorded_as_esrch() {
 }
 
 #[tokio::test]
-async fn output_that_leaves_the_ring_is_counted_as_a_dropped_buffer() {
+async fn output_that_the_consumer_reads_is_not_dropped() {
     let _test_lock = crate::platform::pty::native_pty_test_lock();
     let events = crate::events::test_support::TestEvents::new();
-    let service = PtyService::new(events.handle()).with_retained_output(2);
+    let service = PtyService::new(events.handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let (session_id, _) = service
-        .open("/bin/sh", &["-c".into(), "cat".into()], None, 80, 24, tx)
+    let session_id = service
+        .open(
+            "/bin/sh",
+            &["-c".into(), "head -c 100000000 /dev/zero".into()],
+            None,
+            80,
+            24,
+            tx,
+        )
         .expect("PTY setup failed; environmental PTY errors must fail this test");
-    for word in ["one", "two", "three", "four"] {
-        service
-            .write(&session_id, format!("{word}\n").as_bytes())
-            .unwrap();
-        let mut seen = String::new();
-        // The terminal echoes the line and cat prints it again: the word is read twice.
-        while seen.matches(word).count() < 2 {
-            seen.push_str(&String::from_utf8_lossy(&next_output(&mut rx).await));
+    let mut read = 0;
+    loop {
+        match next_event(&mut rx).await {
+            DaemonEvent::Output { data, .. } => read += data.len(),
+            DaemonEvent::Exit { .. } => break,
+            DaemonEvent::Error { error, .. } => panic!("the session reported {error}"),
         }
     }
+    assert_eq!(read, 100_000_000);
+    assert_eq!(
+        named(&events, "sidecar.vt.buffer_dropped"),
+        Vec::<serde_json::Value>::new()
+    );
     service.close(&session_id).unwrap();
-    let dropped = named(&events, "sidecar.vt.buffer_dropped");
-    assert!(!dropped.is_empty(), "no chunk left the ring of 2 chunks");
-    for drop in &dropped {
-        assert_eq!(drop["level"], "warn");
-        assert_eq!(drop["session"], session_id);
-        assert_eq!(drop["fields"]["buffer"], "output ring");
-        assert_eq!(drop["fields"]["count"], 1);
-        assert!(drop["fields"]["bytes"].as_u64().unwrap() > 0);
-        assert_eq!(drop["fields"]["reason"], "the ring holds 2 chunks");
-    }
 }
 
 #[tokio::test]
-async fn an_attachment_that_nobody_reads_is_removed_and_counted_as_a_dropped_buffer() {
+async fn output_after_the_consumer_ended_is_counted_as_a_dropped_buffer() {
     let _test_lock = crate::platform::pty::native_pty_test_lock();
     let events = crate::events::test_support::TestEvents::new();
     let service = PtyService::new(events.handle());
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let (session_id, _) = service
+    let session_id = service
         .open("/bin/sh", &["-c".into(), "cat".into()], None, 80, 24, tx)
         .expect("PTY setup failed; environmental PTY errors must fail this test");
     drop(rx);
     service.write(&session_id, b"gone\n").unwrap();
-    // The reader thread stores the event when it broadcasts the echo to the attachment whose receiver is gone. No
+    // The reader thread stores the event when it sends the echo to the receiver that is gone. No
     // notification reaches this test from that thread, so it asks the file again after a short pause.
     let dropped = timeout(STALL, async {
         loop {
@@ -134,12 +134,12 @@ async fn an_attachment_that_nobody_reads_is_removed_and_counted_as_a_dropped_buf
     let drop = &dropped[0];
     assert_eq!(drop["level"], "warn");
     assert_eq!(drop["session"], session_id);
-    assert_eq!(drop["fields"]["buffer"], "broadcast");
+    assert_eq!(drop["fields"]["buffer"], "session events");
     assert_eq!(drop["fields"]["count"], 1);
     assert!(drop["fields"]["bytes"].as_u64().unwrap() > 0);
     assert_eq!(
         drop["fields"]["reason"],
-        "the receiver of the attachment was closed"
+        "the surface that consumes the session ended"
     );
 }
 
@@ -149,7 +149,7 @@ async fn a_shell_without_integration_is_recorded_when_its_session_starts() {
     let events = crate::events::test_support::TestEvents::new();
     let service = PtyService::new(events.handle());
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let (session_id, _) = service
+    let session_id = service
         .open_shell("owner", "/bin/sh", None, 80, 24, tx)
         .expect("PTY setup failed; environmental PTY errors must fail this test");
     service.close(&session_id).unwrap();
@@ -171,7 +171,7 @@ async fn independent_sessions_have_independent_output() {
     let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
     let (tx_a, mut rx_a) = tokio::sync::mpsc::unbounded_channel();
     let (tx_b, mut rx_b) = tokio::sync::mpsc::unbounded_channel();
-    let (session_a, _) = service
+    let session_a = service
         .open(
             "/bin/sh",
             &["-c".into(), "printf A".into()],
@@ -181,7 +181,7 @@ async fn independent_sessions_have_independent_output() {
             tx_a,
         )
         .expect("PTY setup failed; environmental PTY errors must fail this test");
-    let (session_b, _) = service
+    let session_b = service
         .open(
             "/bin/sh",
             &["-c".into(), "printf B".into()],
@@ -204,7 +204,7 @@ async fn explicit_close_kills_the_child_and_drains_exit() {
     let _test_lock = crate::platform::pty::native_pty_test_lock();
     let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let (session_id, _) = service
+    let session_id = service
         .open(
             "/bin/sh",
             &["-c".into(), "sleep 30".into()],
@@ -312,14 +312,11 @@ fn observed_session(
             reaped: None,
         }),
         child_reaped: Condvar::new(),
-        next_sequence: Mutex::new(0),
         written_output: Mutex::new(0),
-        output: Mutex::new(VecDeque::new()),
-        attachments: Mutex::new(HashMap::new()),
+        events: tokio::sync::mpsc::unbounded_channel().0,
         closed: Mutex::new(false),
         reader: Mutex::new(None),
         reaper: Mutex::new(None),
-        retained_output: RETAINED_OUTPUT,
         log: crate::events::test_support::TestEvents::new().handle(),
     });
     service
@@ -367,39 +364,4 @@ fn close_ends_a_child_that_the_group_signal_missed_while_the_reaper_waits() {
         "close did not end the PTY child with SIGKILL before it returned: {status_at_return:?}"
     );
     assert_eq!(closed, Err("PTY process group is unavailable".to_string()));
-}
-
-#[tokio::test]
-async fn attach_replays_retained_output_with_stable_session_id() {
-    let _test_lock = crate::platform::pty::native_pty_test_lock();
-    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
-    let (tx_a, mut rx_a) = tokio::sync::mpsc::unbounded_channel();
-    let (session_id, _) = service
-        .open(
-            "/bin/sh",
-            &["-c".into(), "printf retained".into()],
-            None,
-            80,
-            24,
-            tx_a,
-        )
-        .expect("PTY setup failed; environmental PTY errors must fail this test");
-    while !matches!(next_event(&mut rx_a).await, DaemonEvent::Exit { .. }) {}
-    let (tx_b, mut rx_b) = tokio::sync::mpsc::unbounded_channel();
-    let attachment_id = service.attach(&session_id, 0, tx_b).unwrap();
-    assert!(!attachment_id.is_empty());
-    let event = next_event(&mut rx_b).await;
-    match event {
-        DaemonEvent::Output {
-            session_id: replayed,
-            data,
-            sequence,
-            ..
-        } => {
-            assert_eq!(replayed, session_id);
-            assert_eq!(sequence, 0);
-            assert!(String::from_utf8_lossy(&data).contains("retained"));
-        }
-        other => panic!("expected replayed output, got {other:?}"),
-    }
 }

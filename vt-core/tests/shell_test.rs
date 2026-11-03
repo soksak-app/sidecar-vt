@@ -60,7 +60,7 @@ async fn a_session_shell_starts_as_a_login_shell() {
     let _lock = native_pty_test_lock();
     let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let (session, _) = service
+    let session = service
         .open_shell("", "/bin/sh", None, 80, 24, tx)
         .expect("open a login shell session");
     service
@@ -151,7 +151,7 @@ async fn a_zsh_session_reads_the_user_startup_files_and_reports_prompt_and_comma
         )]);
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", "/bin/zsh", None, 80, 24, tx);
-    let (session, _) = opened.expect("open a zsh session");
+    let session = opened.expect("open a zsh session");
     let mut output = String::new();
     let prompted =
         collect_until(&mut rx, &mut output, |text| text.contains("\x1b]133;A\x07")).await;
@@ -210,7 +210,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
         )]);
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", "/bin/bash", None, 80, 24, tx);
-    let (session, _) = opened.expect("open a bash session");
+    let session = opened.expect("open a bash session");
     let mut output = String::new();
     let prompted = collect_until(&mut rx, &mut output, |text| {
         text.contains("\x1b]133;A;redraw=last\x07")
@@ -304,7 +304,7 @@ async fn a_bash_debug_trap_from_the_startup_files_is_kept_and_no_marks_are_repor
         )]);
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", "/bin/bash", None, 80, 24, tx);
-    let (session, _) = opened.expect("open a bash session");
+    let session = opened.expect("open a bash session");
     service
         .write(&session, b"printf 'TRAP=%s\\n' \"$(trap -p DEBUG)\"\n")
         .unwrap();
@@ -336,7 +336,7 @@ async fn a_resize_during_bash_startup_does_not_report_a_command_at_the_first_pro
         )]);
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", "/bin/bash", None, 80, 24, tx);
-    let (session, _) = opened.expect("open a bash session");
+    let session = opened.expect("open a bash session");
     // The app sends the surface size right after it opens the session. SIGWINCH arrives while the
     // shell reads its startup files.
     service.resize(&session, 79, 24).unwrap();
@@ -374,7 +374,7 @@ async fn a_session_starts_in_the_requested_directory() {
     let directory = std::fs::canonicalize(&directory).unwrap();
     let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let (session, _) = service
+    let session = service
         .open_shell("", "/bin/sh", Some(directory.to_str().unwrap()), 80, 24, tx)
         .expect("open a shell session");
     service
@@ -420,7 +420,7 @@ async fn reports_its_directory(shell: &str, variable: &str, files: &[(&str, &str
         )]);
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let opened = service.open_shell("", shell, Some(start.to_str().unwrap()), 80, 24, tx);
-    let (session, _) = opened.expect("open a shell session");
+    let session = opened.expect("open a shell session");
     let expected = directory_uri(&start);
     let mut output = String::new();
     let first = collect_until(&mut rx, &mut output, |text| text.contains(&expected)).await;

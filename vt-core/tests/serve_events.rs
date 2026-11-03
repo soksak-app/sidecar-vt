@@ -126,7 +126,6 @@ impl Engine for TraceEngine {
     fn modes(&self) -> Modes {
         self.modes.clone()
     }
-    fn reset(&mut self) {}
 }
 
 struct TracePort;
@@ -145,9 +144,6 @@ impl SessionPort for TracePort {
         Ok(())
     }
     async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
-        Ok(())
-    }
-    async fn detach(&self, _session_id: &str) -> Result<(), String> {
         Ok(())
     }
     async fn close(&self, _session_id: &str) -> Result<(), String> {
@@ -516,9 +512,6 @@ impl Engine for InlineImageEngine {
     fn modes(&self) -> Modes {
         self.inner.modes()
     }
-    fn reset(&mut self) {
-        self.inner.reset()
-    }
 }
 
 /// A port whose session reports `output` once, which the surface feeds to its engine.
@@ -540,9 +533,6 @@ impl SessionPort for OutputPort {
         Ok(())
     }
     async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
-        Ok(())
-    }
-    async fn detach(&self, _session_id: &str) -> Result<(), String> {
         Ok(())
     }
     async fn close(&self, _session_id: &str) -> Result<(), String> {
@@ -595,8 +585,6 @@ async fn an_inline_image_command_that_cannot_be_applied_is_an_error_record() {
                 .send(soksak_sidecar_vt_core::protocol::DaemonEvent::Output {
                     session_id: "scripted-session".to_string(),
                     data: b"x".to_vec(),
-                    sequence: 0,
-                    truncated: false,
                 })
                 .await
                 .unwrap();
@@ -1017,9 +1005,6 @@ impl SessionPort for FailingOpenPort {
     async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
         Ok(())
     }
-    async fn detach(&self, _session_id: &str) -> Result<(), String> {
-        Ok(())
-    }
     async fn close(&self, _session_id: &str) -> Result<(), String> {
         Ok(())
     }
@@ -1315,8 +1300,6 @@ async fn an_open_without_image_for_a_surface_with_an_image_is_refused_and_its_ou
         .send(soksak_sidecar_vt_core::protocol::DaemonEvent::Output {
             session_id: "scripted-session".to_string(),
             data: b"prompt".to_vec(),
-            sequence: 0,
-            truncated: false,
         })
         .await
         .unwrap();
@@ -1390,8 +1373,6 @@ fn daemon_output(data: &[u8]) -> soksak_sidecar_vt_core::protocol::DaemonEvent {
     soksak_sidecar_vt_core::protocol::DaemonEvent::Output {
         session_id: "scripted-session".to_string(),
         data: data.to_vec(),
-        sequence: 0,
-        truncated: false,
     }
 }
 
@@ -1487,9 +1468,6 @@ impl SessionPort for HeldOpenPort {
         Ok(())
     }
     async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
-        Ok(())
-    }
-    async fn detach(&self, _session_id: &str) -> Result<(), String> {
         Ok(())
     }
     async fn close(&self, _session_id: &str) -> Result<(), String> {
