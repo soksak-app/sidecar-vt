@@ -109,6 +109,15 @@ typedef struct Frame Frame;
 // 실패하면 NULL 을 반환한다
 Frame* frame_new(uint32_t width_px, uint32_t height_px);
 
+// Creates a frame of the given pixel size that keeps a strip per screen row and redraws only the strips of changed rows.
+// Returns NULL on failure.
+Frame* frame_new_strip(uint32_t width_px, uint32_t height_px);
+
+#ifdef SOKSAK_DIAGNOSTICS
+// The count of strips that the last draw of a strip frame drew.
+uint32_t frame_strips_drawn(Frame *frame);
+#endif
+
 // IOSurface ID (u32) 를 가져온다
 uint32_t frame_id(Frame *frame);
 

@@ -254,6 +254,9 @@ unsafe impl Sync for CFrame {}
 
 unsafe extern "C" {
     fn frame_new(width_px: u32, height_px: u32) -> *mut CFrame;
+    fn frame_new_strip(width_px: u32, height_px: u32) -> *mut CFrame;
+    #[cfg(feature = "diagnostics")]
+    fn frame_strips_drawn(frame: *mut CFrame) -> u32;
     fn frame_id(frame: *mut CFrame) -> u32;
     fn frame_nonce(frame: *mut CFrame, buf: *mut u8);
     fn frame_draw_with_inline_images(
@@ -402,6 +405,25 @@ impl Frame {
                 })
             }
         }
+    }
+
+    /// A frame that keeps a strip per screen row and redraws only the strips of changed rows.
+    pub fn new_strip(width_px: u32, height_px: u32) -> Option<Frame> {
+        let ptr = unsafe { frame_new_strip(width_px, height_px) };
+        if ptr.is_null() {
+            return None;
+        }
+        Some(Frame {
+            ptr,
+            width: width_px,
+            height: height_px,
+        })
+    }
+
+    /// The count of strips that the last draw of a strip frame drew.
+    #[cfg(feature = "diagnostics")]
+    pub fn strips_drawn(&self) -> u32 {
+        unsafe { frame_strips_drawn(self.ptr) }
     }
 
     pub fn id(&self) -> u32 {
@@ -641,8 +663,10 @@ impl Frame {
             )
         };
 
-        if result != 0 {
-            return Err("Frame draw failed".to_string());
+        match result {
+            0 => {}
+            -3 => return Err("the strip frame collects no render metadata".to_string()),
+            _ => return Err("Frame draw failed".to_string()),
         }
         if !collect_metadata {
             return Ok(None);

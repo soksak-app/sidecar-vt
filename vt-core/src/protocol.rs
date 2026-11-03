@@ -3781,7 +3781,7 @@ async fn surface_task(
                                 continue;
                             }
                         }
-                        let new_state = match ImageState::new(&configuration, &terminal_font, terminal_font_size) {
+                        let new_state = match ImageState::new(&configuration, &terminal_font, terminal_font_size, collect_render_metadata(log.trace_dir())) {
                             Ok(state) => state,
                             Err(reason) => {
                                 let response = json!({
@@ -4519,7 +4519,7 @@ async fn surface_task(
                             state.pending_draw = false;
                             state.carrier = None;
                             if let Some(configuration) = pending_configuration.take() {
-                                let new_state = match ImageState::new(&configuration, &terminal_font, terminal_font_size) {
+                                let new_state = match ImageState::new(&configuration, &terminal_font, terminal_font_size, collect_render_metadata(log.trace_dir())) {
                                     Ok(state) => state,
                                     Err(reason) => {
                                         let response = json!({"surface": surface_id,

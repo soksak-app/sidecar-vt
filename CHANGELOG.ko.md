@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S127: 세션의 image surface는 바뀐 행의 strip만 다시 그린다.
 - S126: 엔진은 cell마다 할당하지 않고 화면을 만든다.
 - S125: service는 frame마다 screen 메시지를 보내지 않고, `screen.read`에 full form으로 답하며, frame의 커서나 scrollback이 바뀌면 `view` event를 보낸다.
 - S124: event log가 저장하지 않는 record의 frame은 hash하지 않는다.

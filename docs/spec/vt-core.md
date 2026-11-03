@@ -138,6 +138,25 @@ The `sidecar` and `native image` sources also report the surface error that the 
 
 A surface draws the output of its session on a frame clock of 33 ms: a change that arrives less than 33 ms after the last frame is drawn when the 33 ms have passed, together with every other change of that interval, and a change after a longer pause is drawn at once. The cursor blink follows the same clock. For 200 ms after an `input` or `paste` request, output is drawn at once, so the echo of typing does not wait. A tick of the clock without a change draws no frame. The frame record names a frame of the clock with the reason `clock`.
 
+### Strip frame
+
+The image surface of a session draws on a frame created by `Frame::new_strip`; a diagnostic build that collects render metadata (`SOKSAK_VT_TRACE_DIR`) draws on the CoreGraphics frame, because only that frame reports render metadata. Both frames draw on the CPU. The pixels of a strip frame equal those of the CoreGraphics frame for the same screen, so the CoreGraphics frame is the single reference of both draws.
+
+- The frame keeps one strip per screen row in a strip surface. The cell loop of the CoreGraphics frame draws a strip, so one function draws text, wide characters, underlines and the preedit that `render_layout` places in the cells. A strip is drawn again only when the hash of its row differs from the hash it was drawn with; a change of size, font or theme draws every strip again. The drawing cost of a frame is then in proportion to the rows that changed.
+- Both frames clip each row to its row box, so ink that extends above or below its row is drawn only inside that row.
+- The strips also hold the default background of the margin below the rows. The CoreGraphics draw composites the inline images with the `CGContextDrawImage` call of the CoreGraphics frame into an overlay surface over a copy of the strip pixels under each image. A draw copies the strips into its target surface, then the image rectangles of the overlay, and draws the cursor with the fills and the difference fill of the CoreGraphics frame, so a block cursor over a glyph or an image inverts its pixels.
+- An image tile that CoreGraphics draws into a transparent surface and that is composited afterwards differs from the CoreGraphics frame: a translucent test image gave pixels that differ by up to two levels, 34 of them where the image is opaque, because CoreGraphics resamples an image differently over a transparent surface than over the pixels it covers. The overlay draws each image over the same pixels as the CoreGraphics frame and is exact by construction.
+- A draw is synchronous: it returns after the target surface holds the frame, so the supplier sends the envelope after the last write.
+- A draw uses no GPU pass. Its only work after the strips is this copy and a few rectangles, and the Metal driver keeps memory for a process that encodes a pass: with a 1520x1228 frame the footprint grew by 178 MB with a blit and a render pass and by 96 MB with one compute pass, and by 16 MB without Metal. The CPU time of a frame did not rise: 1.27 ms for a frame that changes one row and 3.08 ms for a frame that changes every row, against 1.24 ms and 3.43 ms with the blit and render pass. A test bounds the growth of the footprint (`frame_memory_test`).
+- The count of strips that a draw redrew is part of the render output of a diagnostic build only.
+- Limit: a scroll changes every row, so it draws every strip, as the CoreGraphics frame draws every cell. A benchmark of scrolling decides after development whether strips are kept by row content.
+
+Reasons and the objections that an adversarial review raised and that this design answers:
+- The CoreGraphics frame smooths text against its background (white text on black and black text on white gave 709 of 1176 inked pixels that are not complementary), so an atlas of coverage that does not depend on the background cannot reproduce its pixels, and a tile per cell that is composited outside its cell is a second renderer whose values differ.
+- A tile per cell over its own background erases the ink that an earlier cell drew into it, which the CoreGraphics frame keeps; a row strip contains its cells in their drawing order and is exact by construction.
+- A cache keyed by the background color of a cell grows with each color; strips are bounded by the rows of the screen.
+- A row placement objection was rejected: the CoreGraphics rectangle at `H - (r + 1) × cell height` is in bottom-left coordinates and covers the rows `r × cell height` to `(r + 1) × cell height` of the surface memory, which a test with a margin below the rows verifies.
+
 ### Terminal verification
 
 - Record a failing baseline before each correction and run the same assertion after correction.

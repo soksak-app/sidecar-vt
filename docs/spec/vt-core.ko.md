@@ -140,6 +140,25 @@ Native IME는 marked text를 소유한다. 각 native input report는 순서 있
 
 surface는 session 출력을 33 ms frame clock으로 그린다. 마지막 frame 뒤 33 ms가 지나기 전에 온 변경은 33 ms가 지났을 때 그 구간의 다른 변경과 함께 그리고, 더 긴 멈춤 뒤에 온 변경은 바로 그린다. cursor blink도 같은 clock을 따른다. `input`이나 `paste` 요청 뒤 200 ms 동안은 출력을 바로 그리므로 타이핑의 echo가 기다리지 않는다. 변경이 없는 clock tick은 frame을 그리지 않는다. frame 기록은 clock의 frame을 reason `clock`으로 적는다.
 
+### Strip frame
+
+session의 image surface는 `Frame::new_strip`이 만든 frame으로 그린다. render metadata를 모으는 diagnostic build(`SOKSAK_VT_TRACE_DIR`)는 CoreGraphics frame으로 그린다. render metadata를 보고하는 frame이 그것뿐이기 때문이다. 두 frame 모두 CPU로 그린다. strip frame의 pixel은 같은 화면의 CoreGraphics frame과 같으므로, CoreGraphics frame이 두 그리기의 유일한 기준이다.
+
+- frame은 strip surface에 화면 행마다 strip 하나를 둔다. strip은 CoreGraphics frame의 칸 loop가 그리므로, 글자, 넓은 글자, 밑줄, 그리고 `render_layout`이 칸에 넣은 preedit을 한 함수가 그린다. strip은 행의 hash가 그 strip을 그린 hash와 다를 때만 다시 그린다. 크기, 글꼴, theme이 바뀌면 모든 strip을 다시 그린다. 그래서 frame의 그리기 비용은 바뀐 행에 비례한다.
+- 두 frame 모두 각 행을 그 행의 box로 자르므로, 행 위아래로 넘친 잉크는 그 행 안에서만 그린다.
+- strip은 행 아래 여백의 기본 배경도 담는다. CoreGraphics 그리기는 CoreGraphics frame의 `CGContextDrawImage` 호출로, 각 image 아래 strip pixel을 복사한 overlay surface 위에 inline image를 합성한다. 그리기는 strip을 target surface로 복사한 뒤 overlay의 image 사각형을 복사하고, CoreGraphics frame의 채우기와 difference 채우기로 cursor를 그린다. 그래서 글자나 image 위의 block cursor는 그 pixel을 반전한다.
+- CoreGraphics가 투명한 surface에 그리고 나중에 합성하는 image tile은 CoreGraphics frame과 다르다. 반투명 test image에서 pixel이 최대 두 단계 달랐고, 그중 34개는 image가 불투명한 곳이었다. CoreGraphics가 투명한 surface 위와 덮는 pixel 위에서 image를 다르게 resampling하기 때문이다. overlay는 각 image를 CoreGraphics frame과 같은 pixel 위에 그리므로 구성상 정확하다.
+- 그리기는 동기적이다. target surface가 frame을 담은 뒤 돌아오므로, supplier는 마지막 쓰기 뒤에 envelope를 보낸다.
+- 그리기는 GPU pass를 쓰지 않는다. strip 뒤에 남는 일은 이 복사와 사각형 몇 개뿐이고, Metal driver는 pass를 encode한 process에 메모리를 잡아 둔다. 1520x1228 frame에서 footprint는 blit와 render pass로 178 MB, compute pass 하나로 96 MB, Metal 없이 16 MB 늘었다. frame의 CPU 시간은 늘지 않았다. 한 행이 바뀌는 frame은 1.27 ms, 모든 행이 바뀌는 frame은 3.08 ms이고, blit와 render pass일 때는 1.24 ms와 3.43 ms였다. test가 footprint 증가에 상한을 둔다(`frame_memory_test`).
+- 그리기가 다시 그린 strip 수는 진단 build의 render output에만 있다.
+- 한계: scroll은 모든 행을 바꾸므로 모든 strip을 다시 그린다. CoreGraphics frame이 모든 칸을 다시 그리는 것과 같다. strip을 행 내용으로 보관할지는 개발 뒤 scroll benchmark가 정한다.
+
+이유와, adversarial review가 제기하고 이 설계가 답한 반론:
+- CoreGraphics frame은 글자를 배경에 맞춰 smoothing한다(검은 배경의 흰 글자와 흰 배경의 검은 글자에서 잉크가 있는 pixel 1176개 중 709개가 보색이 아니었다). 그래서 배경과 무관한 coverage의 atlas로는 그 pixel을 재현할 수 없고, 칸 밖에서 합성하는 칸 단위 tile은 값이 다른 둘째 renderer다.
+- 자기 배경 위에 그린 칸 단위 tile은 앞 칸이 그 칸에 그린 잉크를 지우지만, CoreGraphics frame은 그것을 남긴다. 행 strip은 칸을 그리는 순서대로 담으므로 구성상 정확하다.
+- 칸 배경색을 key로 하는 cache는 색마다 커진다. strip은 화면 행 수로 제한된다.
+- 행 위치에 대한 반론은 거절했다. `H - (r + 1) × cell height`의 CoreGraphics 사각형은 아래쪽 원점 좌표이며 surface 메모리의 `r × cell height`부터 `(r + 1) × cell height`까지의 행을 덮고, 행 아래에 여백이 있는 test가 이를 검증한다.
+
 ### 터미널 검증
 
 - 수정 전에 실패하는 기준선을 기록하고, 수정 뒤 같은 검사를 실행한다.
