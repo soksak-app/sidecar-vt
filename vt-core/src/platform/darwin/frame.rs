@@ -267,6 +267,7 @@ unsafe extern "C" {
         image_count: u32,
         render_output: *mut CRenderOutput,
     ) -> i32;
+    fn frame_inline_image_decodable(data: *const u8, length: usize) -> i32;
     fn frame_drop(frame: *mut CFrame);
     fn frame_metrics(font: *const CFrameFont, font_size: f64, scale: f64) -> CMetrics;
     fn frame_font_system_monospace() -> *mut CFrameFont;
@@ -306,6 +307,12 @@ mod render_coordinate_tests {
 }
 
 pub use crate::protocol::{CursorBlinkPolicy, UnfocusedCursor};
+
+/// Reports whether ImageIO decodes the data of an inline image. The inline image store calls it, so
+/// an image that the draw would refuse is rejected when it is stored.
+pub fn inline_image_decodable(data: &[u8]) -> bool {
+    unsafe { frame_inline_image_decodable(data.as_ptr(), data.len()) == 1 }
+}
 
 pub fn cursor_blink_visible(
     policy: CursorBlinkPolicy,

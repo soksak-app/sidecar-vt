@@ -2579,11 +2579,20 @@ fn resolve_inline_dimension(dimension: &Dimension, cell_size: u32, frame_size: u
     }
 }
 
+/// Why an inline image command is not applied. A rejection is an image whose data does not decode,
+/// which the page reports as `sequence.rejected`; a failure is a command that the current state cannot
+/// apply, which the page reports as an error.
+#[derive(Debug)]
+enum InlineImageFailure {
+    Rejected(String),
+    Failed(String),
+}
+
 fn store_inline_display(
     command: InlineImageCommand,
     anchor: InlineAnchor,
     image_state: &mut Option<ImageState>,
-) -> Result<(), String> {
+) -> Result<(), InlineImageFailure> {
     let InlineImageCommand::Display {
         name,
         data,
@@ -2592,11 +2601,20 @@ fn store_inline_display(
         preserve_aspect_ratio,
     } = command
     else {
-        return Err("inline image command is not a display record".to_string());
+        return Err(InlineImageFailure::Failed(
+            "inline image command is not a display record".to_string(),
+        ));
     };
     let Some(state) = image_state.as_mut() else {
-        return Err("inline image received before the image region was configured".to_string());
+        return Err(InlineImageFailure::Failed(
+            "inline image received before the image region was configured".to_string(),
+        ));
     };
+    if !crate::platform::darwin::frame::inline_image_decodable(&data) {
+        return Err(InlineImageFailure::Rejected(
+            "OSC 1337 image data is not decodable as an image".to_string(),
+        ));
+    }
     let placement = InlineImagePlacement {
         name: name.clone(),
         data,
@@ -2656,13 +2674,15 @@ fn apply_inline_image_command(
     anchor: InlineAnchor,
     image_state: &mut Option<ImageState>,
     multipart: &mut Option<MultipartAssembly>,
-) -> Result<(), String> {
+) -> Result<(), InlineImageFailure> {
     match command {
         InlineImageCommand::Display { .. } => store_inline_display(command, anchor, image_state),
         InlineImageCommand::Transfer { .. } => Ok(()),
         InlineImageCommand::MultipartStart { name } => {
             if multipart.is_some() {
-                return Err("inline image multipart transfer is already active".to_string());
+                return Err(InlineImageFailure::Failed(
+                    "inline image multipart transfer is already active".to_string(),
+                ));
             }
             *multipart = Some(MultipartAssembly {
                 name,
@@ -2672,24 +2692,30 @@ fn apply_inline_image_command(
         }
         InlineImageCommand::MultipartPart(data) => {
             let Some(assembly) = multipart.as_mut() else {
-                return Err("inline image multipart part has no active transfer".to_string());
+                return Err(InlineImageFailure::Failed(
+                    "inline image multipart part has no active transfer".to_string(),
+                ));
             };
             if assembly.data.len().saturating_add(data.len()) > crate::inline_image::MAX_IMAGE_BYTES
             {
-                return Err(format!(
+                return Err(InlineImageFailure::Failed(format!(
                     "inline image multipart payload exceeds {} bytes",
                     crate::inline_image::MAX_IMAGE_BYTES
-                ));
+                )));
             }
             assembly.data.extend_from_slice(&data);
             Ok(())
         }
         InlineImageCommand::MultipartEnd => {
             let Some(assembly) = multipart.take() else {
-                return Err("inline image multipart end has no active transfer".to_string());
+                return Err(InlineImageFailure::Failed(
+                    "inline image multipart end has no active transfer".to_string(),
+                ));
             };
             if assembly.data.is_empty() {
-                return Err("inline image multipart transfer has no data".to_string());
+                return Err(InlineImageFailure::Failed(
+                    "inline image multipart transfer has no data".to_string(),
+                ));
             }
             store_inline_display(
                 InlineImageCommand::Display {
@@ -3057,23 +3083,40 @@ async fn send_engine_events(
         match event {
             EngineEvent::InlineImage { command, anchor } => {
                 let command_for_event = command.clone();
-                if let Err(error) =
-                    apply_inline_image_command(command, anchor, image_state, multipart)
-                {
-                    // The command is dropped whether or not the page is told, so the service
-                    // records it.
-                    log.record_error("inline image", &error);
-                    if !emit_surface_events {
+                match apply_inline_image_command(command, anchor, image_state, multipart) {
+                    Ok(()) => {}
+                    Err(InlineImageFailure::Rejected(reason)) => {
+                        // The image is not kept, so the service records it whether or not the page
+                        // is told. The page receives the reason, never the image data.
+                        log.record_error("inline image", &reason);
+                        if !emit_surface_events {
+                            continue;
+                        }
+                        let response = json!({
+                            "surface": surface_id,
+                            "body": {"event": "sequence.rejected", "reason": reason}
+                        });
+                        if output_tx.send(response.to_string()).await.is_err() {
+                            return false;
+                        }
                         continue;
                     }
-                    let response = json!({
-                        "surface": surface_id,
-                        "body": {"event": "error", "reason": error}
-                    });
-                    if output_tx.send(response.to_string()).await.is_err() {
-                        return false;
+                    Err(InlineImageFailure::Failed(error)) => {
+                        // The command is dropped whether or not the page is told, so the service
+                        // records it.
+                        log.record_error("inline image", &error);
+                        if !emit_surface_events {
+                            continue;
+                        }
+                        let response = json!({
+                            "surface": surface_id,
+                            "body": {"event": "error", "reason": error}
+                        });
+                        if output_tx.send(response.to_string()).await.is_err() {
+                            return false;
+                        }
+                        continue;
                     }
-                    continue;
                 }
                 if !emit_surface_events {
                     continue;

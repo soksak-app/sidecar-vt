@@ -63,6 +63,13 @@ async fn next_line_except_frame_events<R: tokio::io::AsyncBufRead + Unpin>(
     }
 }
 
+/// A 2×1 red PNG that ImageIO decodes.
+const RED_PNG: [u8; 71] = [
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0,
+    0, 0, 244, 34, 127, 138, 0, 0, 0, 14, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31,
+    132, 1, 17, 247, 3, 253, 227, 197, 245, 239, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
+
 struct MockEngine {
     cols: u16,
     rows: u16,
@@ -140,12 +147,12 @@ impl Engine for MockEngine {
 
     fn feed(&mut self, bytes: &[u8]) {
         self.feed_history.push(bytes.to_vec());
-        if bytes == b"\x1b]1337;File=name=ZmlsZS5wbmc=;size=5;inline=1;width=2px:aGVsbG8=\x07" {
+        if bytes == b"\x1b]1337;File=name=ZmlsZS5wbmc=;size=71;inline=1;width=2px:iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGP4z8DwH4QBEfcD/ePF9e8AAAAASUVORK5CYII=\x07" {
             self.pending_events.push(EngineEvent::InlineImage {
                 anchor: Default::default(),
                 command: InlineImageCommand::Display {
                     name: "file.png".to_string(),
-                    data: b"hello".to_vec(),
+                    data: RED_PNG.to_vec(),
                     width: Dimension::Pixels(2),
                     height: Dimension::Auto,
                     preserve_aspect_ratio: true,
@@ -158,12 +165,21 @@ impl Engine for MockEngine {
                 anchor: Default::default(),
                 command: InlineImageCommand::Display {
                     name: "red.png".to_string(),
-                    data: vec![
-                        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2,
-                        0, 0, 0, 1, 8, 6, 0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 14, 73, 68, 65, 84,
-                        120, 156, 99, 248, 207, 192, 240, 31, 132, 1, 17, 247, 3, 253, 227, 197,
-                        245, 239, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
-                    ],
+                    data: RED_PNG.to_vec(),
+                    width: Dimension::Auto,
+                    height: Dimension::Auto,
+                    preserve_aspect_ratio: true,
+                },
+            });
+        }
+        if bytes == b"\x1b]1337;File=name=YnJva2VuLnBuZw==;inline=1:bm90IGFuIGltYWdl\x07" {
+            // Bytes that ImageIO cannot decode: the engine parses the transfer, and the surface decodes
+            // it when it stores the image.
+            self.pending_events.push(EngineEvent::InlineImage {
+                anchor: Default::default(),
+                command: InlineImageCommand::Display {
+                    name: "broken.png".to_string(),
+                    data: b"not an image".to_vec(),
                     width: Dimension::Auto,
                     height: Dimension::Auto,
                     preserve_aspect_ratio: true,
@@ -3409,7 +3425,7 @@ async fn test_inline_image_event_is_explicit_and_base64_encoded() {
     let _state = lines.next_line().await.unwrap().unwrap();
     port.push_event(DaemonEvent::Output {
         session_id: fake_session_id,
-        data: b"\x1b]1337;File=name=ZmlsZS5wbmc=;size=5;inline=1;width=2px:aGVsbG8=\x07".to_vec(),
+        data: b"\x1b]1337;File=name=ZmlsZS5wbmc=;size=71;inline=1;width=2px:iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGP4z8DwH4QBEfcD/ePF9e8AAAAASUVORK5CYII=\x07".to_vec(),
     });
 
     let mut found = false;
@@ -3428,7 +3444,10 @@ async fn test_inline_image_event_is_explicit_and_base64_encoded() {
         if value["body"]["event"] == "image.inline" {
             assert_eq!(value["body"]["command"], "display");
             assert_eq!(value["body"]["name"], "file.png");
-            assert_eq!(value["body"]["data"], "aGVsbG8=");
+            assert_eq!(
+                value["body"]["data"],
+                "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGP4z8DwH4QBEfcD/ePF9e8AAAAASUVORK5CYII="
+            );
             assert_eq!(value["body"]["width"], "2px");
             found = true;
             break;
@@ -6465,6 +6484,85 @@ async fn an_inline_image_event_follows_the_presentation_that_draws_the_image() {
             break;
         }
     }
+    task.abort();
+}
+
+/// An inline image whose data ImageIO cannot decode is rejected when it is stored: the page gets
+/// `sequence.rejected` without the payload, no image event is sent, and the frame that follows draws.
+#[tokio::test]
+async fn an_undecodable_inline_image_is_rejected_and_the_frame_still_draws() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let session = "undecodable-image".to_string();
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let port = Arc::new(FakeSessionPort::new(session.clone(), calls));
+    let port_for_factory = port.clone();
+    let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let first = next_image(&mut lines).await;
+    let consumed = |sequence: i64| {
+        format!(
+            "{{\"surface\":\"s1\",\"body\":{{\"image\":{{\"consumed\":{{\"name\":\"view\",\"generation\":1,\"raster\":1,\"sequence\":{sequence}}}}}}}}}\n"
+        )
+    };
+    to_serve
+        .write_all(consumed(first["sequence"].as_i64().unwrap()).as_bytes())
+        .await
+        .unwrap();
+    port.push_event(DaemonEvent::Output {
+        session_id: session,
+        data: b"\x1b]1337;File=name=YnJva2VuLnBuZw==;inline=1:bm90IGFuIGltYWdl\x07".to_vec(),
+    });
+
+    // Reads until the output has been processed and the output goes quiet, answering each presentation.
+    let mut seen = Vec::new();
+    while let Ok(Ok(Some(line))) =
+        tokio::time::timeout(std::time::Duration::from_secs(2), lines.next_line()).await
+    {
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if let Some(sequence) = value["body"]["image"]["sequence"].as_i64() {
+            to_serve
+                .write_all(consumed(sequence).as_bytes())
+                .await
+                .unwrap();
+        }
+        seen.push(line);
+    }
+    assert!(
+        !seen.iter().any(|line| line.contains("Frame draw failed")),
+        "the undecodable image failed the whole frame: {seen:#?}"
+    );
+    let rejected = seen
+        .iter()
+        .position(|line| line.contains(r#""event":"sequence.rejected""#))
+        .unwrap_or_else(|| panic!("no sequence.rejected event: {seen:#?}"));
+    let rejection: serde_json::Value = serde_json::from_str(&seen[rejected]).unwrap();
+    let reason = rejection["body"]["reason"].as_str().unwrap_or_default();
+    assert!(
+        !reason.is_empty(),
+        "the rejection has no reason: {rejection}"
+    );
+    assert!(
+        !reason.contains("not an image") && !reason.contains("bm90"),
+        "the rejection carries the payload: {rejection}"
+    );
+    assert!(
+        !seen
+            .iter()
+            .any(|line| line.contains(r#""event":"image.inline""#)),
+        "an undecodable image was stored and announced: {seen:#?}"
+    );
+    assert!(
+        seen[rejected + 1..]
+            .iter()
+            .any(|line| line.contains(r#""image":{"#)),
+        "the frame after the rejection did not draw: {seen:#?}"
+    );
     task.abort();
 }
 

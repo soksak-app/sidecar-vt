@@ -215,16 +215,31 @@ static void compose_append(NSMutableData *rects, const Frame *frame, CGRect rect
 static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, InlineImageRaster *images, uint32_t image_count,
                           RenderOutput *render_output);
 
-// Decodes an inline image and gives the size at which the frame draws it, or returns NULL when the data is missing, does
-// not decode, or the image does not fit inside the frame. Both draws use it, so they refuse and size the same images.
-static CGImageRef inline_image_decode(const Frame *frame, const InlineImageRaster *raster, CGFloat *drawn_width,
-                                      CGFloat *drawn_height) {
-    if (!raster->data || raster->data_len == 0) return NULL;
-    CFDataRef image_data = CFDataCreate(NULL, raster->data, raster->data_len);
+// Decodes the first image of the data with ImageIO, or returns NULL when the data is missing or does not decode.
+static CGImageRef image_decode(const uint8_t *data, size_t length) {
+    if (!data || length == 0) return NULL;
+    CFDataRef image_data = CFDataCreate(NULL, data, length);
     CGImageSourceRef source = image_data ? CGImageSourceCreateWithData(image_data, NULL) : NULL;
     CGImageRef image = source ? CGImageSourceCreateImageAtIndex(source, 0, NULL) : NULL;
     if (image_data) CFRelease(image_data);
     if (source) CFRelease(source);
+    return image;
+}
+
+// Reports whether ImageIO decodes the data of an inline image. The inline image store calls it when it keeps an image, so
+// an image that does not decode is rejected before any frame draws it.
+int frame_inline_image_decodable(const uint8_t *data, size_t length) {
+    CGImageRef image = image_decode(data, length);
+    if (!image) return 0;
+    CGImageRelease(image);
+    return 1;
+}
+
+// Decodes an inline image and gives the size at which the frame draws it, or returns NULL when the data is missing, does
+// not decode, or the image does not fit inside the frame. Both draws use it, so they refuse and size the same images.
+static CGImageRef inline_image_decode(const Frame *frame, const InlineImageRaster *raster, CGFloat *drawn_width,
+                                      CGFloat *drawn_height) {
+    CGImageRef image = image_decode(raster->data, raster->data_len);
     if (!image) return NULL;
     CGFloat width = raster->width ? raster->width : (CGFloat)CGImageGetWidth(image);
     CGFloat height = raster->height ? raster->height : (CGFloat)CGImageGetHeight(image);

@@ -131,6 +131,8 @@ int frame_draw(Frame *frame, Screen *screen, Metrics *metrics);
 int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics,
                                   InlineImageRaster *images, uint32_t image_count,
                                   RenderOutput *render_output);
+// Returns 1 when ImageIO decodes the data of an inline image, and 0 otherwise.
+int frame_inline_image_decodable(const uint8_t *data, size_t length);
 
 // frame 을 해제하고 IOSurface 를 release 한다
 void frame_drop(Frame *frame);
