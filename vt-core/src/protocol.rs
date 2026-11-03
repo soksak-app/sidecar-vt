@@ -2254,11 +2254,11 @@ async fn present_screen(
     }
     let mut cursor = json!(screen.cursor);
     cursor["caret"] = json!({"row": layout.screen.cursor.row, "col": layout.screen.cursor.col});
-    let view = json!({"cursor": cursor, "scrollback": screen.scrollback});
+    let view = json!({"rows": screen.rows, "cols": screen.cols, "cursor": cursor, "scrollback": screen.scrollback});
     if state.view_sent.as_ref() != Some(&view) {
         let event = json!({
             "surface": surface_id,
-            "body": {"event": "view", "frame": frame, "cursor": view["cursor"], "scrollback": view["scrollback"]}
+            "body": {"event": "view", "frame": frame, "rows": view["rows"], "cols": view["cols"], "cursor": view["cursor"], "scrollback": view["scrollback"]}
         });
         if output_tx.send(event.to_string()).await.is_err() {
             return false;

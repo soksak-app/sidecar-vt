@@ -7928,6 +7928,9 @@ async fn a_frame_sends_its_view_when_the_cursor_or_the_scrollback_changes() {
     );
     let view = views[0];
     assert_eq!(view["frame"]["generation"], 1, "{view}");
+    // The grid of the frame travels with its caret: the page may not have the grid of a state event yet.
+    assert!(view["rows"].is_u64(), "{view}");
+    assert!(view["cols"].is_u64(), "{view}");
     assert!(view["cursor"]["caret"]["row"].is_u64(), "{view}");
     assert!(view["cursor"]["caret"]["col"].is_u64(), "{view}");
     assert!(view["cursor"]["visible"].is_boolean(), "{view}");

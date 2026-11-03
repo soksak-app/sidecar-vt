@@ -2,6 +2,7 @@
 
 [English](features.md)
 
+- [o] S150 — P0: `view` 이벤트가 그 frame의 격자를 싣는다. 입력: 새 격자의 frame에서 그 격자의 `state` 이벤트보다 `view` 이벤트가 먼저 page에 도착한 경우. 동작: 이벤트에 격자가 없어 page가 마지막으로 아는 격자로 caret을 판정해 거부했다. 기대: `view`가 `rows`와 `cols`를 싣는다. Red: tracked test `a_frame_sends_its_view_when_the_cursor_or_the_scrollback_changes`가 `view["rows"].is_u64()`에서 실패했다. Green: 통과한다.
 - [o] S149 — P0: 공개된 release에서 flood의 footprint를 잰다. 입력: core 0.0.33, plugin terminal, 이 sidecar 0.0.24의 108열 17행 터미널에서 `yes`를 45초 실행했고, load average는 35에서 50이었다. 결과: sidecar footprint는 47 MB, host와 sidecar와 page의 합은 139 MB에 머물렀고, 한도를 두기 전에는 약 3 GB였다. Ctrl+C 뒤의 줄은 0.65 초 뒤에 나타났고 오류는 기록되지 않았다.
 - [o] S148 — P0: S131부터 S147까지 담은 VT release를 publish하고 registry에 올린 뒤 terminal plugin이 요구하게 한다. 결과: release run이 v0.0.24를 공개했고, registry가 그것을 올렸으며, terminal 0.0.36과 0.0.37이 그것을 요구한다.
 - [o] S131 — P0: 프로그램이 엔진의 소비보다 빨리 쓰는 출력은 service를 키우지 않는다. 입력: 터미널에서 약 20초 동안 `yes`. 동작: reader가 각 read를 무제한 channel로 보내 service가 약 3 GB에 이르렀다. 기대: `docs/spec/vt-core.md`의 PTY 출력과 입력 절의 계약. Red와 Green: 하위 항목.

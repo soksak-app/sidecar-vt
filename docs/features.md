@@ -2,6 +2,7 @@
 
 [한국어](features.ko.md)
 
+- [o] S150 — P0: The `view` event carries the grid of its frame. Input: a frame of a new grid whose `view` event reaches the page before the `state` event of that grid. Behavior: the event carried no grid, so the page judged the caret against the grid it last knew and refused it. Expected: `view` carries `rows` and `cols`. Red: the tracked test `a_frame_sends_its_view_when_the_cursor_or_the_scrollback_changes` failed at `view["rows"].is_u64()`; Green: it passes.
 - [o] S149 — P0: The footprint of a flood is measured on the published release. Input: `yes` for 45 seconds in a terminal of core 0.0.33 with the plugin terminal and this sidecar 0.0.24, 108 columns by 17 rows, under a load average of 35 to 50. Result: the footprint of the sidecar stayed at 47 MB, and the host, the sidecar and the page together at 139 MB, against about 3 GB before the bound. The line after Ctrl+C appeared after 0.65 s, and no error was logged.
 - [o] S148 — P0: Publish a VT release that carries S131 to S147, list it in the registry, and make the terminal plugin require it. Result: the release run published v0.0.24, the registry lists it, and terminal 0.0.36 and 0.0.37 require it.
 - [o] S131 — P0: Output that a program writes faster than the engine consumes does not grow the service. Input: `yes` in a terminal for about 20 seconds. Behavior: the service reached about 3 GB, because the reader sent each read through an unbounded channel. Expected: the contract of the section PTY output and input in `docs/spec/vt-core.md`. Red and Green: the sub-items.
