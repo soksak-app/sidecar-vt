@@ -22,8 +22,9 @@ use serde_json::value::{RawValue, to_raw_value};
 use crate::platform::darwin::file_watch::{Change, watch_file};
 use crate::policy::{Class, Gate, Policy, is_being_written, parse_policy};
 
-/// The schema number of the lines that this writer writes.
-pub const SCHEMA: u64 = 2;
+/// The schema number of the lines that this writer writes, which is the number of the core event contract: a reader
+/// refuses a file of another number.
+pub const SCHEMA: u64 = 3;
 
 /// The role of this process in the name of its file and in `log.open`.
 pub const ROLE: &str = "vt";

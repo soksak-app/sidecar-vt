@@ -152,11 +152,13 @@ fn assert_satisfies_catalog(line: &Value) {
     let declared = &catalog["events"][name];
     assert!(declared.is_object(), "{name} is not declared: {line}");
     assert_eq!(line["layer"], declared["layer"], "{line}");
-    for (field, kind) in declared["fields"].as_object().unwrap() {
+    let fields = &declared["fields"];
+    for field in fields["required"].as_array().unwrap() {
+        let field = field.as_str().unwrap();
         let value = &line["fields"][field];
         assert_eq!(
             type_name(value),
-            kind.as_str().unwrap(),
+            fields["properties"][field]["type"].as_str().unwrap(),
             "field {field} of {name}: {line}"
         );
     }
@@ -221,7 +223,7 @@ fn the_first_line_opens_the_file_with_the_schema_the_pid_the_role_and_the_boot()
     assert_eq!(open["event"], "log.open");
     assert_eq!(open["seq"], 1);
     assert_eq!(open["layer"], "sidecar");
-    assert_eq!(open["fields"]["schema"], 2);
+    assert_eq!(open["fields"]["schema"], 3);
     assert_eq!(open["fields"]["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(open["fields"].get("policy"), None, "log.policy states it");
     assert_eq!(open["fields"]["pid"], std::process::id());
@@ -490,7 +492,7 @@ fn a_reader_rejects_a_file_of_another_schema_and_names_the_file() {
     let error = read_lines(&path).unwrap_err();
     assert!(error.contains(&path.display().to_string()), "{error}");
     assert!(error.contains("schema 1"), "{error}");
-    assert!(error.contains("2"), "{error}");
+    assert!(error.contains("is not 3"), "{error}");
     // A file that does not open with log.open names what it found.
     let other = dir.join("vt-other.jsonl");
     std::fs::write(&other, "{\"event\":\"sidecar.vt.frame\"}\n").unwrap();
@@ -500,7 +502,7 @@ fn a_reader_rejects_a_file_of_another_schema_and_names_the_file() {
     // The file of this writer is read.
     let log = EventLog::start(options(&dir.join("current"))).unwrap();
     log.flush(DEADLINE).unwrap();
-    assert_eq!(read_lines(log.path()).unwrap()[0]["fields"]["schema"], 2);
+    assert_eq!(read_lines(log.path()).unwrap()[0]["fields"]["schema"], 3);
 }
 
 // Fields over 1,048,576 bytes of JSON text are stored as their first 4,096 bytes and the size of the text.
@@ -539,11 +541,11 @@ fn fields_over_the_bound_of_an_event_are_stored_cut_and_marked_truncated() {
 fn a_line_without_seq_is_refused_by_the_run_reader() {
     let dir = directory("line-without-seq");
     std::fs::create_dir_all(&*dir).unwrap();
-    let open = json!({"ts_us": 1, "mono_ns": 1, "seq": 1, "level": "info", "layer": "sidecar", "event": "log.open", "fields": {"schema": 2, "role": "vt", "boot": "b1", "pid": 1}});
+    let open = json!({"ts_us": 1, "mono_ns": 1, "seq": 1, "level": "info", "layer": "sidecar", "event": "log.open", "fields": {"schema": 3, "role": "vt", "boot": "b1", "pid": 1}});
     let without_seq = json!({"ts_us": 2, "mono_ns": 2, "level": "info", "layer": "sidecar", "event": "sidecar.vt.test", "fields": {}});
     let main = dir.join("vt-b1.jsonl");
     std::fs::write(&main, format!("{open}\n{without_seq}\n")).unwrap();
-    let debug_open = json!({"ts_us": 3, "mono_ns": 3, "seq": 2, "level": "debug", "layer": "sidecar", "event": "log.open", "fields": {"schema": 2, "role": "vt", "boot": "b1", "pid": 1}});
+    let debug_open = json!({"ts_us": 3, "mono_ns": 3, "seq": 2, "level": "debug", "layer": "sidecar", "event": "log.open", "fields": {"schema": 3, "role": "vt", "boot": "b1", "pid": 1}});
     std::fs::write(dir.join("vt-b1.debug.jsonl"), format!("{debug_open}\n")).unwrap();
     let error = read_run_lines(&main).expect_err("the run reader ordered a line without seq");
     assert!(

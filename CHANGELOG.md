@@ -1,5 +1,6 @@
 # Changelog
 
+- S156: The event file opens with schema 3, the number of the core event contract, so `sok debug query` reads it.
 - S155: The lifecycle test waits for the report of the shell, so a job that reports first no longer fails it.
 - S153: `rust-toolchain.toml` declares Rust 1.98.0, and the workflows install that version, so every build of a commit uses one compiler.
 - S152: The candidate is 0.0.25, which carries S150 and S151.

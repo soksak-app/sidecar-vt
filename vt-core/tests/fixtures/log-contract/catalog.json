@@ -1,12 +1,141 @@
 {
-  "schema": 2,
+  "schema": 3,
   "events": {
-    "log.open": { "layer": "host", "class": "lifecycle", "level": "info", "fields": { "schema": "number", "pid": "number", "role": "string", "boot": "string" } },
-    "log.dropped": { "layer": "host", "class": "lifecycle", "level": "warn", "fields": { "from_seq": "number", "to_seq": "number", "count": "number" } },
-    "native.input.key_down": { "layer": "native", "class": "input", "level": "info", "cids": "required", "fields": { "keyCode": "number", "characters": "string" } },
-    "native.input.source_changed": { "layer": "native", "class": "input", "level": "info", "fields": {} },
-    "page.terminal.send": { "layer": "page", "class": "input", "level": "info", "fields": { "operation": "string" } },
-    "sidecar.vt.pty_write": { "layer": "sidecar", "class": "io", "level": "info", "fields": { "hex": "string", "text": "string" } }
+    "log.open": {
+      "layer": "host",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "schema": {
+            "type": "number"
+          },
+          "pid": {
+            "type": "number"
+          },
+          "role": {
+            "type": "string"
+          },
+          "boot": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "pid",
+          "role",
+          "boot"
+        ]
+      }
+    },
+    "log.dropped": {
+      "layer": "host",
+      "class": "lifecycle",
+      "level": "warn",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "from_seq": {
+            "type": "number"
+          },
+          "to_seq": {
+            "type": "number"
+          },
+          "count": {
+            "type": "number"
+          },
+          "channel": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_seq",
+          "to_seq",
+          "count",
+          "channel"
+        ]
+      }
+    },
+    "native.input.key_down": {
+      "layer": "native",
+      "class": "input",
+      "level": "info",
+      "cids": "required",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "keyCode": {
+            "type": "number"
+          },
+          "characters": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "keyCode",
+          "characters"
+        ]
+      }
+    },
+    "native.input.source_changed": {
+      "layer": "native",
+      "class": "input",
+      "level": "info",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    "page.terminal.send": {
+      "layer": "page",
+      "class": "input",
+      "level": "info",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      }
+    },
+    "sidecar.vt.pty_write": {
+      "layer": "sidecar",
+      "class": "io",
+      "level": "info",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "hex": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hex",
+          "text"
+        ]
+      }
+    }
   },
-  "chains": { "key": ["native.input.key_down", "page.terminal.send", "sidecar.vt.pty_write"] }
+  "chains": {
+    "key": [
+      "native.input.key_down",
+      "page.terminal.send",
+      "sidecar.vt.pty_write"
+    ]
+  }
 }
