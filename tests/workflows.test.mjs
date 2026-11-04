@@ -1,6 +1,7 @@
 // Checks the workflows against core docs/spec/plugins.md: the release starts on a push to main, runs ci.yml and the release
 // gate, and writes the npm pack file of the built sidecar folder without a core release; no workflow checks out another
-// repository, and the dependencies on core are the packed release files of the core release that package.json pins.
+// repository, the dependencies on core are the packed release files of the core release that package.json pins, and the
+// workflows install the Rust toolchain that rust-toolchain.toml declares.
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -63,4 +64,22 @@ test("the native process identity is the packed release file of the core release
 test("pnpm-workspace.yaml names no git source of core", { timeout: 1000 }, () => {
   assert.doesNotMatch(read("pnpm-workspace.yaml"), /github\.com\/soksak-app\/core\.git/,
     "the dependencies on core are packed release files, so no setting names a git source of core");
+});
+
+test("the workflows install the Rust toolchain that rust-toolchain.toml declares", { timeout: 1000 }, () => {
+  const declared = read("rust-toolchain.toml");
+  const channel = declared.match(/^channel\s*=\s*"([^"]+)"$/m)?.[1];
+  assert.match(channel ?? "", /^\d+\.\d+\.\d+$/, "rust-toolchain.toml declares no exact Rust version");
+  const components = JSON.parse(declared.match(/^components\s*=\s*(\[.*\])$/m)?.[1] ?? "null");
+  assert.deepEqual(components?.sort(), ["clippy", "rustfmt"], "rust-toolchain.toml declares other components than clippy and rustfmt");
+  for (const name of ["ci.yml", "release.yml"]) {
+    const workflow = read(`.github/workflows/${name}`);
+    const installs = workflow.match(/dtolnay\/rust-toolchain@\S+/g) ?? [];
+    assert.equal(installs.length, 1, `${name} must install Rust once`);
+    assert.match(installs[0], /@[0-9a-f]{40}$/i, `${name} must use an immutable action revision`);
+    const settings = workflow.match(/dtolnay\/rust-toolchain@\S+\n\s+with:\n((?: {10}.+\n)+)/)?.[1] ?? "";
+    assert.equal(settings.match(/^\s*toolchain:\s*(\S+)$/m)?.[1], channel, `${name} installs another toolchain than rust-toolchain.toml declares`);
+    const installed = settings.match(/^\s*components:\s*(.+)$/m)?.[1] ?? "";
+    assert.deepEqual(installed.split(",").map((component) => component.trim()).sort(), components, `${name} installs other components than rust-toolchain.toml declares`);
+  }
 });

@@ -1,0 +1,5 @@
+# The Rust toolchain of the repository: rustup selects it for every cargo command in this repository, and the workflows
+# install the same version.
+[toolchain]
+channel = "1.98.0"
+components = ["clippy", "rustfmt"]

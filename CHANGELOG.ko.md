@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S153: `rust-toolchain.toml`이 Rust 1.98.0을 선언하고 workflow가 그 version을 설치하므로, 한 commit의 모든 build가 같은 compiler를 쓴다.
 - S152: 후보는 0.0.25이며 S150, S151를 담는다.
 - S151: 터미널 영역을 벗어난 포인터 점이 입력 실패 대신 가장 가까운 칸에 속한다.
 - S150: `view` 이벤트가 그 frame의 격자를 싣는다.

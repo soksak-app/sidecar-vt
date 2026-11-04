@@ -52,7 +52,10 @@ jobs:
           head="$(git ls-remote origin refs/heads/main | cut -f1)"
           test "$head" = "$GITHUB_SHA" || { echo "main is at $head, not at $GITHUB_SHA" >&2; exit 1; }
           test -z "$(git ls-remote --tags origin "refs/tags/v$VERSION")" || { echo "the tag v$VERSION exists" >&2; exit 1; }
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.98.0
+          components: clippy, rustfmt
       - uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
