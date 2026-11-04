@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S155: lifecycle test가 shell의 보고를 기다리므로, 먼저 보고한 job이 test를 더는 실패시키지 않는다.
 - S153: `rust-toolchain.toml`이 Rust 1.98.0을 선언하고 workflow가 그 version을 설치하므로, 한 commit의 모든 build가 같은 compiler를 쓴다.
 - S152: 후보는 0.0.25이며 S150, S151를 담는다.
 - S151: 터미널 영역을 벗어난 포인터 점이 입력 실패 대신 가장 가까운 칸에 속한다.

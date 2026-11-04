@@ -840,6 +840,24 @@ impl Drop for Job {
     }
 }
 
+/// The process that the shell reported for its job, after the job reported from its exec. The echo
+/// of the command also holds `job=$!`, and the two reports reach the output in either order, so the
+/// report of the shell is the digits after `job=` that end their line.
+fn reported_job(seen: &str) -> Option<i32> {
+    if !seen.contains("job-2") {
+        return None;
+    }
+    seen.split("job=").skip(1).find_map(|part| {
+        let digits = part
+            .find(|character: char| !character.is_ascii_digit())
+            .map(|end| part.split_at(end))?;
+        digits
+            .1
+            .starts_with(['\r', '\n'])
+            .then(|| digits.0.parse().ok())?
+    })
+}
+
 /// Starts an interactive shell without its startup files and a job with the operator `background`,
 /// and returns the session and the process of the job when the job reports after its exec. A signal
 /// that reaches a job of zsh before its exec can be lost with its signal queue. The report is
@@ -862,18 +880,26 @@ async fn shell_with_job(
         )
         .unwrap();
     let mut seen = String::new();
-    while !seen.contains("job-2") || !seen.contains("job=") {
+    let pid = loop {
+        if let Some(pid) = reported_job(&seen) {
+            break pid;
+        }
         seen.push_str(&String::from_utf8_lossy(&next_output(rx).await));
-    }
-    let pid = seen
-        .split("job=")
-        .filter_map(|part| {
-            let digits: String = part.chars().take_while(char::is_ascii_digit).collect();
-            digits.parse::<i32>().ok()
-        })
-        .last()
-        .expect("the shell reported no job");
+    };
     (session_id, Job(nix::unistd::Pid::from_raw(pid)))
+}
+
+#[test]
+fn only_a_finished_line_of_digits_after_the_report_of_the_job_names_the_job() {
+    // The echo of the command holds `job=$!`, and the job can report before the shell does.
+    assert_eq!(reported_job("echo job=$!\r\njob-2\r\n"), None);
+    // A read of the output can end inside the number.
+    assert_eq!(reported_job("echo job=$!\r\njob-2\r\njob=12"), None);
+    assert_eq!(reported_job("echo job=$!\r\njob=123\r\n"), None);
+    assert_eq!(
+        reported_job("echo job=$!\r\njob-2\r\njob=123\r\n"),
+        Some(123)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
