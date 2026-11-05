@@ -7,11 +7,11 @@ repository = "https://github.com/soksak-app/sidecar-vt"
 publish = false
 
 [[bin]]
-name = "soksak-vt-alacritty"
+name = "sok-vt-alacritty"
 path = "src/main.rs"
 
 [[bin]]
-name = "soksak-vt-replay"
+name = "sok-vt-replay"
 path = "src/replay.rs"
 
 [features]

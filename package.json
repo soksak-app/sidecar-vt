@@ -1,12 +1,12 @@
 {
   "name": "@soksak/sidecar-vt",
   "private": true,
-  "description": "Terminal sidecar: the checks of its sources and catalog use the soksak-check events command of the kit.",
+  "description": "Terminal sidecar: the checks of its sources and catalog use the sok-check events command of the kit.",
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@11.24.0",
   "devDependencies": {
-    "@soksak/kit": "https://github.com/soksak-app/kit/releases/download/v0.0.12/soksak-kit-0.0.12.tgz",
+    "@soksak/kit": "https://github.com/soksak-app/kit/releases/download/v0.0.13/soksak-kit-0.0.13.tgz",
     "tree-sitter-bash": "0.25.1",
     "tree-sitter-javascript": "0.25.0",
     "tree-sitter-rust": "0.24.0",

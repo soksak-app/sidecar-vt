@@ -4,7 +4,7 @@
 
 터미널 사이드카(`@soksak/sidecar-vt-core`)는 [영속 서비스](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.ko.md)이 정의한 영속 서비스의 클라이언트 모듈이다. 서비스는 애플리케이션 설정 디렉터리마다 하나의 프로세스로 실행되며 독립 PTY·셸 프로세스·VT 상태·스크롤백·IOSurface 렌더링을 소유한다. 사이드카는 터미널 세션 제어 요청을 받고 영역에 화면 그림을 공급한다.
 
-`sidecar.json` 선언은 서비스의 process display identity를 `soksak://sidecar/vt`로 지정한다. Build는 이 선언을 읽어 executable에 embed하며, `displayName`이 없거나 유효하지 않으면 `sidecar.json`을 명시해 build를 실패한다. Service는 host 환경 변수에 의존하지 않는다. Process는 첫 start record를 쓴 뒤 runtime 초기화 전에 embedded 값을 LaunchServices에 등록한다. 등록 실패는 standard error에 보고하고 서비스 시작을 막는다. Executable path와 basename은 `build/soksak-vt-alacritty`, `soksak-vt-alacritty`로 유지한다.
+`sidecar.json` 선언은 서비스의 process display identity를 `soksak://sidecar/vt`로 지정한다. Build는 이 선언을 읽어 executable에 embed하며, `displayName`이 없거나 유효하지 않으면 `sidecar.json`을 명시해 build를 실패한다. Service는 host 환경 변수에 의존하지 않는다. Process는 첫 start record를 쓴 뒤 runtime 초기화 전에 embedded 값을 LaunchServices에 등록한다. 등록 실패는 standard error에 보고하고 서비스 시작을 막는다. Executable path와 basename은 `build/sok-vt-alacritty`, `sok-vt-alacritty`로 유지한다.
 
 파싱되지 않는 봉투는 `surface`가 문자열이면 그 표면에 `{surface, body: {error: "invalidParams", reason}}`로 답한다. 그래서 답이 보낸 표면에 닿는다. `cids`가 문자열 목록이 아니면 `reason`은 `cids must be a list of strings`이고, 그 밖이면 `Parse error: <text>`다. 읽을 수 있는 `surface`가 없는 줄은 빈 surface와 `Parse error: <text>`로 답한다.
 

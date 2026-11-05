@@ -32,4 +32,4 @@ jobs:
         run: make test
       - name: Commit messages
         if: github.event_name == 'pull_request' || github.event.before != '0000000000000000000000000000000000000000'
-        run: pnpm exec soksak-check commits ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}
+        run: pnpm exec sok-check commits ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}

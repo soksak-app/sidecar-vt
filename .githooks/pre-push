@@ -6,5 +6,5 @@ zero=0000000000000000000000000000000000000000
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$local_sha" = "$zero" ] && continue
   if [ "$remote_sha" = "$zero" ]; then base=origin/main; else base=$remote_sha; fi
-  make -C "$root" push-check RANGE="$base..$local_sha" </dev/null || exit 1
+  make -C "$root" check-push RANGE="$base..$local_sha" </dev/null || exit 1
 done

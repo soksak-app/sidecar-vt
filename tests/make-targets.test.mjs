@@ -1,4 +1,4 @@
-// The push-check target runs the checks that a push needs, and the pre-push hook runs push-check on the pushed range (S72).
+// The check-push target runs the checks that a push needs, and the pre-push hook runs check-push on the pushed range (S72).
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -21,9 +21,9 @@ function recipe(target, variables = []) {
 }
 
 // A published commit message is kept, so the push checks it; CI runs the tests on the pushed commits.
-test("make push-check runs only the commit message check of the pushed range (F274-vt-sidecar)", { timeout: 30000 }, () => {
-  const commands = recipe("push-check");
-  assert.deepEqual(commands.trim().split("\n"), ['pnpm exec soksak-check commits "origin/main..HEAD"']);
+test("make check-push runs only the commit message check of the pushed range (F274-vt-sidecar)", { timeout: 30000 }, () => {
+  const commands = recipe("check-push");
+  assert.deepEqual(commands.trim().split("\n"), ['pnpm exec sok-check commits "origin/main..HEAD"']);
 });
 
 test("make build and release pass an explicit diagnostics feature to Cargo (S78)", { timeout: 30000 }, () => {
@@ -34,9 +34,9 @@ test("make build and release pass an explicit diagnostics feature to Cargo (S78)
   assert.match(release, /npm pack --silent --pack-destination \/tmp\/vt-s78-dry-run \.\/vt-alacritty/);
 });
 
-test("the pre-push hook runs make push-check on the pushed range (S72)", { timeout: 30000 }, () => {
+test("the pre-push hook runs make check-push on the pushed range (S72)", { timeout: 30000 }, () => {
   const hook = readFileSync(path.join(root, ".githooks", "pre-push"), "utf8");
-  assert.match(hook, /make -C "\$root" push-check RANGE="\$base\.\.\$local_sha"/);
+  assert.match(hook, /make -C "\$root" check-push RANGE="\$base\.\.\$local_sha"/);
 });
 
 // Each Rust test reports its own result, elapsed time and time limit through cargo-nextest with the declared config (S76).

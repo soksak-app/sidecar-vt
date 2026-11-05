@@ -3,6 +3,7 @@
 [English](features.md)
 
 - [o] F460-vt — P2, core F460과 연결: `.gitignore`가 local 출력 폴더 `/build/`를 지정한다. 입력: 그 폴더는 local 출력을 담고 추적되지 않은 항목으로 보였다. 결과: `git status`에 추적되지 않은 폴더가 없고 `make test`가 통과한다.
+- [o] F472-vt — P2, core F472와 연결: 저장소의 명령 이름이 하는 일을 말하고, `make check`가 `sok-check commands`를 실행한다. 결과: `make test`가 통과한다.
 - [o] F468-vt — P2, core F468과 연결: 저장소가 kit의 `soksak-check docs`와 `soksak-check events`를 실행하고, `event-sources.json`이 event source를 선언한다. 결과: `make test`가 통과한다.
 - [o] F466-vt — P2, core F466과 연결: 저장소가 local build log와 임시 log의 인용을 보고하는 kit release를 pin하고, 기록에 그런 인용이 없다. 결과: `make test`가 통과한다.
 - [o] F467-vt — P1, core F467과 연결: 저장소가 workspace의 유일한 kit인 `@soksak/kit`을 pin한다. 입력: `@soksak/kit-checks`를 pin했다. 결과: `make test`가 통과한다.

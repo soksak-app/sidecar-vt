@@ -12,7 +12,7 @@
   "files": [
     "sidecar.json",
     "events.json",
-    "build/soksak-vt-alacritty",
-    "build/soksak-vt-replay"
+    "build/sok-vt-alacritty",
+    "build/sok-vt-replay"
   ]
 }

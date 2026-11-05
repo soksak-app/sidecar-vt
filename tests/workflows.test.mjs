@@ -14,7 +14,7 @@ test("the release starts on a push to main and runs ci.yml and the release gate"
   assert.doesNotMatch(release, /^\s*tags:/m, "release.yml must not start on a pushed tag");
   assert.match(release, /^\s*uses: \.\/\.github\/workflows\/ci\.yml$/m, "release.yml must run ci.yml as its checks");
   assert.match(read(".github/workflows/ci.yml"), /^on:\n(?: {2}.+\n)* {2}workflow_call:/m, "ci.yml must be callable by release.yml");
-  assert.match(release, /soksak-check release vt-alacritty\/package\.json docs\/features\.md/, "release.yml must run the release gate");
+  assert.match(release, /sok-check release vt-alacritty\/package\.json docs\/features\.md/, "release.yml must run the release gate");
   assert.match(release, /git ls-remote origin refs\/heads\/main/, "the release must require the run commit to be the head of main");
   assert.match(release, /git ls-remote --tags origin "refs\/tags\/v\$VERSION"/, "the release must require the tag to be absent");
 });

@@ -1,12 +1,12 @@
 {
-  "executable": "build/soksak-vt-alacritty",
+  "executable": "build/sok-vt-alacritty",
   "displayName": "soksak://sidecar/vt",
   "protocol": 1,
   "transport": "persistent",
   "events": "events.json",
   "replay": {
     "role": "vt",
-    "executable": "build/soksak-vt-replay",
+    "executable": "build/sok-vt-replay",
     "inputs": {
       "output": "sidecar.vt.pty_read",
       "write": "sidecar.vt.pty_write",

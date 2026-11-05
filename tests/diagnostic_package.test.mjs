@@ -47,7 +47,7 @@ function applyScreen(held, body) {
 }
 
 test("packaged diagnostics binary reports matching render metadata and engine trace", {
-  skip: release || installed ? false : "candidate-release supplies SOKSAK_DIAGNOSTIC_PACKAGE_RELEASE",
+  skip: release || installed ? false : "release-candidate supplies SOKSAK_DIAGNOSTIC_PACKAGE_RELEASE",
   timeout: 30000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "vt-diagnostic-package-"));
@@ -71,7 +71,7 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
   const packageInfo = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
   assert.equal(packageInfo.name, "@soksak/sidecar-vt-alacritty", "release package identity differs");
   assert.match(packageInfo.version, /^0\.0\.\d+$/, "release package version is invalid");
-  const binary = join(packageRoot, "build", "soksak-vt-alacritty");
+  const binary = join(packageRoot, "build", "sok-vt-alacritty");
   const surface = "s85-diagnostic-surface";
   const project = "/s85-diagnostic-project";
   let passed = false;
