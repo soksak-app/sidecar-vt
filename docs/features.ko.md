@@ -2,6 +2,7 @@
 
 [English](features.md)
 
+- [o] S161 — P1, core F617 및 P129과 연결: input과 paste의 모든 답은 요청의 cids를 밝힌다. 입력: bytes를 쓰는 input, bytes 없는 input, cid 둘인 input, paste, session 없는 거절, 잘못된 input. 동작: page는 답이 올 때까지 입력을 드는데, 각 답의 cids를 고정한 test가 없었다. 기대: ack, 거절, 오류 모두 요청의 cids를 싣는다.
 - [o] S160 — P2: frozen install test는 network에 닿지 않는다. 입력: test가 자기의 빈 store에 설치하므로 `make test`마다 GitHub에서 받았고, GitHub의 504 답이 install을 35 s 제한까지 끌어 `make test`를 실패시켰다. 기대: test는 `make install`이 채운 store에서 lockfile을 빈 폴더에 설치하고 같은 파일 세 개를 검사한다. 새 CI runner의 `make install`이 package를 받고, `make build`가 같은 파일을 요구한다. 시험: `tests/native_dependency_install.test.mjs`. Red: 닫힌 proxy 뒤에서 test가 실패했다. Green: 닫힌 proxy 뒤에서 통과한다.
 - [o] S159 — P2: `make build`는 Cargo의 target 폴더에서 실행 파일을 복사한다. 입력: `CARGO_TARGET_DIR`이 폴더를 가리킨다. 동작: Cargo는 그곳에 쓰고 recipe는 `target/`에서 복사하므로 build가 실패한다. 기대: recipe는 `CARGO_TARGET_DIR`이 가리키는 폴더에서 복사하고, 값이 없으면 `target/`에서 복사한다. 시험: `tests/make-targets.test.mjs`. Red: recipe가 `cp target/debug/`를 출력했다. Green: 통과한다.
 - [o] S158 — P0, core F502-16과 연결: session이 없다는 답은 거절한 요청을 싣는다. 입력: 페이지가 새 연결을 알기 전에 다시 뜬 서비스에 닿은 `input`이나 `paste`. 동작: `Session not open` 답에 요청이 없어 페이지가 다시 보낼 수 없었고, 페이지가 caller에게 답한 뒤에 입력이 사라졌다. 기대: 답이 본문을 `request`로 싣는다. 시험: `vt-core/tests/serve_events.rs` `the_answer_that_no_session_is_open_carries_the_refused_request`.
