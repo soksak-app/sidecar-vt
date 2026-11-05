@@ -75,6 +75,7 @@
 
 ## Unreleased
 
+- F460-vt: `.gitignore` names the local output folder `/build/`.
 - F466-vt: The repository pins the kit release that reports a citation of a local build log or a temporary log.
 - F467-vt: The repository pins `@soksak/kit`.
 - F463-vt: The repository uses the checks kit and its one executable `soksak-check`.
