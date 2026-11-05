@@ -5,6 +5,9 @@
 - S156: The event file opens with schema 3, the number of the core event contract, so `sok debug query` reads it.
 - S155: The lifecycle test waits for the report of the shell, so a job that reports first no longer fails it.
 - S153: `rust-toolchain.toml` declares Rust 1.98.0, and the workflows install that version, so every build of a commit uses one compiler.
+- F476-vt: The tests repeat no declared version.
+- F474-vt: The release run published v0.0.26, and the registry lists it.
+- F474-vt: The candidate is 0.0.26, whose executables are `sok-vt-alacritty` and `sok-vt-replay`.
 - S152: The candidate is 0.0.25, which carries S150 and S151.
 - S151: A pointer point past the terminal region maps to the nearest cell instead of failing the input.
 - S150: The `view` event carries the grid of its frame.
