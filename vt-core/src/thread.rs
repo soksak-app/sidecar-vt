@@ -1,4 +1,4 @@
-//! The entrance that starts a thread of the service (core docs/spec/logging.md#census): a panic of the thread is recorded as
+//! The entrance that starts a thread of the service (core docs/spec/logging.md#event-sources): a panic of the thread is recorded as
 //! an error record that names the thread and carries the text of the panic, in the place of ending the thread without a trace.
 
 use crate::events::Events;
