@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S160: frozen install test가 `make install`이 채운 store를 읽으므로, GitHub의 답이 `make test`를 실패시키지 않는다.
 - S159: `make build`가 Cargo가 실행 파일을 쓴 폴더, 곧 `CARGO_TARGET_DIR`이 가리키는 폴더에서 복사한다.
 - S158: `Session not open` 답이 거절한 요청을 실으므로, 페이지가 알기 전에 다시 뜬 서비스에 닿은 입력을 페이지가 다시 보낸다.
 - S157: 표면이 숨겨졌거나 raster에 칸 하나가 들어갈 자리가 없으면 session이 설정 없이 열리고, 실패한 open은 code `openFailed`로 답하므로, session을 기다리는 입력이 답을 받는다.

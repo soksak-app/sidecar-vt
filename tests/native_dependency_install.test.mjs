@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 const repository = fileURLToPath(new URL('..', import.meta.url));
 const installTimeout = 35_000;
 
-test('a clean frozen install provides the Darwin process identity package', {
+// The install reads the store that make install filled, so this test reaches no network (S160). make install on a new CI runner fetches the package.
+test('a frozen install into an empty folder provides the Darwin process identity package', {
   skip: process.platform !== 'darwin',
   timeout: 45_000,
 }, async () => {
@@ -33,9 +34,8 @@ test('a clean frozen install provides the Darwin process identity package', {
     const install = spawnSync('pnpm', [
       'install',
       '--frozen-lockfile',
+      '--offline',
       '--reporter=ndjson',
-      '--store-dir',
-      path.join(fixture, '.pnpm-store'),
     ], {
       cwd: fixture,
       encoding: 'utf8',
@@ -44,7 +44,7 @@ test('a clean frozen install provides the Darwin process identity package', {
     });
     await writeFile(logPath, `${install.stdout ?? ''}${install.stderr ?? ''}`);
     assert.equal(install.error, undefined, `pnpm install failed to run; log: ${logPath}`);
-    assert.equal(install.status, 0, `pnpm install exited ${install.status}; log: ${logPath}`);
+    assert.equal(install.status, 0, `pnpm install --offline exited ${install.status}; a store without the locked packages needs make install first; log: ${logPath}`);
 
     const require = createRequire(path.join(fixture, 'package.json'));
     const packageJson = require.resolve('@soksak/native-process-identity-darwin/package.json');

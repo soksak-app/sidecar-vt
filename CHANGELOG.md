@@ -1,5 +1,6 @@
 # Changelog
 
+- S160: The test of the frozen install reads the store that `make install` filled, so an answer of GitHub does not fail `make test`.
 - S159: `make build` copies the executables from the folder that `CARGO_TARGET_DIR` names, where Cargo wrote them.
 - S158: The answer `Session not open` carries the refused request, so a page sends input again that reached a respawned service before the page heard of it.
 - S157: A session opens without a configuration when its surface is hidden or its raster has no room for one cell, and a failed open answers the code `openFailed`, so the input that waits for a session receives an answer.
