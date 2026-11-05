@@ -4991,62 +4991,152 @@ async fn test_replacement_raster_with_zero_size_is_rejected() {
     task.await.unwrap().unwrap();
 }
 
-/// Test: a raster smaller than one cell keeps the session closed without an error, and the next
-/// valid raster opens the session. A drag through the collapsed range sends such a raster on every
-/// frame; an error there would show a wrong surface error and leave the host waiting for the
-/// presentation barrier of a frame that never arrives (V5-96-14-6-4-8).
-#[tokio::test]
-async fn test_too_small_raster_holds_the_open() {
+/// A running service with a fake session port: its calls, its input, the lines of its output and its
+/// task.
+#[allow(clippy::type_complexity)]
+fn open_surface(
+    session_id: &str,
+) -> (
+    Arc<Mutex<Calls>>,
+    tokio::io::DuplexStream,
+    tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
+    tokio::task::JoinHandle<std::io::Result<()>>,
+) {
     let calls = Arc::new(Mutex::new(Calls::default()));
-    let fake_session_id = "test-session-small".to_string();
-
     let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
-    let calls_for_factory = calls.clone();
-    let session_id_for_factory = fake_session_id.clone();
-
-    let port = Arc::new(FakeSessionPort::new(
-        session_id_for_factory.clone(),
-        calls_for_factory.clone(),
-    ));
-    let port_for_factory = port.clone();
-    let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
-
-    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let port = Arc::new(FakeSessionPort::new(session_id.to_string(), calls.clone()));
+    let factory = Arc::new(move || port.clone() as Arc<dyn SessionPort>);
+    let (to_serve, serve_in) = tokio::io::duplex(1 << 20);
     let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
-
     let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
-    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+    (
+        calls,
+        to_serve,
+        tokio::io::BufReader::new(from_serve).lines(),
+        task,
+    )
+}
+
+/// The body of the next line that carries the event, past the lines of other events. An error fails.
+async fn next_body_with_event<R: tokio::io::AsyncBufRead + Unpin>(
+    lines: &mut tokio::io::Lines<R>,
+    event: &str,
+) -> serde_json::Value {
+    loop {
+        let line = tokio::time::timeout(std::time::Duration::from_secs(2), lines.next_line())
+            .await
+            .unwrap_or_else(|_| panic!("timeout waiting for the event {event}"))
+            .expect("failed to read a line")
+            .expect("the output ended");
+        let reply: serde_json::Value = serde_json::from_str(&line).expect("a line is JSON");
+        assert!(reply["body"]["error"].is_null(), "{line}");
+        if reply["body"]["event"] == event {
+            return reply["body"].clone();
+        }
+    }
+}
+
+/// Test: a raster smaller than one cell opens the session at the current grid without an error, and
+/// the next valid raster resizes it. A drag through the collapsed range sends such a raster on every
+/// frame; an error there would show a wrong surface error and leave the host waiting for the
+/// presentation barrier of a frame that never arrives (V5-96-14-6-4-8), and a session that waits for
+/// room leaves the input of its surface unanswered.
+#[tokio::test]
+async fn test_too_small_raster_opens_at_the_current_grid() {
+    let (calls, mut to_serve, mut lines, task) = open_surface("test-session-small");
 
     // This raster has a positive size, but it is too small to hold one terminal cell.
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":3,"height":3,"scale":1.0}}}}
-{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":2,"width":800,"height":384,"scale":1.0}}}}
 "#).await.unwrap();
-
-    // A sub-cell raster must not answer with an error, so the first line returned is the state
-    // event for the open of the valid raster.
-    let state_line = tokio::time::timeout(std::time::Duration::from_secs(2), lines.next_line())
-        .await
-        .expect("timeout waiting for state")
-        .expect("failed to read state line")
-        .expect("state line is empty");
-
-    let state_json: serde_json::Value =
-        serde_json::from_str(&state_line).expect("failed to parse state JSON");
-
+    let state = next_body_with_event(&mut lines, "state").await;
     assert_eq!(
-        state_json["body"]["event"], "state",
-        "the sub-cell raster must be held silently and the valid raster must open the session"
+        (state["cols"].as_u64(), state["rows"].as_u64()),
+        (Some(80), Some(24))
     );
+    assert_eq!(calls.lock().unwrap().opens, vec![(80, 24)]);
+    let image = next_image_envelope(&mut lines).await;
+    acknowledge_image(&mut to_serve, &image).await;
 
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":2,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let state = next_body_with_event(&mut lines, "state").await;
+    assert_ne!(
+        state["cols"].as_u64(),
+        Some(80),
+        "the valid raster resizes the session"
+    );
     {
-        let calls_lock = calls.lock().unwrap();
+        let calls = calls.lock().unwrap();
         assert_eq!(
-            calls_lock.opens.len(),
+            calls.opens.len(),
             1,
-            "the valid raster opens exactly one session"
+            "the valid raster opens no second session"
         );
+        assert_eq!(calls.resizes.len(), 1, "{:?}", calls.resizes);
     }
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+}
+
+/// Test: the session of a region whose outer surface is hidden opens at the default grid and answers
+/// input, in either order of the two messages, and the configuration after the showing resizes it.
+#[tokio::test]
+async fn a_hidden_region_opens_its_session_without_a_configuration() {
+    const OPEN: &[u8] = br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+"#;
+    const HIDDEN: &[u8] = br#"{"surface":"s1","root":"/tmp","body":{"image":{"drawing":{"name":"view","generation":1,"drawing":false,"hidden":true}}}}
+"#;
+    for (first, second) in [(OPEN, HIDDEN), (HIDDEN, OPEN)] {
+        let (calls, mut to_serve, mut lines, task) = open_surface("test-session-hidden");
+        to_serve.write_all(first).await.unwrap();
+        to_serve.write_all(second).await.unwrap();
+        let session = next_body_with_event(&mut lines, "session").await;
+        assert_eq!(session["sessionId"], "test-session-hidden");
+        assert_eq!(calls.lock().unwrap().opens, vec![(80, 24)]);
+
+        to_serve.write_all(br#"{"surface":"s1","body":{"operation":"paste","text":"x"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+        let state = next_body_with_event(&mut lines, "state").await;
+        assert_eq!(state["sessionId"], "test-session-hidden");
+        {
+            let calls = calls.lock().unwrap();
+            assert_eq!(
+                calls.opens.len(),
+                1,
+                "the configuration opens no second session"
+            );
+            assert_eq!(
+                calls.writes.len(),
+                1,
+                "the session takes the input: {:?}",
+                calls.writes
+            );
+            assert_eq!(calls.resizes.len(), 1, "{:?}", calls.resizes);
+        }
+        drop(to_serve);
+        task.await.unwrap().unwrap();
+    }
+}
+
+/// Test: a region that does not draw and whose surface is not hidden waits for its configuration, so
+/// a session opens at the size of its picture.
+#[tokio::test]
+async fn a_region_that_is_not_hidden_opens_at_the_size_of_its_configuration() {
+    let (calls, mut to_serve, mut lines, task) = open_surface("test-session-waits");
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"drawing":{"name":"view","generation":1,"drawing":false,"hidden":false}}}}
+{"surface":"s1","body":{"image":{"drawing":{"name":"other","generation":1,"drawing":false,"hidden":true}}}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let state = next_body_with_event(&mut lines, "state").await;
+    let opened = (
+        state["cols"].as_u64().unwrap() as u16,
+        state["rows"].as_u64().unwrap() as u16,
+    );
+    assert_ne!(opened, (80, 24));
+    assert_eq!(calls.lock().unwrap().opens, vec![opened]);
     drop(to_serve);
     task.await.unwrap().unwrap();
 }

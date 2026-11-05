@@ -1277,6 +1277,7 @@ enum SurfaceCommand {
         name: String,
         generation: u64,
         drawing: bool,
+        hidden: bool,
     },
     ImageDetach {
         detach: ImageDetach,
@@ -3430,6 +3431,50 @@ async fn open_headless(
     }
 }
 
+/// Opens the requested session of an image that the host reports as hidden. Such an image receives
+/// no configure until it is shown and input waits for the session, so the session opens at the
+/// default grid and the configure after the showing resizes it. The event answers the page, which
+/// holds its input until a session answers.
+async fn open_if_hidden(
+    ports: SurfacePorts<'_>,
+    requested: bool,
+    requested_image: &Option<String>,
+    hidden_image: &Option<String>,
+    shell: &ShellRequest,
+    session_id: &mut Option<String>,
+    engine: &mut Box<dyn Engine>,
+) -> bool {
+    let SurfacePorts {
+        surface_id,
+        session_port,
+        output_tx,
+        inputs,
+        ..
+    } = ports;
+    if !requested
+        || session_id.is_some()
+        || hidden_image.is_none()
+        || requested_image != hidden_image
+    {
+        return true;
+    }
+    engine.resize(80, 24);
+    inputs.resized(None, 24, 80);
+    let response = match session_port.open(shell, 80, 24).await {
+        Ok(id) => {
+            inputs.opened(&id);
+            let response =
+                json!({"surface": surface_id, "body": {"event": "session", "sessionId": id}});
+            *session_id = Some(id);
+            response
+        }
+        Err(error) => {
+            json!({"surface": surface_id, "body": {"error": "openFailed", "reason": error}})
+        }
+    };
+    output_tx.reply(response).await.is_ok()
+}
+
 async fn open_if_configured(
     ports: SurfacePorts<'_>,
     requested: bool,
@@ -3461,13 +3506,14 @@ async fn open_if_configured(
     let (cols, rows) =
         match calculate_terminal_size(state.width_px, state.height_px, &state.metrics) {
             Ok(size) => size,
-            // A raster with no room for one cell is a transient state in which the card collapses
-            // during a drag. An error here would discard the open request, and the session would
-            // not reopen at a later size. Without opening, it waits, and the next configure opens
-            // the session (V5-96-14-6-4-8).
+            // A raster with no room for one cell is a state in which the card is collapsed. An error
+            // here would discard the open request (V5-96-14-6-4-8), and a session that waits for
+            // room leaves input waiting, so the session opens at the current grid and the next
+            // configure resizes it.
             Err(reason) => {
                 record_empty_raster(log, surface_id, state.width_px, state.height_px, &reason);
-                return true;
+                let screen = engine.screen();
+                (screen.cols, screen.rows)
             }
         };
     crate::engine_trace::record(log, surface_id, || format!("resize {cols} {rows}"));
@@ -3498,7 +3544,8 @@ async fn open_if_configured(
             .await
         }
         Err(error) => {
-            let response = json!({"surface": surface_id, "body": {"error": format!("Failed to open: {error}")}});
+            let response =
+                json!({"surface": surface_id, "body": {"error": "openFailed", "reason": error}});
             output_tx.reply(response).await.is_ok()
         }
     }
@@ -3625,6 +3672,9 @@ async fn surface_task(
     // The generation of the last applied drawing state. A state of an earlier generation belongs to
     // an earlier attachment of the region and is ignored.
     let mut drawing_generation = 0;
+    // The image whose outer surface the host last reported as hidden. It receives no configure until
+    // it is shown.
+    let mut hidden_image: Option<String> = None;
     let mut latest_detached_image: Option<(String, u64)> = None;
     let mut last_image_detach: Option<ImageDetachReplay> = None;
     let mut image_owner_revision = 0_u64;
@@ -3805,8 +3855,13 @@ async fn surface_task(
                             &mut engine, &mut image_state).await {
                             return;
                         }
+                        if image_state.is_none() && !open_if_hidden(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, open_requested, &requested_image, &hidden_image, &requested_shell, &mut session_id, &mut engine).await {
+                            return;
+                        }
                     }
                     SurfaceCommand::Reconnect => {
+                        // The host sends the drawing state of the region again to a new connection.
+                        hidden_image = None;
                         // PTY and VT state belong to the persistent session, and the IOSurface
                         // belongs to the application instance. Discarding only the previous native
                         // image lets the client that reconnects provide a new Configure message.
@@ -4014,13 +4069,17 @@ async fn surface_task(
                             return;
                         }
                     }
-                    SurfaceCommand::Drawing { name, generation, drawing: next } => {
+                    SurfaceCommand::Drawing { name, generation, drawing: next, hidden } => {
                         let current = image_state.as_ref().map_or(drawing_generation, |state| state.generation.max(drawing_generation));
                         if generation < current {
                             continue;
                         }
                         drawing_generation = generation;
                         drawing = next;
+                        hidden_image = hidden.then(|| name.clone());
+                        if image_state.is_none() && !open_if_hidden(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, open_requested, &requested_image, &hidden_image, &requested_shell, &mut session_id, &mut engine).await {
+                            return;
+                        }
                         let Some(state) = image_state.as_mut() else { continue };
                         if state.name != name {
                             continue;
@@ -6003,6 +6062,11 @@ where
                                     name: drawing.get("name")?.as_str()?.to_string(),
                                     generation: drawing.get("generation")?.as_u64()?,
                                     drawing: drawing.get("drawing")?.as_bool()?,
+                                    // A host that does not report hiding sends no such field.
+                                    hidden: match drawing.get("hidden") {
+                                        Some(value) => value.as_bool()?,
+                                        None => false,
+                                    },
                                 })
                             })();
                             if let Some(command) = parsed {

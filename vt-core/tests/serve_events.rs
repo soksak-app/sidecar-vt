@@ -1107,6 +1107,59 @@ async fn the_failure_to_open_a_headless_session_names_the_surface() {
     );
 }
 
+// The failure to open the session of an image surface is the error code `openFailed` with its reason:
+// the page ends the input that waits for that session on this code.
+#[tokio::test]
+async fn the_failure_to_open_a_session_of_an_image_is_a_code_with_a_reason() {
+    let events = TestEvents::new();
+    let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
+    let port = Arc::new(FailingOpenPort);
+    let factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync> =
+        Arc::new(move || port.clone() as Arc<dyn SessionPort>);
+    let replies = serve_with(
+        &events,
+        engine_factory,
+        factory,
+        br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#,
+    )
+    .await;
+    let replies = parsed(&replies);
+    let failures: Vec<_> = replies
+        .iter()
+        .filter(|reply| reply["body"]["error"].is_string())
+        .collect();
+    assert_eq!(failures.len(), 1, "{replies:?}");
+    assert_eq!(failures[0]["surface"], "s1");
+    assert_eq!(failures[0]["body"]["error"], "openFailed");
+    assert_eq!(failures[0]["body"]["reason"], "no shell");
+}
+
+// A session of a hidden region that fails to open is the same code: nothing else ends the input that
+// waits for that session.
+#[tokio::test]
+async fn the_failure_to_open_a_session_of_a_hidden_region_is_a_code_with_a_reason() {
+    let events = TestEvents::new();
+    let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
+    let port = Arc::new(FailingOpenPort);
+    let factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync> =
+        Arc::new(move || port.clone() as Arc<dyn SessionPort>);
+    let replies = serve_with(
+        &events,
+        engine_factory,
+        factory,
+        br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"drawing":{"name":"view","generation":1,"drawing":false,"hidden":true}}}}
+"#,
+    )
+    .await;
+    let replies = parsed(&replies);
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_eq!(replies[0]["body"]["error"], "openFailed");
+    assert_eq!(replies[0]["body"]["reason"], "no shell");
+}
+
 // A terminal font family that is not installed is not an error of the request: the service records
 // it.
 #[tokio::test]
