@@ -1,5 +1,5 @@
 // The census of core (docs/spec/logging.md#census) applies to this repository: its sources pass with census.json, and a source
-// of occurrences that a test adds without an event or a reason fails. The command is soksak-check census of the checks kit release
+// of occurrences that a test adds without an event or a reason fails. The command is soksak-check census of the kit release
 // that package.json pins.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";

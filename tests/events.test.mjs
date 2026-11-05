@@ -1,5 +1,5 @@
 // Checks the catalog of the events of the service, vt-alacritty/events.json (core docs/spec/logging.md#catalog): its structure, and
-// the emit sites of the sources against it with soksak-check census of the checks kit release that package.json pins, which checks the
+// the emit sites of the sources against it with soksak-check census of the kit release that package.json pins, which checks the
 // sites that the emitters of census.json declare, and the event names that the sources of vt-core write.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
