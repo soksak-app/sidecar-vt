@@ -15,6 +15,7 @@ function recipe(target, variables = []) {
   const env = { ...process.env };
   delete env.MAKEFLAGS;
   delete env.RANGE;
+  delete env.CARGO_TARGET_DIR;
   const result = spawnSync("make", ["-n", "--no-print-directory", ...variables, target], { cwd: root, encoding: "utf8", timeout: 30000, env });
   assert.equal(result.status, 0, `make -n ${target} failed: ${result.stderr}`);
   return result.stdout;
@@ -32,6 +33,16 @@ test("make build and release pass an explicit diagnostics feature to Cargo (S78)
   assert.match(build, /cargo build\s+--features diagnostics\s+-p soksak-sidecar-vt-alacritty/);
   assert.match(release, /cargo build\s+--features diagnostics\s+-p soksak-sidecar-vt-alacritty/);
   assert.match(release, /npm pack --silent --pack-destination \/tmp\/vt-s78-dry-run \.\/vt-alacritty/);
+});
+
+// Cargo writes the executables where CARGO_TARGET_DIR names, so the copy reads the same folder (S159).
+test("make build copies the executables from the target directory of Cargo (S159)", { timeout: 30000 }, () => {
+  const named = recipe("build", ["CARGO_TARGET_DIR=/tmp/sidecar-vt-S159-dry-run"]);
+  assert.match(named, /^cp \/tmp\/sidecar-vt-S159-dry-run\/debug\/sok-vt-alacritty vt-alacritty\/build\/sok-vt-alacritty$/m);
+  assert.match(named, /^cp \/tmp\/sidecar-vt-S159-dry-run\/debug\/sok-vt-replay vt-alacritty\/build\/sok-vt-replay$/m);
+  const unnamed = recipe("build");
+  assert.match(unnamed, /^cp target\/debug\/sok-vt-alacritty vt-alacritty\/build\/sok-vt-alacritty$/m);
+  assert.match(unnamed, /^cp target\/debug\/sok-vt-replay vt-alacritty\/build\/sok-vt-replay$/m);
 });
 
 test("the pre-push hook runs make check-push on the pushed range (S72)", { timeout: 30000 }, () => {

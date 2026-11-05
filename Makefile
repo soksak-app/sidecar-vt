@@ -4,6 +4,8 @@
 
 MACOS_MINIMUM = 14.4
 PROFILE ?= debug
+# The folder where Cargo writes; build copies the executables from it. A value from the environment or the command line reaches Cargo too.
+CARGO_TARGET_DIR ?= target
 CARGO_PROFILE = $(if $(filter release,$(PROFILE)),--release,)
 FEATURES ?=
 CARGO_FEATURE_ARGS = $(if $(strip $(FEATURES)),--features $(FEATURES))
@@ -52,8 +54,8 @@ test: build
 build:
 	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo build $(CARGO_PROFILE) $(CARGO_FEATURE_ARGS) -p soksak-sidecar-vt-alacritty
 	mkdir -p vt-alacritty/build
-	cp target/$(PROFILE)/sok-vt-alacritty vt-alacritty/build/sok-vt-alacritty
-	cp target/$(PROFILE)/sok-vt-replay vt-alacritty/build/sok-vt-replay
+	cp $(CARGO_TARGET_DIR)/$(PROFILE)/sok-vt-alacritty vt-alacritty/build/sok-vt-alacritty
+	cp $(CARGO_TARGET_DIR)/$(PROFILE)/sok-vt-replay vt-alacritty/build/sok-vt-replay
 
 release: build
 	@test -n "$(OUT)" || { echo "make release OUT=<folder>" >&2; exit 2; }
