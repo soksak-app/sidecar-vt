@@ -72,6 +72,7 @@
 
 ## Unreleased
 
+- F466-vt: The repository pins the kit release that reports a citation of a local build log or a temporary log.
 - F467-vt: The repository pins `@soksak/kit`.
 - F463-vt: The repository uses the checks kit and its one executable `soksak-check`.
 - S113: The version is 0.0.19.
