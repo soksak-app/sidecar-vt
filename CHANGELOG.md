@@ -1,5 +1,6 @@
 # Changelog
 
+- S158: The answer `Session not open` carries the refused request, so a page sends input again that reached a respawned service before the page heard of it.
 - S157: A session opens without a configuration when its surface is hidden or its raster has no room for one cell, and a failed open answers the code `openFailed`, so the input that waits for a session receives an answer.
 - S156: The event file opens with schema 3, the number of the core event contract, so `sok debug query` reads it.
 - S155: The lifecycle test waits for the report of the shell, so a job that reports first no longer fails it.

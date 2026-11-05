@@ -63,7 +63,7 @@ The service reads its input as one request per line. A line has a limit of 67108
 
 The terminal sidecar names the reasons of its exit in its `sidecar.vt.session_stop` event: `folder-removed`, `endpoint-removed`, or `endpoint-replaced`.
 
-The terminal page treats this as its reconnection signal: it resolves the stale sidecar error, closes its session gate so input queues again, and re-runs its session bootstrap — `open` (a no-op on a preserved session, a new session on a respawned service) followed by the last theme, the declared font, and the cursor policy.
+The terminal page treats this as its reconnection signal: it resolves the stale sidecar error, closes its session gate so input queues again, and re-runs its session bootstrap — `open` (a no-op on a preserved session, a new session on a respawned service) followed by the last theme, the declared font, and the cursor policy. An `input` or `paste` of a surface that holds no session answers `{error: "Session not open", request}`, and `request` is the refused body: a respawned service gives this answer to input that the page sent before it heard of the new connection, and the page sends that body again to the session it reopens.
 
 ### PTY output and input
 

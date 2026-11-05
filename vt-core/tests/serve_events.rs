@@ -1160,6 +1160,35 @@ async fn the_failure_to_open_a_session_of_a_hidden_region_is_a_code_with_a_reaso
     assert_eq!(replies[0]["body"]["reason"], "no shell");
 }
 
+// The answer that a surface holds no session carries the request it refuses: a service that respawned
+// holds no session of a surface whose page does not know that yet, and the page sends that request
+// again to the session it reopens.
+#[tokio::test]
+async fn the_answer_that_no_session_is_open_carries_the_refused_request() {
+    let events = TestEvents::new();
+    let input = serde_json::json!({"operation": "input", "actions": [{"type": "insert", "text": "x", "replacementRange": null, "attributed": false}], "preedit": {"text": "", "markedRange": null, "selectedRange": null, "replacementRange": null, "attributed": false}});
+    let paste = serde_json::json!({"operation": "paste", "text": "y"});
+    // The input of s3, which has a session, ends the run with its acknowledgement.
+    let lines = format!(
+        "{}\n{}\n{}\n{}\n{}\n",
+        serde_json::json!({"surface": "s1", "root": "/tmp", "body": input}),
+        serde_json::json!({"surface": "s2", "root": "/tmp", "body": paste}),
+        serde_json::json!({"surface": "s3", "root": "/tmp", "body": {"operation": "open", "shell": "/bin/sh", "image": "view"}}),
+        serde_json::json!({"surface": "s3", "body": {"image": {"configure": {"name": "view", "generation": 1, "raster": 1, "width": 800, "height": 384, "scale": 1.0}}}}),
+        serde_json::json!({"surface": "s3", "body": input}),
+    );
+    let replies = serve_lines(&events, lines.as_bytes()).await;
+    let replies = parsed(&replies);
+    for (surface, request) in [("s1", input), ("s2", paste)] {
+        let answer = replies
+            .iter()
+            .find(|reply| reply["surface"] == surface)
+            .expect("the request of a surface without a session is answered");
+        assert_eq!(answer["body"]["error"], "Session not open");
+        assert_eq!(answer["body"]["request"], request);
+    }
+}
+
 // A terminal font family that is not installed is not an error of the request: the service records
 // it.
 #[tokio::test]

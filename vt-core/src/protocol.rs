@@ -1287,6 +1287,8 @@ enum SurfaceCommand {
         actions: Vec<InputAction>,
         preedit: Preedit,
         cids: Vec<String>,
+        /// The request as it arrived, which the answer that no session is open carries.
+        request: Value,
     },
     Paste {
         text: String,
@@ -4188,7 +4190,7 @@ async fn surface_task(
                             return;
                         }
                     }
-                    SurfaceCommand::InputTransaction { actions, preedit: next_preedit, cids } => {
+                    SurfaceCommand::InputTransaction { actions, preedit: next_preedit, cids, request } => {
                         last_input = Some(Instant::now());
                         let modes = engine.modes();
                         let mut next_focused = focused;
@@ -4219,7 +4221,7 @@ async fn surface_task(
                             continue;
                         }
                         if !bytes.is_empty() && session_id.is_none() {
-                            let response = json!({"surface": surface_id, "body": {"error": "Session not open"}});
+                            let response = json!({"surface": surface_id, "body": {"error": "Session not open", "request": request}});
                             if output_tx.reply(response).await.is_err() { return; }
                             continue;
                         }
@@ -4288,7 +4290,7 @@ async fn surface_task(
                         } else {
                             let response = json!({
                                 "surface": surface_id,
-                                "body": {"error": "Session not open"}
+                                "body": {"error": "Session not open", "request": {"operation": "paste", "text": text}}
                             });
                             if output_tx.reply(response).await.is_err() {
                                 return;
@@ -5601,6 +5603,7 @@ where
                                         actions,
                                         preedit,
                                         cids: cids.clone(),
+                                        request: body.clone(),
                                     })
                                     .await
                                     .is_err()
