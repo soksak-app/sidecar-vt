@@ -2,6 +2,7 @@
 
 [English](features.md)
 
+- [o] F467-vt — P1, core F467과 연결: 저장소가 workspace의 유일한 kit인 `@soksak/kit`을 pin한다. 입력: `@soksak/kit-checks`를 pin했다. 결과: `make test`가 통과한다.
 - [o] F463-vt — P0, core F463과 연결: 저장소가 checks kit을 쓴다. 입력: records kit과 events kit을 pin하고 그 command를 실행했다. 기대: `package.json`이 `@soksak/kit-checks`를 pin하고 hook, target, workflow가 `soksak-check`를 실행하며, test는 `package.json`의 kit release를 반복하지 않는다. Red: workflow test가 이전 command를 읽었다. Green: `make test`가 통과한다.
 - [o] S152 — P0: S150, S151을 담은 VT sidecar release를 게시하고 registry에 올리며 이를 쓰는 plugin이 요구하게 한다. 모든 manifest가 0.0.25을 밝힌다. 결과: release run이 v0.0.25을 게시했고 registry가 이를 올렸다.
 - [o] S151 — P0: 터미널 영역을 벗어난 포인터 점은 가장 가까운 칸에 속한다. 입력: page view가 이미 네이티브 영역보다 커진 창 크기 변경 중의 hover 이동. 동작: 그 점이 `selection coordinates are outside the terminal region`로 실패하여 터미널이 오류로 표시했다. 기대: 그 점은 마지막 열이나 행에 속하고, 유한하지 않거나 음수인 점은 오류로 남는다. Red: 변경 전 mapping에서 `a_mouse_point_past_the_region_is_accepted_and_a_failure_keeps_its_input_identity`와 `test_selection_in_the_region_padding_selects_to_the_last_edge`가 실패했다. Green: 같은 test가 통과한다.

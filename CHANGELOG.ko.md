@@ -72,6 +72,7 @@
 
 ## 미배포
 
+- F467-vt: 저장소가 `@soksak/kit`을 pin한다.
 - F463-vt: 저장소가 checks kit과 실행 파일 하나 `soksak-check`를 쓴다.
 - S113: version은 0.0.19다.
 - F355-3-4-vt: 검사는 core의 plugin API 대신 records kit과 events kit release에서 오고, core checkout의 census 검사를 실행하던 `SOKSAK_EVENTS`는 지웠다. Red: `the checks come from the kit releases, and no check takes a command or the plugin API of core`가 실패했다. Green: 통과하고, workflow, events, census test가 통과한다.

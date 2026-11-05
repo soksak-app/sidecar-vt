@@ -2,6 +2,7 @@
 
 [한국어](features.ko.md)
 
+- [o] F467-vt — P1, linked to core F467: The repository pins `@soksak/kit`, the one kit of the workspace. Input: it pinned `@soksak/kit-checks`. Result: `make test` passes.
 - [o] F463-vt — P0, linked to core F463: The repository uses the checks kit. Input: it pinned the records kit and the events kit and ran their commands. Expected: `package.json` pins `@soksak/kit-checks`, and its hooks, targets and workflows run `soksak-check`; the tests do not repeat the kit release of `package.json`. Red: its workflow tests read the earlier commands. Green: `make test` passes.
 - [o] S152 — P0: Publish a VT sidecar release that carries S150 and S151, list it in the registry, and make the plugin that uses it require it. Every manifest names 0.0.25. Result: the release run published v0.0.25, and the registry lists it.
 - [o] S151 — P0: A pointer point past the terminal region maps to the nearest cell. Input: a hover move during a window resize, while the page view is already larger than the native region. Behavior: the point failed with `selection coordinates are outside the terminal region`, which the terminal showed as an error. Expected: the point belongs to the last column or row, and a non-finite or negative point stays an error. Red: `a_mouse_point_past_the_region_is_accepted_and_a_failure_keeps_its_input_identity` and `test_selection_in_the_region_padding_selects_to_the_last_edge` failed on the unchanged mapping. Green: the same tests pass.

@@ -10,7 +10,7 @@ CARGO_FEATURE_ARGS = $(if $(strip $(FEATURES)),--features $(FEATURES))
 # The platform key of the release (core docs/spec/installation.md#sidecar-release).
 PLATFORM := $(shell node -p '(process.platform === "win32" ? "windows" : process.platform) + "-" + process.arch')
 
-# soksak-check census of the checks kit release that package.json pins applies the census to the sources
+# soksak-check census of the kit release that package.json pins applies the census to the sources
 # (docs/spec/logging.md#census with census.json) and checks the emit sites that the emitters of census.json declare against
 # the catalog vt-alacritty/events.json.
 
