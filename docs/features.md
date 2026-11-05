@@ -2,6 +2,7 @@
 
 [한국어](features.ko.md)
 
+- [~] F474-vt — P0, linked to core F474: Publish a VT sidecar release whose executables are `sok-vt-alacritty` and `sok-vt-replay`, list it in the registry, and make the plugin that uses it require it. Every manifest names 0.0.26. Active: the release run publishes v0.0.26, then the registry lists it.
 - [o] F460-vt — P2, linked to core F460: `.gitignore` names the local output folder `/build/`. Input: the folder held local output and showed as untracked. Result: `git status` shows no untracked folder, and `make test` passes.
 - [o] F472-vt — P2, linked to core F472: The names of the commands of the repository state what they do, and `make check` runs `sok-check commands`. Result: `make test` passes.
 - [o] F468-vt — P2, linked to core F468: The repository runs `soksak-check docs` and `soksak-check events` of the kit, and `event-sources.json` declares its event sources. Result: `make test` passes.
