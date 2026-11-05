@@ -34,7 +34,7 @@ jobs:
         run: make install
       - name: Decide the release
         id: gate
-        run: pnpm exec soksak-release-gate vt-alacritty/package.json docs/features.md
+        run: pnpm exec soksak-check release vt-alacritty/package.json docs/features.md
 
   release:
     needs: gate

@@ -6,7 +6,7 @@ development without changing that pin or committing pnpm's generated link
 override.
 
 Run dependency-sensitive repository checks before linking the local package.
-`pnpm exec soksak-records` can run pnpm resolution and restore the manifest's
+`pnpm exec soksak-check records` can run pnpm resolution and restore the manifest's
 deployment pin after generated local link metadata has been removed. Then run:
 
 ```sh

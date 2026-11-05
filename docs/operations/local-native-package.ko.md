@@ -5,7 +5,7 @@ Sidecar manifest는 배포 dependency를 선언된 core Git revision에 고정�
 local core checkout의 native package를 연결할 수 있다.
 
 Local package를 연결하기 전에 dependency resolution에 영향을 받는 저장소
-검사를 실행한다. `pnpm exec soksak-records`는 pnpm resolution을 실행하며,
+검사를 실행한다. `pnpm exec soksak-check records`는 pnpm resolution을 실행하며,
 생성된 local link metadata를 제거한 뒤 manifest의 배포 pin을 다시 가져올 수
 있다. 그 다음 아래 명령을 실행한다.
 

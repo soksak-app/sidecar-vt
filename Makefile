@@ -10,7 +10,7 @@ CARGO_FEATURE_ARGS = $(if $(strip $(FEATURES)),--features $(FEATURES))
 # The platform key of the release (core docs/spec/installation.md#sidecar-release).
 PLATFORM := $(shell node -p '(process.platform === "win32" ? "windows" : process.platform) + "-" + process.arch')
 
-# soksak-events of the events kit release that package.json pins applies the census to the sources
+# soksak-check census of the checks kit release that package.json pins applies the census to the sources
 # (docs/spec/logging.md#census with census.json) and checks the emit sites that the emitters of census.json declare against
 # the catalog vt-alacritty/events.json.
 
@@ -42,9 +42,9 @@ test: build
 	$(NEXTEST) -p soksak-sidecar-vt-core --features fault-injection --test fault_injection
 	$(NEXTEST) -p soksak-sidecar-vt-core --features fault-injection --test serve_contract -E 'test(=a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it)'
 	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo clippy --workspace --all-targets --features diagnostics -- -D warnings
-	pnpm exec soksak-events --census census.json --catalog vt-alacritty/events.json .
+	pnpm exec soksak-check census --config census.json --catalog vt-alacritty/events.json .
 	node --test tests/
-	pnpm exec soksak-records
+	pnpm exec soksak-check records
 
 # `FEATURES=diagnostics` enables the diagnostic service build; the runtime trace remains opt-in.
 # Uses vt-alacritty/build/soksak-vt-alacritty, which sidecar.json points to.
@@ -76,7 +76,7 @@ candidate-release:
 # the tests and checks on the pushed commits.
 # RANGE holds the commits of the pushed refs; the pre-push hook sets it, and it defaults to origin/main..HEAD.
 push-check:
-	pnpm exec soksak-commits "$(or $(RANGE),origin/main..HEAD)"
+	pnpm exec soksak-check commits "$(or $(RANGE),origin/main..HEAD)"
 
 # Repeats the tests of PACKAGE, or only the test TEST, COUNT times and reports each run with its elapsed time; the
 # first failing run prints its output and fails. FEATURES selects the package features used by each run.

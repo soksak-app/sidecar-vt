@@ -1,5 +1,5 @@
 // The census of core (docs/spec/logging.md#census) applies to this repository: its sources pass with census.json, and a source
-// of occurrences that a test adds without an event or a reason fails. The command is soksak-events of the events kit release
+// of occurrences that a test adds without an event or a reason fails. The command is soksak-check census of the checks kit release
 // that package.json pins.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -9,11 +9,11 @@ import { join } from "node:path";
 import test from "node:test";
 
 const root = new URL("../", import.meta.url).pathname;
-const command = join(root, "node_modules/.bin/soksak-events");
+const command = join(root, "node_modules/.bin/soksak-check");
 
 /** Runs the census in `directory` with the declaration census.json there and returns the exit status and the output. */
 function census(directory) {
-  const run = spawnSync(command, ["--census", "census.json", "."], { cwd: directory, encoding: "utf8" });
+  const run = spawnSync(command, ["census", "--config", "census.json", "."], { cwd: directory, encoding: "utf8" });
   assert.equal(run.error, undefined, `${command}: ${run.error}`);
   return { status: run.status, output: `${run.stdout}${run.stderr}` };
 }
