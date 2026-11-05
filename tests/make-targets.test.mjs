@@ -23,7 +23,7 @@ function recipe(target, variables = []) {
 // A published commit message is kept, so the push checks it; CI runs the tests on the pushed commits.
 test("make push-check runs only the commit message check of the pushed range (F274-vt-sidecar)", { timeout: 30000 }, () => {
   const commands = recipe("push-check");
-  assert.deepEqual(commands.trim().split("\n"), ['pnpm exec soksak-commits "origin/main..HEAD"']);
+  assert.deepEqual(commands.trim().split("\n"), ['pnpm exec soksak-check commits "origin/main..HEAD"']);
 });
 
 test("make build and release pass an explicit diagnostics feature to Cargo (S78)", { timeout: 30000 }, () => {
