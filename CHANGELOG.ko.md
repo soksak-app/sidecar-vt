@@ -72,6 +72,7 @@
 
 ## 미배포
 
+- F460-vt: `.gitignore`가 local 출력 폴더 `/build/`를 지정한다.
 - F466-vt: 저장소가 local build log와 임시 log의 인용을 보고하는 kit release를 pin한다.
 - F467-vt: 저장소가 `@soksak/kit`을 pin한다.
 - F463-vt: 저장소가 checks kit과 실행 파일 하나 `soksak-check`를 쓴다.

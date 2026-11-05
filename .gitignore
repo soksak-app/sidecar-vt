@@ -1,3 +1,4 @@
 target/
 vt-alacritty/build/
 node_modules/
+/build/
