@@ -106,7 +106,7 @@ async fn served_session() -> Vec<Value> {
 
 /// Runs the replay executable on `lines` and returns its status, its lines of hashes and its standard error.
 fn replay(lines: &[Value]) -> (bool, Vec<Value>, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_soksak-vt-replay"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sok-vt-replay"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

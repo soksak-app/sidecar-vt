@@ -1,5 +1,5 @@
 // The event source check of core (docs/spec/logging.md#event-sources) applies to this repository: its sources pass with event-sources.json, and a source
-// of occurrences that a test adds without an event or a reason fails. The command is soksak-check events of the kit release
+// of occurrences that a test adds without an event or a reason fails. The command is sok-check events of the kit release
 // that package.json pins.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -9,7 +9,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 const root = new URL("../", import.meta.url).pathname;
-const command = join(root, "node_modules/.bin/soksak-check");
+const command = join(root, "node_modules/.bin/sok-check");
 
 /** Runs the event source check in `directory` with the declaration event-sources.json there and returns the exit status and the output. */
 function eventSources(directory) {

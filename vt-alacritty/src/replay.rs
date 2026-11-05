@@ -352,7 +352,7 @@ fn main() -> std::process::ExitCode {
     match run(stdin.lock(), stdout.lock()) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("soksak-vt-replay: {error}");
+            eprintln!("sok-vt-replay: {error}");
             std::process::ExitCode::FAILURE
         }
     }

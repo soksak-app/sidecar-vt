@@ -1,5 +1,5 @@
 // Checks the catalog of the events of the service, vt-alacritty/events.json (core docs/spec/logging.md#catalog): its structure, and
-// the emit sites of the sources against it with soksak-check events of the kit release that package.json pins, which checks the
+// the emit sites of the sources against it with sok-check events of the kit release that package.json pins, which checks the
 // sites that the emitters of event-sources.json declare, and the event names that the sources of vt-core write.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -49,7 +49,7 @@ test("the catalog declares the layer sidecar and events of the form sidecar.vt.<
   }
 });
 
-const command = join(root, "node_modules/.bin/soksak-check");
+const command = join(root, "node_modules/.bin/sok-check");
 
 test("the event source check finds every emit site of the emitters declared and the catalog complete", () => {
   const args = ["events", "--config", "event-sources.json", "--catalog", "vt-alacritty/events.json", "."];
@@ -87,7 +87,7 @@ test("the manifest declares the replay executable of the role vt, the events of 
   const packed = JSON.parse(readFileSync(join(root, "vt-alacritty/package.json"), "utf8")).files;
   assert.deepEqual(manifest.replay, {
     role: "vt",
-    executable: "build/soksak-vt-replay",
+    executable: "build/sok-vt-replay",
     // Each kind of replay input names the event that stores it (core docs/spec/sidecars.md, replay).
     inputs: {
       output: "sidecar.vt.pty_read",

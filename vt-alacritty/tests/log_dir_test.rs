@@ -219,7 +219,7 @@ fn a_service_starts_with_its_own_record() {
 #[test]
 fn a_service_without_log_dir_refuses_to_start_and_says_so() {
     let root = directory("missing");
-    let child = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"))
+    let child = Command::new(env!("CARGO_BIN_EXE_sok-vt-alacritty"))
         .env_remove("SOKSAK_SIDECAR_DISPLAY_NAME")
         .arg("--service-dir")
         .arg(&*root)
@@ -345,7 +345,7 @@ fn a_service_with_log_dir_writes_log_open_and_flushes_it_when_it_ends() {
 
 /// Starts the service and returns it with its ready line.
 fn start(root: &std::path::Path) -> (Service, String) {
-    let child = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"))
+    let child = Command::new(env!("CARGO_BIN_EXE_sok-vt-alacritty"))
         .env_remove("SOKSAK_SIDECAR_DISPLAY_NAME")
         .arg("--log-dir")
         .arg(root.join("logs"))

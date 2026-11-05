@@ -124,7 +124,7 @@ fn start_with_logs_and_display_name(
     logs: &Path,
     display_name: Option<&str>,
 ) -> (Service, PathBuf) {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_sok-vt-alacritty"));
     command.env_remove("SOKSAK_SIDECAR_DISPLAY_NAME");
     if let Some(display_name) = display_name {
         command.env("SOKSAK_SIDECAR_DISPLAY_NAME", display_name);
@@ -265,7 +265,7 @@ fn embedded_process_identity_matches_its_sidecar_manifest() {
 
 #[test]
 fn startup_uses_embedded_identity_before_argument_validation() {
-    let output = Command::new(env!("CARGO_BIN_EXE_soksak-vt-alacritty"))
+    let output = Command::new(env!("CARGO_BIN_EXE_sok-vt-alacritty"))
         .env_remove("SOKSAK_SIDECAR_DISPLAY_NAME")
         .output()
         .expect("start the service without a host display name");

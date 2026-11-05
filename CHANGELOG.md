@@ -78,6 +78,7 @@
 ## Unreleased
 
 - F460-vt: `.gitignore` names the local output folder `/build/`.
+- F472-vt: The names of the commands state what they do, and `sok-check commands` holds them.
 - F468-vt: The repository runs `soksak-check docs` and `soksak-check events` of the kit with `event-sources.json`.
 - F466-vt: The repository pins the kit release that reports a citation of a local build log or a temporary log.
 - F467-vt: The repository pins `@soksak/kit`.
