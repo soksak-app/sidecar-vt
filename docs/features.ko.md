@@ -2,6 +2,7 @@
 
 [English](features.md)
 
+- [o] F476-vt — P2, core F476과 연결: test는 선언된 version을 되풀이하지 않는다. 입력: test가 자기 package version의 assertion을 가져, 동작 변경 없이 release마다 바뀌었다. 결과: 이를 지웠고 `make test`가 통과한다.
 - [o] F474-vt — P0, core F474와 연결: 실행 파일이 `sok-vt-alacritty`와 `sok-vt-replay`인 VT sidecar release를 게시하고 registry에 올리며 이를 쓰는 plugin이 요구하게 한다. 모든 manifest가 0.0.26을 밝힌다. 결과: release run이 v0.0.26을 게시했고 registry가 이를 올리며, 게시된 core 0.0.36의 `sok plugin install`이 이를 선택한다.
 - [o] F460-vt — P2, core F460과 연결: `.gitignore`가 local 출력 폴더 `/build/`를 지정한다. 입력: 그 폴더는 local 출력을 담고 추적되지 않은 항목으로 보였다. 결과: `git status`에 추적되지 않은 폴더가 없고 `make test`가 통과한다.
 - [o] F472-vt — P2, core F472와 연결: 저장소의 명령 이름이 하는 일을 말하고, `make check`가 `sok-check commands`를 실행한다. 결과: `make test`가 통과한다.

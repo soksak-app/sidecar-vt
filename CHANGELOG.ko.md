@@ -1,5 +1,6 @@
 # 변경 기록
 
+- F476-vt: test가 선언된 version을 되풀이하지 않는다.
 - F474-vt: release run이 v0.0.26을 게시했고 registry가 이를 올린다.
 - F474-vt: 후보는 0.0.26이며 실행 파일은 `sok-vt-alacritty`와 `sok-vt-replay`이다.
 - S152: 후보는 0.0.25이며 S150, S151를 담는다.

@@ -1,5 +1,6 @@
 # Changelog
 
+- F476-vt: The tests repeat no declared version.
 - F474-vt: The release run published v0.0.26, and the registry lists it.
 - F474-vt: The candidate is 0.0.26, whose executables are `sok-vt-alacritty` and `sok-vt-replay`.
 - S152: The candidate is 0.0.25, which carries S150 and S151.
