@@ -2,7 +2,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -109,4 +110,21 @@ test("every member of the workspace denies linker_info (S163)", { timeout: 30000
     const manifest = readFileSync(path.join(root, member, "Cargo.toml"), "utf8");
     assert.match(manifest, /^\[lints\]\nworkspace = true$/m, `${member}/Cargo.toml does not take the lints of the workspace`);
   }
+});
+
+// rustup installs cargo in ~/.cargo/bin and adds that folder to PATH in the shell profile, which the shell of make does not
+// read, so the Makefile puts the folder on PATH. A recipe run with only the system folders on PATH finds that cargo (S164).
+test("the shell of make finds the cargo of rustup without the PATH of the profile (S164)", { timeout: 30000 }, () => {
+  const cargo = path.join(homedir(), ".cargo", "bin", "cargo");
+  assert.ok(existsSync(cargo), `rustup installs no cargo at ${cargo}`);
+  // The probe target comes from standard input after the Makefile, so the recipe runs with the PATH that the Makefile exports.
+  const result = spawnSync("/usr/bin/make", ["-s", "--no-print-directory", "-f", "Makefile", "-f", "-", "find-cargo"], {
+    cwd: root,
+    input: "find-cargo: ; @command -v cargo\n",
+    encoding: "utf8",
+    timeout: 25000,
+    env: { HOME: homedir(), PATH: "/usr/bin:/bin" },
+  });
+  assert.equal(result.status, 0, `the shell of make finds no cargo: ${result.stdout}${result.stderr}`);
+  assert.equal(result.stdout.trim(), cargo);
 });
