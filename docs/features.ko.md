@@ -2,7 +2,7 @@
 
 [English](features.md)
 
-- [~] S153 — P2: PTY를 통해 실제 받은 byte sequence를 확인한다. 입력: `writes_to_a_program_that_echoes_end_in_order_while_the_output_is_read`는 출력을 버리고 수신 확인 없이 write 완료를 기다렸다. 결과: raw, no-echo child가 별도 종료 marker까지 읽은 byte를 연속 반환한다. test는 결과를 기다리기 전에 모든 write를 queue에 넣고 child 종료까지 반환한 전체 payload를 비교한다. 첫 payload는 출력 channel 한도를 넘으며 newline, carriage return, NUL byte를 포함한다. Red: 추적하는 순서 변경, 누락, 후행 중복 3개 case를 완료 결과만 보는 관찰이 승인하여 거부 assertion이 실패했다. Green: 최종 fixture의 수신 byte 4개 case가 모두 통과하고, 변경하지 않은 nonblocking write, 입력 한도, 동시 입력 한도, 출력 유실 case도 macOS에서 통과한다. 서식 및 문서 검사가 통과한다. PTY runtime 순서 결함을 주장하지 않는다. 진행: 구현과 집중 검증을 마쳤으며 완료 기록이 남아 있다.
+- [o] S153 — P2: PTY를 통해 실제 받은 byte sequence를 확인한다. 입력: `writes_to_a_program_that_echoes_end_in_order_while_the_output_is_read`는 출력을 버리고 수신 확인 없이 write 완료를 기다렸다. 결과: raw, no-echo child가 별도 종료 marker까지 읽은 byte를 연속 반환한다. test는 결과를 기다리기 전에 모든 write를 queue에 넣고 child 종료까지 반환한 전체 payload를 비교한다. 첫 payload는 출력 channel 한도를 넘으며 newline, carriage return, NUL byte를 포함한다. Red: 추적하는 순서 변경, 누락, 후행 중복 3개 case를 완료 결과만 보는 관찰이 승인하여 거부 assertion이 실패했다. Green: 최종 fixture의 수신 byte 4개 case가 모두 통과하고, 변경하지 않은 nonblocking write, 입력 한도, 동시 입력 한도, 출력 유실 case도 macOS에서 통과한다. 서식 및 문서 검사가 통과한다. PTY runtime 순서 결함을 주장하지 않는다.
 
 - [o] F476-vt — P2, core F476과 연결: test는 선언된 version을 되풀이하지 않는다. 입력: test가 자기 package version의 assertion을 가져, 동작 변경 없이 release마다 바뀌었다. 결과: 이를 지웠고 `make test`가 통과한다.
 - [o] F474-vt — P0, core F474와 연결: 실행 파일이 `sok-vt-alacritty`와 `sok-vt-replay`인 VT sidecar release를 게시하고 registry에 올리며 이를 쓰는 plugin이 요구하게 한다. 모든 manifest가 0.0.26을 밝힌다. 결과: release run이 v0.0.26을 게시했고 registry가 이를 올리며, 게시된 core 0.0.36의 `sok plugin install`이 이를 선택한다.
