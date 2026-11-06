@@ -21,10 +21,14 @@ function recipe(target, variables = []) {
   return result.stdout;
 }
 
-// A published commit message is kept, so the push checks it; CI runs the tests on the pushed commits.
-test("make check-push runs only the commit message check of the pushed range (F274-vt-sidecar)", { timeout: 30000 }, () => {
+// A published commit is kept, so the push checks its message and the checklist history it records; CI runs the tests on
+// the pushed commits.
+test("make check-push runs the commit message check and the checklist history check of the pushed range (S154)", { timeout: 30000 }, () => {
   const commands = recipe("check-push");
-  assert.deepEqual(commands.trim().split("\n"), ['pnpm exec sok-check commits "origin/main..HEAD"']);
+  assert.deepEqual(commands.trim().split("\n"), [
+    'pnpm exec sok-check commits "origin/main..HEAD"',
+    'pnpm exec sok-check docs --range "origin/main..HEAD"',
+  ]);
 });
 
 test("make build and release pass an explicit diagnostics feature to Cargo (S78)", { timeout: 30000 }, () => {

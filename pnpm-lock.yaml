@@ -9,8 +9,8 @@ importers:
   .:
     devDependencies:
       '@soksak/kit':
-        specifier: https://github.com/soksak-app/kit/releases/download/v0.0.13/soksak-kit-0.0.13.tgz
-        version: https://github.com/soksak-app/kit/releases/download/v0.0.13/soksak-kit-0.0.13.tgz
+        specifier: https://github.com/soksak-app/kit/releases/download/v0.0.14/soksak-kit-0.0.14.tgz
+        version: https://github.com/soksak-app/kit/releases/download/v0.0.14/soksak-kit-0.0.14.tgz
       tree-sitter-bash:
         specifier: 0.25.1
         version: 0.25.1
@@ -30,9 +30,9 @@ importers:
 
 packages:
 
-  '@soksak/kit@https://github.com/soksak-app/kit/releases/download/v0.0.13/soksak-kit-0.0.13.tgz':
-    resolution: {integrity: sha512-nBzwE16HUz3Ft7zz1RNaaQgsXbV+HjHrcJMu5s0cwVlPQrqOh891AHKREytzl7/BZhI0xqWZ41oA/wJyEfdEfw==, tarball: https://github.com/soksak-app/kit/releases/download/v0.0.13/soksak-kit-0.0.13.tgz}
-    version: 0.0.13
+  '@soksak/kit@https://github.com/soksak-app/kit/releases/download/v0.0.14/soksak-kit-0.0.14.tgz':
+    resolution: {integrity: sha512-xeTLFb6TopYTwfs7U9iZjlbxYN4sa9lhfBVGaXgtNGyhhNNJ7y0wvLegOnhTXZeHTbpW8m02g4RZo0OLoqKSZA==, tarball: https://github.com/soksak-app/kit/releases/download/v0.0.14/soksak-kit-0.0.14.tgz}
+    version: 0.0.14
     hasBin: true
 
   '@soksak/native-process-identity-darwin@https://github.com/soksak-app/core/releases/download/v0.0.25/soksak-native-process-identity-darwin-0.0.25.tgz':
@@ -97,7 +97,7 @@ packages:
 
 snapshots:
 
-  '@soksak/kit@https://github.com/soksak-app/kit/releases/download/v0.0.13/soksak-kit-0.0.13.tgz':
+  '@soksak/kit@https://github.com/soksak-app/kit/releases/download/v0.0.14/soksak-kit-0.0.14.tgz':
     dependencies:
       ajv: 8.20.0
       smol-toml: 1.9.1

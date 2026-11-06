@@ -75,11 +75,12 @@ release-candidate:
 	  test "$$(printf '%s\n' "$$release" | wc -l | tr -d ' ')" = 1 || { echo "release-candidate found multiple VT releases in $(OUT)" >&2; exit 2; }; \
 	  SOKSAK_DIAGNOSTIC_PACKAGE_RELEASE="$$release" node --test --test-concurrency=1 tests/versions.test.mjs tests/diagnostic_package.test.mjs
 
-# The check that a push needs: the commit messages of the pushed range, because a published commit message is kept; CI runs
-# the tests and checks on the pushed commits.
+# The checks that a push needs: the commit messages and the checklist history of the pushed range, because a published
+# commit is kept; CI runs the tests and the other checks on the pushed commits.
 # RANGE holds the commits of the pushed refs; the pre-push hook sets it, and it defaults to origin/main..HEAD.
 check-push:
 	pnpm exec sok-check commits "$(or $(RANGE),origin/main..HEAD)"
+	pnpm exec sok-check docs --range "$(or $(RANGE),origin/main..HEAD)"
 
 # Repeats the tests of PACKAGE, or only the test TEST, COUNT times and reports each run with its elapsed time; the
 # first failing run prints its output and fails. FEATURES selects the package features used by each run.

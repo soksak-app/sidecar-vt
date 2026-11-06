@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S154: push check와 CI가 push 범위에 commit message 검사 뒤 kit 0.0.14의 체크리스트 이력 검사 `sok-check docs --range`를 실행한다.
 - S161: input과 paste의 모든 답이 요청의 cids를 밝히는 것을 test로 고정한다.
 - S160: frozen install test가 `make install`이 채운 store를 읽으므로, GitHub의 답이 `make test`를 실패시키지 않는다.
 - S159: `make build`가 Cargo가 실행 파일을 쓴 폴더, 곧 `CARGO_TARGET_DIR`이 가리키는 폴더에서 복사한다.
