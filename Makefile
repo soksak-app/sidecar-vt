@@ -1,9 +1,13 @@
 # Test, build, and release of the terminal engine sidecar repository (docs/features.md).
 # The release is the npm pack file of vt-alacritty.
-.PHONY: install test build release release-candidate repeat check-push install-hooks
+.PHONY: install test build release check-cargo release-candidate repeat check-push install-hooks
 
 # rustup installs cargo here and adds the path to the shell profile. The shell of make does not read the profile (S164).
 export PATH := $(HOME)/.cargo/bin:$(PATH)
+# GNU Make 3.81 runs a recipe line without shell characters itself and looks its program up in its own PATH, not in the
+# exported one, and $(shell) does not receive the exported PATH either; so cargo is resolved once with that PATH and every
+# recipe runs $(CARGO). check-cargo stops a target that runs cargo when none was found (S164).
+CARGO := $(shell PATH="$(PATH)" command -v cargo)
 
 # The oldest macOS that the sidecar runs on, the value of core (core Makefile MACOS_MINIMUM). Every command that runs Cargo,
 # and the node tests that start Cargo, give it as MACOSX_DEPLOYMENT_TARGET, which cc reads for the Objective-C objects and
@@ -35,6 +39,10 @@ check-process-identity:
 build: check-process-identity
 endif
 
+check-cargo:
+	@test -n "$(CARGO)" || { echo "make: cargo is on neither PATH nor $(HOME)/.cargo/bin; rustup installs it there" >&2; exit 1; }
+build test repeat: check-cargo
+
 # The installation stage (core docs/spec/plugins.md#repositories): it installs the locked dependencies; the tests, checks and packs consume them without installing.
 install:
 	pnpm install --frozen-lockfile
@@ -48,12 +56,12 @@ install:
 # the usage of a Rust type is a unit test (S76-2).
 NEXTEST = $(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) CARGO_INCREMENTAL=0 node scripts/nextest-run.mjs --config-file .config/nextest.toml --no-fail-fast
 test: build
-	cargo fmt --all --check
+	$(CARGO) fmt --all --check
 	$(NEXTEST) --workspace
 	$(NEXTEST) -p soksak-sidecar-vt-core --features diagnostics --test engine_trace_test
 	$(NEXTEST) -p soksak-sidecar-vt-core --features fault-injection --test fault_injection
 	$(NEXTEST) -p soksak-sidecar-vt-core --features fault-injection --test serve_contract -E 'test(=a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it)'
-	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) $(CHECK_LINK) cargo clippy --workspace --all-targets --features diagnostics -- -D warnings
+	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) $(CHECK_LINK) $(CARGO) clippy --workspace --all-targets --features diagnostics -- -D warnings
 	pnpm exec sok-check events --config event-sources.json --catalog vt-alacritty/events.json .
 	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) node --test tests/
 	pnpm exec sok-check docs
@@ -62,7 +70,7 @@ test: build
 # `FEATURES=diagnostics` enables the diagnostic service build; the runtime trace remains opt-in.
 # Uses vt-alacritty/build/sok-vt-alacritty, which sidecar.json points to.
 build:
-	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) $(CHECK_LINK) cargo build $(CARGO_PROFILE) $(CARGO_FEATURE_ARGS) -p soksak-sidecar-vt-alacritty
+	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) $(CHECK_LINK) $(CARGO) build $(CARGO_PROFILE) $(CARGO_FEATURE_ARGS) -p soksak-sidecar-vt-alacritty
 	mkdir -p vt-alacritty/build
 	cp $(CARGO_TARGET_DIR)/$(PROFILE)/sok-vt-alacritty vt-alacritty/build/sok-vt-alacritty
 	cp $(CARGO_TARGET_DIR)/$(PROFILE)/sok-vt-replay vt-alacritty/build/sok-vt-replay
@@ -97,10 +105,10 @@ check-push:
 repeat:
 	@case "$(PACKAGE)" in '') echo "make repeat PACKAGE=<package> COUNT=<n> [TEST=<name>] [FEATURES=<features>]" >&2; exit 2;; esac
 	@case "$(COUNT)" in ''|*[!0-9]*|0) echo "make repeat requires COUNT=<n> with n >= 1" >&2; exit 2;; esac
-	@$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) $(CHECK_LINK) cargo test -q -p $(PACKAGE) $(CARGO_FEATURE_ARGS) --no-run
+	@$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) $(CHECK_LINK) $(CARGO) test -q -p $(PACKAGE) $(CARGO_FEATURE_ARGS) --no-run
 	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT; run=1; while [ $$run -le $(COUNT) ]; do \
 	  started=$$(date +%s); \
-	  if ! $(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) $(CHECK_LINK) cargo test -q -p $(PACKAGE) $(CARGO_FEATURE_ARGS) $(if $(TEST),-- --exact $(TEST)) > "$$output" 2>&1; then \
+	  if ! $(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) $(CHECK_LINK) $(CARGO) test -q -p $(PACKAGE) $(CARGO_FEATURE_ARGS) $(if $(TEST),-- --exact $(TEST)) > "$$output" 2>&1; then \
 	    cat "$$output"; echo "FAIL run $$run of $(COUNT) after $$(( $$(date +%s) - started )) s"; exit 1; fi; \
 	  echo "PASS run $$run of $(COUNT) in $$(( $$(date +%s) - started )) s"; run=$$((run + 1)); done
 

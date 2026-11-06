@@ -113,20 +113,42 @@ test("every member of the workspace prints linker_info (S163)", { timeout: 30000
 });
 
 // rustup installs cargo in ~/.cargo/bin and adds that folder to PATH in the shell profile, which the shell of make does not
-// read, so the Makefile puts the folder on PATH. A recipe run with only the system folders on PATH finds that cargo (S164).
-test("the shell of make finds the cargo of rustup without the PATH of the profile (S164)", { timeout: 30000 }, () => {
-  const cargo = path.join(homedir(), ".cargo", "bin", "cargo");
-  assert.ok(existsSync(cargo), `rustup installs no cargo at ${cargo}`);
-  // The probe target comes from standard input after the Makefile, so the recipe runs with the PATH that the Makefile exports.
-  const result = spawnSync("/usr/bin/make", ["-s", "--no-print-directory", "-f", "Makefile", "-f", "-", "find-cargo"], {
+// read. GNU Make 3.81 runs a recipe line without shell characters itself and looks its program up in its own PATH, not in
+// the PATH that the Makefile exports, so the Makefile resolves cargo once into CARGO and every recipe runs $(CARGO) (S164).
+test("a recipe line that make runs without a shell runs the cargo of rustup without the PATH of the profile (S164)", { timeout: 30000 }, () => {
+  assert.ok(existsSync(path.join(homedir(), ".cargo", "bin", "cargo")), "rustup installs no cargo in ~/.cargo/bin");
+  // The probe target comes from standard input after the Makefile; its line holds no shell character.
+  const result = spawnSync("/usr/bin/make", ["-s", "--no-print-directory", "-f", "Makefile", "-f", "-", "run-cargo"], {
     cwd: root,
-    input: "find-cargo: ; @command -v cargo\n",
+    input: "run-cargo:\n\t$(CARGO) --version\n",
     encoding: "utf8",
     timeout: 25000,
     env: { HOME: homedir(), PATH: "/usr/bin:/bin" },
   });
-  assert.equal(result.status, 0, `the shell of make finds no cargo: ${result.stdout}${result.stderr}`);
-  assert.equal(result.stdout.trim(), cargo);
+  assert.equal(result.status, 0, `make runs no cargo: ${result.stdout}${result.stderr}`);
+  assert.match(result.stdout, /^cargo \d+\.\d+\.\d+/);
+});
+
+test("every recipe line runs cargo through $(CARGO) (S164)", { timeout: 5000 }, () => {
+  const lines = readFileSync(path.join(root, "Makefile"), "utf8").split("\n").filter((line) => line.startsWith("\t"));
+  // A quoted string is an argument, such as a message that names cargo, so it is left out.
+  const bare = lines.filter((line) => /(?:^|[\s;|&(])cargo(?=\s|$)/.test(line.replaceAll("$(CARGO)", "").replace(/"[^"]*"/g, '""')));
+  assert.deepEqual(bare, [], "a recipe line runs cargo by name");
+});
+
+// A target that runs cargo stops with a message when no cargo was found, and the targets that run no cargo do not need one.
+test("build, test and repeat check that cargo was found, and the check names the folder of rustup (S164)", { timeout: 30000 }, () => {
+  for (const [target, variables] of [["build", []], ["test", []], ["repeat", ["PACKAGE=soksak-sidecar-vt-core", "COUNT=1"]]]) {
+    assert.match(recipe(target, variables), /^test -n ".*cargo" \|\|/m, `make ${target} does not check that cargo was found`);
+  }
+  const result = spawnSync("/usr/bin/make", ["-s", "--no-print-directory", "check-cargo"], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 25000,
+    env: { HOME: "/nonexistent", PATH: "/usr/bin:/bin" },
+  });
+  assert.notEqual(result.status, 0, result.stderr);
+  assert.match(result.stderr, /cargo is on neither PATH nor \/nonexistent\/\.cargo\/bin/);
 });
 
 // Each command that links runs under the link check: Cargo through scripts/check-link.mjs, and cargo-nextest through
@@ -136,6 +158,6 @@ test("each Cargo command of build, test and repeat runs under the link check (S1
   const commands = recipes.flatMap((lines) => lines.split("\n")).filter((line) => /\bcargo (?:build|clippy|test|nextest)\b|nextest-run\.mjs/.test(line));
   assert.notEqual(commands.length, 0);
   for (const command of commands) {
-    assert.match(command, /\bnode scripts\/check-link\.mjs cargo (?:build|clippy|test)\b|\bnode scripts\/nextest-run\.mjs\b/, `the command runs Cargo outside the link check: ${command}`);
+    assert.match(command, /\bnode scripts\/check-link\.mjs \S*\bcargo (?:build|clippy|test)\b|\bnode scripts\/nextest-run\.mjs\b/, `the command runs Cargo outside the link check: ${command}`);
   }
 });
