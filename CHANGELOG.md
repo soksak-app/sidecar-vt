@@ -1,5 +1,6 @@
 # Changelog
 
+- S162: The PTY write-order test compares all bytes returned by a raw, no-echo child, including trailing output, instead of discarding output and waiting only for write completion. Tracked reordered, missing and trailing-duplicate cases expose the earlier false acceptance and now fail the byte comparison; the normal case and four existing queue/output boundary checks pass on macOS.
 - S154: The push check and CI run the checklist history check `sok-check docs --range` of kit 0.0.14 on the pushed range, after the commit message check.
 - S161: A test fixes that every answer of an input or a paste names the cids of its request.
 - S160: The test of the frozen install reads the store that `make install` filled, so an answer of GitHub does not fail `make test`.
