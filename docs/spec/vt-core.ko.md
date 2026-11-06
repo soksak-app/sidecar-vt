@@ -75,6 +75,8 @@ hook은 프롬프트 앞마다 `133;A`를 보고하고(bash는 readline이 프�
 
 **write 결과.** task는 각 write의 결과를 순서 있는 stream 하나로 보고하고, surface는 그 stream에서 acknowledgement와 `sidecar.vt.pty_write` 기록을 보낸다. `ok: true`는 master가 모든 바이트를 받았다는 뜻이다. 완성된 줄이 없는 canonical tty는 바이트를 받고 버릴 수 있으므로, `ok: true`는 프로그램이 읽었다는 뜻이 아니다. `ok: false`는 실패 지점 뒤의 바이트를 프로그램이 받지 못했다는 뜻이고, 기록에 이유가 실린다.
 
+Byte 순서 검증은 raw, no-echo child가 읽고 반환한 전체 byte를 종료 직전 출력까지 포함하여 queue에 넣은 payload의 순서와 비교한다. write 결과를 기다리는 것만으로 수신이나 순서를 증명하지 못한다. 검사는 기대한 payload 뒤의 추가 byte를 포함하여 순서 변경, 누락, 중복 byte를 거부해야 한다.
+
 **child 종료.** child가 reap되면 task는 read가 0을 돌려주거나 대기해야 할 때까지, 또는 64 KiB를 더 읽을 때까지 읽는다. queue에 있거나 일부만 쓰인 입력을 각각 `ok: false`와 이유 `child exited`로 끝내고, master descriptor 둘을 닫은 다음, chunk와 `Exit`를 출력 channel로 보낸다. 그 뒤 남은 job이 쓰는 바이트는 다른 session의 job에서도 그 job에서 오류로 실패하거나 hangup으로 그 job을 끝낸다. service는 그 바이트를 읽지 않았고 쥐지 않는다. macOS에서는 session leader의 종료가 master가 열려 있어도 이미 그 write를 실패시키고, master를 닫으면 terminal이 풀린다. reaper가 보고하기 전에 master write가 EIO로 실패하면 queue는 그 보고나 close를 기다린다. child 종료는 아무것도 kill하지 않는다. 세션 항목은 명시적 close나 owner close까지 남는다. `Exit` 뒤 write는 `session writer is closed`를, resize와 측정은 `session master is closed`를 돌려준다. `Exit` 뒤 첫 close는 process group을 kill하고 `sidecar.vt.kill`로 기록하고 항목을 지운다. surface는 `Exit`로 끝나기 전에 frame clock이 쥔 화면을 그린다.
 
 **close.**

@@ -152,33 +152,143 @@ async fn a_write_returns_while_the_program_does_not_read() {
     closed.unwrap();
 }
 
+/// Runs an echo child with line discipline disabled. A separate end marker, absent from the
+/// payloads, ends its reads so trailing duplicates are observed without a guessed byte count.
+/// Every write is queued before waiting for a completion, while output is consumed until Exit.
+async fn check_received_write_order(expected: &[u8], writes: &[&[u8]]) -> Result<(), String> {
+    const END: &[u8] = b"\x04";
+    assert!(
+        writes.iter().all(|data| !data.contains(&END[0])),
+        "the test payload must not contain its end marker"
+    );
+    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
+    let (tx, mut rx) = crate::pty::output_channel();
+    let session_id = service.open(
+        "/bin/sh",
+        &[
+            "-c".into(),
+            r#"stty raw -echo && printf READY && exec /usr/bin/perl -e '
+                $| = 1;
+                while (1) {
+                    my $count = sysread(STDIN, my $data, 65536);
+                    defined($count) && $count > 0 or die "echo read failed";
+                    my $end = index($data, "\x04");
+                    print($end < 0 ? $data : substr($data, 0, $end)) or die "echo write failed";
+                    last if $end >= 0;
+                }
+            '"#
+            .into(),
+        ],
+        None,
+        80,
+        24,
+        tx,
+    )?;
+    let result = timeout(Duration::from_secs(20), async {
+        let mut ready = Vec::new();
+        while ready.len() < b"READY".len() {
+            match rx.recv().await {
+                Some(DaemonEvent::Output { data, .. }) => ready.extend(data),
+                event => return Err(format!("echo child did not become ready: {event:?}")),
+            }
+        }
+        if ready != b"READY" {
+            return Err(format!(
+                "echo child returned an invalid ready marker: {ready:?}"
+            ));
+        }
+        let completions = writes
+            .iter()
+            .copied()
+            .chain(std::iter::once(END))
+            .map(|data| service.write(&session_id, WriteOrigin::Person, data))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut received = Vec::new();
+        loop {
+            match rx.recv().await {
+                Some(DaemonEvent::Output { data, .. }) => received.extend(data),
+                Some(DaemonEvent::Exit { .. }) => break,
+                event => return Err(format!("echo child failed before exit: {event:?}")),
+            }
+        }
+        for completion in completions {
+            completion
+                .await
+                .map_err(|error| format!("write completion was lost: {error}"))??;
+        }
+        if received != expected {
+            let offset = received
+                .iter()
+                .zip(expected)
+                .position(|(actual, wanted)| actual != wanted)
+                .unwrap_or(received.len().min(expected.len()));
+            return Err(format!(
+                "received bytes differ at {offset}: expected {} bytes, received {} bytes",
+                expected.len(),
+                received.len()
+            ));
+        }
+        Ok(())
+    })
+    .await;
+    // Close even after an observation error or timeout, before propagating the failure.
+    let closed = service.close(&session_id);
+    assert_eq!(
+        service.session_count(),
+        0,
+        "the echo session was not removed"
+    );
+    closed.expect("the echo child must close after observation");
+    result.map_err(|error| format!("echo observation exceeded its deadline: {error}"))?
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn writes_to_a_program_that_echoes_end_in_order_while_the_output_is_read() {
     let _test_lock = crate::platform::pty::native_pty_test_lock();
-    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
-    let (tx, mut rx) = crate::pty::output_channel();
-    let session_id = service
-        .open("/bin/sh", &["-c".into(), "cat".into()], None, 80, 24, tx)
-        .expect("PTY setup failed; environmental PTY errors must fail this test");
-    let first = service
-        .write(
-            &session_id,
-            crate::pty::WriteOrigin::Person,
-            b"first\n".repeat(400_000),
-        )
-        .unwrap();
-    let second = service
-        .write(
-            &session_id,
-            crate::pty::WriteOrigin::Person,
-            &b"second\n"[..],
-        )
-        .unwrap();
-    let consumer = tokio::spawn(async move { while rx.recv().await.is_some() {} });
-    first.await.unwrap().unwrap();
-    second.await.unwrap().unwrap();
-    service.close(&session_id).unwrap();
-    consumer.await.unwrap();
+    // The first write exceeds both the PTY buffer and the bounded output channel. Newlines,
+    // carriage returns and NUL bytes must survive unchanged in the raw, no-echo fixture.
+    let first = b"first\n\r\0".repeat(400_000);
+    let second = b"second\0\r\n";
+    let expected = [first.as_slice(), second].concat();
+    check_received_write_order(&expected, &[&first, second])
+        .await
+        .expect("the child must receive both complete payloads in their queue order");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_received_write_check_rejects_reordered_bytes() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let error = check_received_write_order(b"firstsecond", &[b"second", b"first"])
+        .await
+        .expect_err("write completions cannot validate reordered bytes");
+    assert_eq!(
+        error,
+        "received bytes differ at 0: expected 11 bytes, received 11 bytes"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_received_write_check_rejects_missing_bytes() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let error = check_received_write_order(b"firstsecond", &[b"first", b"secon"])
+        .await
+        .expect_err("write completions cannot validate missing bytes");
+    assert_eq!(
+        error,
+        "received bytes differ at 10: expected 11 bytes, received 10 bytes"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_received_write_check_rejects_trailing_duplicated_bytes() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let error = check_received_write_order(b"firstsecond", &[b"first", b"second", b"second"])
+        .await
+        .expect_err("write completions cannot validate trailing duplicated bytes");
+    assert_eq!(
+        error,
+        "received bytes differ at 11: expected 11 bytes, received 17 bytes"
+    );
 }
 
 /// Queued lines that a program which does not read holds in the queue.

@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S153: PTY write 순서 test는 출력을 버리고 write 완료만 기다리는 대신 raw, no-echo child가 반환한 마지막 출력까지 모든 byte를 비교한다. 추적하는 순서 변경, 누락, 후행 중복 case가 이전의 잘못된 승인을 드러내며 이제 byte 비교에서 거부된다. 정상 case와 기존 queue/출력 경계 검사 4개가 macOS에서 통과한다.
 - F476-vt: test가 선언된 version을 되풀이하지 않는다.
 - F474-vt: release run이 v0.0.26을 게시했고 registry가 이를 올린다.
 - F474-vt: 후보는 0.0.26이며 실행 파일은 `sok-vt-alacritty`와 `sok-vt-replay`이다.

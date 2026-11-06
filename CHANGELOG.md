@@ -1,5 +1,6 @@
 # Changelog
 
+- S153: The PTY write-order test compares all bytes returned by a raw, no-echo child, including trailing output, instead of discarding output and waiting only for write completion. Tracked reordered, missing and trailing-duplicate cases expose the earlier false acceptance and now fail the byte comparison; the normal case and four existing queue/output boundary checks pass on macOS.
 - F476-vt: The tests repeat no declared version.
 - F474-vt: The release run published v0.0.26, and the registry lists it.
 - F474-vt: The candidate is 0.0.26, whose executables are `sok-vt-alacritty` and `sok-vt-replay`.
