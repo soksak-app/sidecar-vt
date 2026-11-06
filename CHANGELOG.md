@@ -1,5 +1,6 @@
 # Changelog
 
+- S161: A test fixes that every answer of an input or a paste names the cids of its request.
 - S160: The test of the frozen install reads the store that `make install` filled, so an answer of GitHub does not fail `make test`.
 - S159: `make build` copies the executables from the folder that `CARGO_TARGET_DIR` names, where Cargo wrote them.
 - S158: The answer `Session not open` carries the refused request, so a page sends input again that reached a respawned service before the page heard of it.

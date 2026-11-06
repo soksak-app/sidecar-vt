@@ -1957,3 +1957,47 @@ async fn an_input_request_ends_during_a_flood_of_output() {
     wait_events(&surface.events, "sidecar.vt.pty_write", 1, |_| true).await;
     surface.refill.lock().unwrap().take();
 }
+
+// A page holds an input until an answer names the cids of its request, so every answer of an input or a paste names them: an
+// acknowledgement, a refusal and an error alike.
+#[tokio::test]
+async fn every_answer_of_an_input_or_a_paste_names_the_cids_of_its_request() {
+    let events = TestEvents::new();
+    let replies = serve_lines(
+        &events,
+        br#"{"surface":"s0","cids":["refused-input"],"body":{"operation":"input","actions":[{"type":"insert","text":"\u0000","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+{"surface":"s0","cids":["refused-paste"],"body":{"operation":"paste","text":"p"}}
+{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","cids":["written"],"body":{"operation":"input","actions":[{"type":"insert","text":"\u0000","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+{"surface":"s1","cids":["nothing-written"],"body":{"operation":"input","actions":[],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+{"surface":"s1","cids":["coalesced","with-it"],"body":{"operation":"input","actions":[{"type":"insert","text":"\u0000","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+{"surface":"s1","cids":["pasted"],"body":{"operation":"paste","text":"p"}}
+{"surface":"s1","cids":["invalid"],"body":{"operation":"input"}}
+"#,
+    )
+    .await;
+    let replies = parsed(&replies);
+    let reply = |cid: &str| {
+        replies
+            .iter()
+            .find(|reply| {
+                reply["cids"]
+                    .as_array()
+                    .is_some_and(|cids| cids.iter().any(|one| one == cid))
+            })
+            .unwrap_or_else(|| panic!("no answer of {cid}: {replies:?}"))
+    };
+    assert_eq!(reply("refused-input")["body"]["error"], "Session not open");
+    assert_eq!(reply("refused-paste")["body"]["error"], "Session not open");
+    assert_eq!(reply("written")["body"]["ack"], true);
+    assert_eq!(reply("nothing-written")["body"]["ack"], true);
+    assert_eq!(
+        reply("coalesced")["cids"],
+        serde_json::json!(["coalesced", "with-it"])
+    );
+    assert_eq!(reply("coalesced")["body"]["ack"], true);
+    assert_eq!(reply("pasted")["body"]["ack"], true);
+    assert_eq!(reply("pasted")["body"]["event"], "paste");
+    assert_eq!(reply("invalid")["body"]["error"], "invalidParams");
+}
