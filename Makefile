@@ -9,6 +9,10 @@ export PATH := $(HOME)/.cargo/bin:$(PATH)
 # and the node tests that start Cargo, give it as MACOSX_DEPLOYMENT_TARGET, which cc reads for the Objective-C objects and
 # rustc reads for the link (S163).
 MACOS_MINIMUM = 14.4
+# Each command that runs Cargo runs under scripts/check-link.mjs, which fails it when the linker linked an object built for a
+# newer macOS than MACOS_MINIMUM and passes the other linker lines; cargo-nextest runs under scripts/nextest-run.mjs, which
+# applies the same check (S163).
+CHECK_LINK = node scripts/check-link.mjs
 PROFILE ?= debug
 # The folder where Cargo writes; build copies the executables from it. A value from the environment or the command line reaches Cargo too.
 CARGO_TARGET_DIR ?= target
@@ -49,7 +53,7 @@ test: build
 	$(NEXTEST) -p soksak-sidecar-vt-core --features diagnostics --test engine_trace_test
 	$(NEXTEST) -p soksak-sidecar-vt-core --features fault-injection --test fault_injection
 	$(NEXTEST) -p soksak-sidecar-vt-core --features fault-injection --test serve_contract -E 'test(=a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it)'
-	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo clippy --workspace --all-targets --features diagnostics -- -D warnings
+	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) $(CHECK_LINK) cargo clippy --workspace --all-targets --features diagnostics -- -D warnings
 	pnpm exec sok-check events --config event-sources.json --catalog vt-alacritty/events.json .
 	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) node --test tests/
 	pnpm exec sok-check docs
@@ -58,7 +62,7 @@ test: build
 # `FEATURES=diagnostics` enables the diagnostic service build; the runtime trace remains opt-in.
 # Uses vt-alacritty/build/sok-vt-alacritty, which sidecar.json points to.
 build:
-	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo build $(CARGO_PROFILE) $(CARGO_FEATURE_ARGS) -p soksak-sidecar-vt-alacritty
+	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) $(CHECK_LINK) cargo build $(CARGO_PROFILE) $(CARGO_FEATURE_ARGS) -p soksak-sidecar-vt-alacritty
 	mkdir -p vt-alacritty/build
 	cp $(CARGO_TARGET_DIR)/$(PROFILE)/sok-vt-alacritty vt-alacritty/build/sok-vt-alacritty
 	cp $(CARGO_TARGET_DIR)/$(PROFILE)/sok-vt-replay vt-alacritty/build/sok-vt-replay
@@ -93,10 +97,10 @@ check-push:
 repeat:
 	@case "$(PACKAGE)" in '') echo "make repeat PACKAGE=<package> COUNT=<n> [TEST=<name>] [FEATURES=<features>]" >&2; exit 2;; esac
 	@case "$(COUNT)" in ''|*[!0-9]*|0) echo "make repeat requires COUNT=<n> with n >= 1" >&2; exit 2;; esac
-	@$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -q -p $(PACKAGE) $(CARGO_FEATURE_ARGS) --no-run
+	@$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) $(CHECK_LINK) cargo test -q -p $(PACKAGE) $(CARGO_FEATURE_ARGS) --no-run
 	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT; run=1; while [ $$run -le $(COUNT) ]; do \
 	  started=$$(date +%s); \
-	  if ! $(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo test -q -p $(PACKAGE) $(CARGO_FEATURE_ARGS) $(if $(TEST),-- --exact $(TEST)) > "$$output" 2>&1; then \
+	  if ! $(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) $(CHECK_LINK) cargo test -q -p $(PACKAGE) $(CARGO_FEATURE_ARGS) $(if $(TEST),-- --exact $(TEST)) > "$$output" 2>&1; then \
 	    cat "$$output"; echo "FAIL run $$run of $(COUNT) after $$(( $$(date +%s) - started )) s"; exit 1; fi; \
 	  echo "PASS run $$run of $(COUNT) in $$(( $$(date +%s) - started )) s"; run=$$((run + 1)); done
 

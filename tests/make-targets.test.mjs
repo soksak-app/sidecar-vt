@@ -97,13 +97,13 @@ test("each command of build, test and repeat that runs Cargo gives it MACOS_MINI
 });
 
 // rustc reports a linked object that was built for a newer macOS than the link under the lint linker_info, which is
-// allowed by default, so the link prints nothing and passes. Every member of the workspace denies it, so such a link fails
-// each build and test of the member (S163).
-test("every member of the workspace denies linker_info (S163)", { timeout: 30000 }, () => {
+// allowed by default, so the link prints nothing. Every member of the workspace warns on it, so rustc prints the line that
+// scripts/check-link.mjs reads (S163).
+test("every member of the workspace prints linker_info (S163)", { timeout: 30000 }, () => {
   const workspace = readFileSync(path.join(root, "Cargo.toml"), "utf8");
   const lints = workspace.match(/^\[workspace\.lints\.rust\]\n((?:[^[\n].*\n?)*)/m);
   assert.ok(lints, "Cargo.toml declares no [workspace.lints.rust]");
-  assert.match(lints[1], /^linker_info = "deny"$/m, "the workspace does not deny linker_info");
+  assert.match(lints[1], /^linker_info = "warn"$/m, "the workspace does not warn on linker_info");
   const members = JSON.parse(workspace.match(/^members = (\[.*\])$/m)[1]);
   assert.notEqual(members.length, 0);
   for (const member of members) {
@@ -127,4 +127,15 @@ test("the shell of make finds the cargo of rustup without the PATH of the profil
   });
   assert.equal(result.status, 0, `the shell of make finds no cargo: ${result.stdout}${result.stderr}`);
   assert.equal(result.stdout.trim(), cargo);
+});
+
+// Each command that links runs under the link check: Cargo through scripts/check-link.mjs, and cargo-nextest through
+// scripts/nextest-run.mjs, which reads the output of Cargo with the same check (S163).
+test("each Cargo command of build, test and repeat runs under the link check (S163)", { timeout: 30000 }, () => {
+  const recipes = [recipe("build"), recipe("test"), recipe("repeat", ["PACKAGE=soksak-sidecar-vt-core", "COUNT=1"])];
+  const commands = recipes.flatMap((lines) => lines.split("\n")).filter((line) => /\bcargo (?:build|clippy|test|nextest)\b|nextest-run\.mjs/.test(line));
+  assert.notEqual(commands.length, 0);
+  for (const command of commands) {
+    assert.match(command, /\bnode scripts\/check-link\.mjs cargo (?:build|clippy|test)\b|\bnode scripts\/nextest-run\.mjs\b/, `the command runs Cargo outside the link check: ${command}`);
+  }
 });

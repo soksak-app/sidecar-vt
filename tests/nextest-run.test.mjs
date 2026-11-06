@@ -3,6 +3,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatEvent } from "../scripts/nextest-run.mjs";
@@ -33,3 +35,26 @@ test("the runner prints the running line of a test before its pass line (S76-1)"
   assert.notEqual(passed, -1, "no pass line for the test");
   assert.ok(running < passed, "the running line comes after the pass line");
 });
+
+// The runner reads the output of Cargo through the link check of scripts/check-link.mjs (S163). A cargo first on PATH prints
+// one linker line of rustc on its standard error and succeeds.
+for (const [line, status] of [
+  ["warning: ld: warning: object file (/tmp/frame.o) was built for newer 'macOS' version (27.0) than being linked (14.4)", 1],
+  ["warning: ld: warning: ignoring duplicate libraries: '-lc'", 0],
+]) {
+  test(`the runner ends with status ${status} when Cargo prints ${JSON.stringify(line)} (S163)`, { timeout: 15000 }, (t) => {
+    const folder = mkdtempSync(path.join(tmpdir(), "nextest-run-link-"));
+    t.after(() => rmSync(folder, { recursive: true, force: true }));
+    const cargo = path.join(folder, "cargo");
+    writeFileSync(cargo, `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(line)} >&2\nexit 0\n`);
+    chmodSync(cargo, 0o755);
+    const result = spawnSync(process.execPath, [runner, "--workspace"], {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 10000,
+      env: { ...process.env, PATH: `${folder}:${process.env.PATH}` },
+    });
+    assert.equal(result.status, status, `${result.stdout}\n${result.stderr}`);
+    assert.ok(result.stderr.includes(line), result.stderr);
+  });
+}

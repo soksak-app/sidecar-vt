@@ -1,7 +1,7 @@
 # Changelog
 
 - S164: The Makefile puts `~/.cargo/bin` on PATH, so the shell of make finds the cargo of rustup without the shell profile.
-- S163: Every command that runs Cargo, `node --test tests/` included, builds for macOS 14.4, the `MACOS_MINIMUM` of the Makefile, and the workspace denies `linker_info`, so a link of an object built for a newer macOS fails.
+- S163: Every command that runs Cargo, `node --test tests/` included, builds for macOS 14.4, the `MACOS_MINIMUM` of the Makefile, and fails when the linker reports an object built for a newer macOS; the duplicate `-lc` of every link passes.
 - S162: The PTY write-order test compares all bytes returned by a raw, no-echo child, including trailing output, instead of discarding output and waiting only for write completion. Tracked reordered, missing and trailing-duplicate cases expose the earlier false acceptance and now fail the byte comparison; the normal case and four existing queue/output boundary checks pass on macOS.
 - S154: The push check and CI run the checklist history check `sok-check docs --range` of kit 0.0.14 on the pushed range, after the commit message check.
 - S161: A test fixes that every answer of an input or a paste names the cids of its request.
