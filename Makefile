@@ -2,8 +2,10 @@
 # The release is the npm pack file of vt-alacritty.
 .PHONY: install test build release check-cargo release-candidate repeat check-push install-hooks
 
-# rustup installs cargo here and adds the path to the shell profile. The shell of make does not read the profile (S164).
-export PATH := $(HOME)/.cargo/bin:$(PATH)
+# rustup installs cargo in $(CARGO_HOME)/bin, and in ~/.cargo/bin when CARGO_HOME is unset; a GitHub runner sets CARGO_HOME
+# elsewhere (S165). rustup adds that folder to the shell profile, which the shell of make does not read (S164).
+CARGO_HOME ?= $(HOME)/.cargo
+export PATH := $(CARGO_HOME)/bin:$(PATH)
 # GNU Make 3.81 runs a recipe line without shell characters itself and looks its program up in its own PATH, not in the
 # exported one, and $(shell) does not receive the exported PATH either; so cargo is resolved once with that PATH and every
 # recipe runs $(CARGO). check-cargo stops a target that runs cargo when none was found (S164).
@@ -40,7 +42,7 @@ build: check-process-identity
 endif
 
 check-cargo:
-	@test -n "$(CARGO)" || { echo "make: cargo is on neither PATH nor $(HOME)/.cargo/bin; rustup installs it there" >&2; exit 1; }
+	@test -n "$(CARGO)" || { echo "make: cargo is on neither PATH nor $(CARGO_HOME)/bin; rustup installs it there" >&2; exit 1; }
 build test repeat: check-cargo
 
 # The installation stage (core docs/spec/plugins.md#repositories): it installs the locked dependencies; the tests, checks and packs consume them without installing.

@@ -2,8 +2,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -112,21 +112,43 @@ test("every member of the workspace prints linker_info (S163)", { timeout: 30000
   }
 });
 
-// rustup installs cargo in ~/.cargo/bin and adds that folder to PATH in the shell profile, which the shell of make does not
-// read. GNU Make 3.81 runs a recipe line without shell characters itself and looks its program up in its own PATH, not in
-// the PATH that the Makefile exports, so the Makefile resolves cargo once into CARGO and every recipe runs $(CARGO) (S164).
-test("a recipe line that make runs without a shell runs the cargo of rustup without the PATH of the profile (S164)", { timeout: 30000 }, () => {
-  assert.ok(existsSync(path.join(homedir(), ".cargo", "bin", "cargo")), "rustup installs no cargo in ~/.cargo/bin");
-  // The probe target comes from standard input after the Makefile; its line holds no shell character.
-  const result = spawnSync("/usr/bin/make", ["-s", "--no-print-directory", "-f", "Makefile", "-f", "-", "run-cargo"], {
+// rustup installs cargo in $CARGO_HOME/bin, which is ~/.cargo/bin when CARGO_HOME is unset (S165), and adds that folder to
+// PATH in the shell profile, which the shell of make does not read. GNU Make 3.81 runs a recipe line without shell
+// characters itself and looks its program up in its own PATH, not in the PATH that the Makefile exports, so the Makefile
+// resolves cargo once into CARGO and every recipe runs $(CARGO) (S164).
+const cargoHome = process.env.CARGO_HOME || path.join(homedir(), ".cargo");
+
+// Runs the line `$(CARGO) --version`, which holds no shell character, as a probe target after the Makefile.
+function cargoVersion(env) {
+  return spawnSync("/usr/bin/make", ["-s", "--no-print-directory", "-f", "Makefile", "-f", "-", "run-cargo"], {
     cwd: root,
     input: "run-cargo:\n\t$(CARGO) --version\n",
     encoding: "utf8",
     timeout: 25000,
-    env: { HOME: homedir(), PATH: "/usr/bin:/bin" },
+    env,
   });
+}
+
+test("a recipe line that make runs without a shell runs the cargo of CARGO_HOME without it on PATH (S165)", { timeout: 30000 }, () => {
+  const bin = path.join(cargoHome, "bin");
+  const PATH = process.env.PATH.split(path.delimiter).filter((folder) => path.resolve(folder) !== path.resolve(bin)).join(path.delimiter);
+  const env = { HOME: homedir(), PATH };
+  for (const name of ["CARGO_HOME", "RUSTUP_HOME"]) if (process.env[name]) env[name] = process.env[name];
+  const result = cargoVersion(env);
   assert.equal(result.status, 0, `make runs no cargo: ${result.stdout}${result.stderr}`);
   assert.match(result.stdout, /^cargo \d+\.\d+\.\d+/);
+});
+
+test("make runs the cargo in the bin folder of the CARGO_HOME that the environment names (S165)", { timeout: 30000 }, (t) => {
+  const folder = mkdtempSync(path.join(tmpdir(), "cargo-home-"));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  mkdirSync(path.join(folder, "cargo-home", "bin"), { recursive: true });
+  const cargo = path.join(folder, "cargo-home", "bin", "cargo");
+  writeFileSync(cargo, "#!/bin/sh\necho \"cargo 0.0.0 of CARGO_HOME\"\n");
+  chmodSync(cargo, 0o755);
+  const result = cargoVersion({ HOME: folder, CARGO_HOME: path.join(folder, "cargo-home"), PATH: "/usr/bin:/bin" });
+  assert.equal(result.status, 0, `make runs no cargo: ${result.stdout}${result.stderr}`);
+  assert.equal(result.stdout, "cargo 0.0.0 of CARGO_HOME\n");
 });
 
 test("every recipe line runs cargo through $(CARGO) (S164)", { timeout: 5000 }, () => {
