@@ -5,3 +5,8 @@ members = ["vt-core", "vt-alacritty"]
 
 [profile.dev]
 incremental = true
+
+# rustc reports a linked object that was built for a newer macOS than the link under linker_info, which is allowed by
+# default, so the link would pass; each member denies it (S163).
+[workspace.lints.rust]
+linker_info = "deny"

@@ -38,3 +38,6 @@ time = { version = "0.3", features = ["parsing"] }
 serde_json = { version = "1", features = ["raw_value"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
+
+[lints]
+workspace = true

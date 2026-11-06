@@ -77,3 +77,36 @@ test("make install installs the locked dependencies, and no other target install
   const makefile = readFileSync(path.join(root, "Makefile"), "utf8");
   assert.deepEqual(makefile.split("\n").filter((line) => /^[^\t#][^:=]*:(?!=).*\bnode_modules\b/.test(line)), [], "a target depends on node_modules");
 });
+
+// cc compiles the Objective-C frame of the core for MACOSX_DEPLOYMENT_TARGET and rustc links for it. Without it cc compiles
+// for the version of the SDK and rustc links for its own default, so every command that runs Cargo, and the tests that
+// start Cargo, give it MACOS_MINIMUM, the one value of the Makefile (S163).
+test("each command of build, test and repeat that runs Cargo gives it MACOS_MINIMUM (S163)", { timeout: 30000 }, () => {
+  const definitions = readFileSync(path.join(root, "Makefile"), "utf8").split("\n").filter((line) => /^MACOS_MINIMUM\s*=/.test(line));
+  assert.equal(definitions.length, 1, "the Makefile must define MACOS_MINIMUM once");
+  const minimum = definitions[0].replace(/^MACOS_MINIMUM\s*=\s*/, "").trim();
+  assert.match(minimum, /^\d+\.\d+$/, `MACOS_MINIMUM is ${JSON.stringify(minimum)}`);
+  const target = new RegExp(`(?:^|\\s)MACOSX_DEPLOYMENT_TARGET=${minimum.replace(".", "\\.")}\\s`);
+  const recipes = [recipe("build"), recipe("test"), recipe("repeat", ["PACKAGE=soksak-sidecar-vt-core", "COUNT=1"])];
+  const commands = recipes.flatMap((lines) => lines.split("\n")).filter((line) => /\bcargo (?:build|clippy|test)\b|nextest-run\.mjs|node --test tests\//.test(line));
+  assert.ok(commands.some((line) => line.includes("node --test tests/")), "make test runs no node test");
+  for (const command of commands) {
+    assert.match(command, target, `the command gives Cargo no MACOSX_DEPLOYMENT_TARGET=${minimum}: ${command}`);
+  }
+});
+
+// rustc reports a linked object that was built for a newer macOS than the link under the lint linker_info, which is
+// allowed by default, so the link prints nothing and passes. Every member of the workspace denies it, so such a link fails
+// each build and test of the member (S163).
+test("every member of the workspace denies linker_info (S163)", { timeout: 30000 }, () => {
+  const workspace = readFileSync(path.join(root, "Cargo.toml"), "utf8");
+  const lints = workspace.match(/^\[workspace\.lints\.rust\]\n((?:[^[\n].*\n?)*)/m);
+  assert.ok(lints, "Cargo.toml declares no [workspace.lints.rust]");
+  assert.match(lints[1], /^linker_info = "deny"$/m, "the workspace does not deny linker_info");
+  const members = JSON.parse(workspace.match(/^members = (\[.*\])$/m)[1]);
+  assert.notEqual(members.length, 0);
+  for (const member of members) {
+    const manifest = readFileSync(path.join(root, member, "Cargo.toml"), "utf8");
+    assert.match(manifest, /^\[lints\]\nworkspace = true$/m, `${member}/Cargo.toml does not take the lints of the workspace`);
+  }
+});

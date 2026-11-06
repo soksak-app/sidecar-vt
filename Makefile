@@ -2,6 +2,9 @@
 # The release is the npm pack file of vt-alacritty.
 .PHONY: install test build release release-candidate repeat check-push install-hooks
 
+# The oldest macOS that the sidecar runs on, the value of core (core Makefile MACOS_MINIMUM). Every command that runs Cargo,
+# and the node tests that start Cargo, give it as MACOSX_DEPLOYMENT_TARGET, which cc reads for the Objective-C objects and
+# rustc reads for the link (S163).
 MACOS_MINIMUM = 14.4
 PROFILE ?= debug
 # The folder where Cargo writes; build copies the executables from it. A value from the environment or the command line reaches Cargo too.
@@ -45,7 +48,7 @@ test: build
 	$(NEXTEST) -p soksak-sidecar-vt-core --features fault-injection --test serve_contract -E 'test(=a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it)'
 	$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) cargo clippy --workspace --all-targets --features diagnostics -- -D warnings
 	pnpm exec sok-check events --config event-sources.json --catalog vt-alacritty/events.json .
-	node --test tests/
+	MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) node --test tests/
 	pnpm exec sok-check docs
 	pnpm exec sok-check commands
 
