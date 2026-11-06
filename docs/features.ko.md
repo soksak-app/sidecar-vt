@@ -2,6 +2,8 @@
 
 [English](features.md)
 
+- [ ] S153 — P2: PTY를 통해 실제 받은 byte sequence를 확인한다. 입력: `writes_to_a_program_that_echoes_end_in_order_while_the_output_is_read`는 출력을 버리고 첫 write를 기다린 뒤 두 번째를 기다리므로 받은 byte 순서를 증명하지 못한다. 기대: 서로 구별되는 payload와 raw, no-echo PTY fixture를 사용하여 실제 받은 내용과 순서를 정확히 확인한다. 검증: 순서가 바뀌거나 누락 또는 중복된 byte는 실패하고 올바른 sequence는 통과한다. nonblocking, 입력 한도, 출력 유실 case는 유지한다. 이 항목은 test 근거를 보완하며 PTY 순서 결함을 재현했다고 주장하지 않는다.
+
 - [o] F476-vt — P2, core F476과 연결: test는 선언된 version을 되풀이하지 않는다. 입력: test가 자기 package version의 assertion을 가져, 동작 변경 없이 release마다 바뀌었다. 결과: 이를 지웠고 `make test`가 통과한다.
 - [o] F474-vt — P0, core F474와 연결: 실행 파일이 `sok-vt-alacritty`와 `sok-vt-replay`인 VT sidecar release를 게시하고 registry에 올리며 이를 쓰는 plugin이 요구하게 한다. 모든 manifest가 0.0.26을 밝힌다. 결과: release run이 v0.0.26을 게시했고 registry가 이를 올리며, 게시된 core 0.0.36의 `sok plugin install`이 이를 선택한다.
 - [o] F460-vt — P2, core F460과 연결: `.gitignore`가 local 출력 폴더 `/build/`를 지정한다. 입력: 그 폴더는 local 출력을 담고 추적되지 않은 항목으로 보였다. 결과: `git status`에 추적되지 않은 폴더가 없고 `make test`가 통과한다.
