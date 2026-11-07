@@ -6,6 +6,72 @@ use soksak_sidecar_vt_core::protocol::{
     Cell, Cursor, CursorShape, InlineImagePlacement, Preedit, Screen,
 };
 
+#[cfg(feature = "diagnostics")]
+#[test]
+fn a_one_shot_strip_observation_reports_actual_glyph_and_cursor_metadata_without_changing_pixels() {
+    let metrics = metrics(13.0, 2.0);
+    let width = metrics.cell_width as u32 * 6 + 3;
+    let height = metrics.cell_height as u32 * 3 + 5;
+    let theme = TerminalTheme::dark();
+    let strip = Frame::new_strip(width, height).expect("strip frame");
+    for shape in [
+        CursorShape::Block,
+        CursorShape::Underline,
+        CursorShape::Beam,
+        CursorShape::HollowBlock,
+        CursorShape::Hidden,
+    ] {
+        let mut screen = text_screen();
+        screen.cursor.shape = shape;
+        let cursor = CursorRender {
+            visible: screen.cursor.visible,
+            focused: screen.cursor.focused,
+            blink_visible: screen.cursor.blink_visible,
+            shape: screen.cursor.shape,
+            unfocused: UnfocusedCursor::Unchanged,
+        };
+        let plain = strip
+            .draw_with_render_metadata(&screen, &metrics, cursor, &theme, &[], false)
+            .expect("ordinary strip draw");
+        assert!(plain.is_none());
+        let before = pixels(&strip, width, height);
+        let observed = strip
+            .draw_with_render_metadata(&screen, &metrics, cursor, &theme, &[], true)
+            .expect("one-shot metadata on the existing strip frame")
+            .expect("actual strip metadata");
+        assert_eq!(
+            pixels(&strip, width, height),
+            before,
+            "observation changed actual strip pixels for {shape:?}"
+        );
+        assert!(!observed.glyphs.is_empty());
+        let cg = Frame::new(width, height).expect("reference frame");
+        let expected = cg
+            .draw_with_render_metadata(&screen, &metrics, cursor, &theme, &[], true)
+            .expect("reference draw")
+            .expect("reference metadata");
+        let frame = serde_json::json!({"generation":1,"raster":1,"sequence":2});
+        assert_eq!(
+            observed.value(frame.clone()),
+            expected.value(frame),
+            "strip glyph/cursor metadata differs for {shape:?}"
+        );
+        assert_same_pixels(&cg, &strip, width, height, "observed actual strip");
+        let next = strip
+            .draw_with_render_metadata(&screen, &metrics, cursor, &theme, &[], false)
+            .expect("next ordinary strip draw");
+        assert!(
+            next.is_none(),
+            "one-shot request must not enable future metadata"
+        );
+        assert_eq!(
+            strip.strips_drawn(),
+            0,
+            "metadata observation must preserve unchanged-row caching"
+        );
+    }
+}
+
 // A screen of colored, inverse and default cells without text, so the frame draws only fills.
 fn filled_screen(shape: CursorShape) -> Screen {
     let cols = 6;

@@ -2,6 +2,14 @@
 
 [English](vt-core.md)
 
+## 요청 시 기준 프레임 관찰 (S166)
+
+`screen.observe`는 소비자의 측정 구간 뒤에 명시적으로 호출하는 진단 operation이다. 양의 안전한 정수 `requestId`는 실제 기준 draw의 `frame`, `render`, 전체 `cells`, `rows`, `cols`, `cursor`, `background`, `scrollback`을 담은 `screen.observed` 응답 하나를 식별한다. 새 이미지 sequence를 만들 수 있지만, 이전 tuple의 메타데이터를 나중에 계산해 그 프레임의 것처럼 붙이지 않는다. 일반 `screen` 응답은 이 operation을 완료하지 못한다. 소비자는 정확히 제시된 이미지 region과 캡처 픽셀을 별도로 검증해야 한다.
+
+이미지 복사가 진행 중이면 일치하는 `consumed` 응답까지 해당 raster의 소유권을 유지한다. 관찰은 그 이벤트 뒤에 그리며 원래 응답 sink와 요청 ID를 보관한다. 이미 관찰이 대기 중이면 `observationBusy`, 진단 capability가 없거나 이미지가 미설정·그리기 중단 상태이면 `observationUnavailable`이다. draw 실패는 `observationFailed`, 세션 종료는 `observationClosed`, 잘못된 ID는 `invalidParams`로 답한다. 이미지 분리, 재연결, 교체, 그리기 중단은 대기 중인 관찰을 명시적으로 끝내며 다른 이미지 소유자에게 메타데이터를 붙이지 않는다.
+
+기준 프레임은 기존 strip 렌더러의 CoreGraphics 셀 draw와 합성을 사용한다. 한 번의 메타데이터 요청은 모든 glyph의 정보를 얻기 위해 모든 행을 그릴 수 있지만, 실제 픽셀·cursor 모양과 이후 변경 없는 행의 캐시는 유지해야 한다. 다른 렌더러로 바꾸거나 시작 시 engine trace를 켜지 않는다. 일반 draw의 메타데이터 정책도 유지한다. 구현 검증은 S166에 기록하며, 기준 자료 획득과 core benchmark 연결은 별도 작업이다.
+
 터미널 사이드카(`@soksak/sidecar-vt-core`)는 [영속 서비스](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.ko.md)이 정의한 영속 서비스의 클라이언트 모듈이다. 서비스는 애플리케이션 설정 디렉터리마다 하나의 프로세스로 실행되며 독립 PTY·셸 프로세스·VT 상태·스크롤백·IOSurface 렌더링을 소유한다. 사이드카는 터미널 세션 제어 요청을 받고 영역에 화면 그림을 공급한다.
 
 `sidecar.json` 선언은 서비스의 process display identity를 `soksak://sidecar/vt`로 지정한다. Build는 이 선언을 읽어 executable에 embed하며, `displayName`이 없거나 유효하지 않으면 `sidecar.json`을 명시해 build를 실패한다. Service는 host 환경 변수에 의존하지 않는다. Process는 첫 start record를 쓴 뒤 runtime 초기화 전에 embedded 값을 LaunchServices에 등록한다. 등록 실패는 standard error에 보고하고 서비스 시작을 막는다. Executable path와 basename은 `build/sok-vt-alacritty`, `sok-vt-alacritty`로 유지한다.

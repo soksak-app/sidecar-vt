@@ -60,8 +60,9 @@ pub struct ImageConfiguration {
 
 #[cfg(target_os = "macos")]
 impl ImageState {
-    /// Creates the image state of a surface. Its frame is a strip frame; a frame that collects render metadata is a
-    /// CoreGraphics frame, the only frame that reports it.
+    /// Creates the image state of a surface. Ordinary images use the strip
+    /// renderer, which also supports one explicitly requested metadata draw.
+    /// Startup tracing keeps its existing CoreGraphics frame selection.
     pub fn new(
         configuration: &ImageConfiguration,
         font: &std::sync::Arc<TerminalFont>,

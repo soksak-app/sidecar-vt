@@ -296,6 +296,30 @@ int frame_draw(Frame *frame, Screen *screen, Metrics *metrics) {
 // the whole frame: the background, every cell, the inline images and the cursor. With a selection (one flag per screen row)
 // it draws only the selected rows, each from a fill of its row box with the default background, as the strips of a strip
 // frame; the frame then draws the images and the cursor itself.
+#ifdef SOKSAK_DIAGNOSTICS
+static void frame_cursor_metadata(Frame *frame, Screen *screen, Metrics *metrics,
+                                  RenderOutput *output, BOOL draws_cursor) {
+    if (!output) return;
+    output->cursor_visible = 0;
+    output->cursor_blend_difference = 0;
+    output->cursor_x = output->cursor_y = 0;
+    output->cursor_width = output->cursor_height = 0;
+    output->cursor_border = 0;
+    if (!draws_cursor || !screen->cursor_visible || !screen->cursor_blink_visible || screen->cursor_shape == 4 ||
+        screen->cursor_col >= screen->width || screen->cursor_row >= screen->height) return;
+    output->cursor_visible = 1;
+    output->cursor_x = screen->cursor_col * metrics->cell_width;
+    output->cursor_y = (CGFloat)frame->height - ((CGFloat)screen->cursor_row + 1.0) * metrics->cell_height;
+    output->cursor_width = metrics->cell_width * screen->cursor_width;
+    output->cursor_height = metrics->cell_height;
+    output->cursor_blend_difference = screen->cursor_shape == 0;
+    memcpy(output->cursor_color, screen->default_cursor, sizeof(output->cursor_color));
+    if (screen->cursor_shape == 1) output->cursor_height = 2.0;
+    else if (screen->cursor_shape == 2) output->cursor_width = 2.0;
+    else if (screen->cursor_shape == 3) output->cursor_border = 2.0;
+}
+#endif
+
 static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Metrics *metrics,
                          InlineImageRaster *images, uint32_t image_count,
                          RenderOutput *render_output, const uint8_t *rows) {
@@ -595,32 +619,16 @@ static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Met
 
     // 커서 깜박임과 모양은 상위 서비스가 계산한 한 프레임 상태만 그린다.
     // 이 함수는 타이머나 애니메이션을 만들지 않으며, 화면 경계를 벗어난 커서는 버리지 않고 그리지 않는다.
+#ifdef SOKSAK_DIAGNOSTICS
+    frame_cursor_metadata(frame, screen, metrics, render_output, rows == NULL);
+#endif
     if (!rows && screen->cursor_visible && screen->cursor_blink_visible && screen->cursor_shape != 4 &&
         screen->cursor_col < screen->width && screen->cursor_row < screen->height) {
         CGFloat cursor_x = screen->cursor_col * metrics->cell_width;
         CGFloat cursor_y = (CGFloat)frame->height - ((CGFloat)screen->cursor_row + 1.0) * metrics->cell_height;
         CGFloat cursor_width = metrics->cell_width * screen->cursor_width;
         CGFloat cursor_height = metrics->cell_height;
-#ifdef SOKSAK_DIAGNOSTICS
-        if (render_output) {
-            render_output->cursor_visible = 1;
-            render_output->cursor_x = cursor_x;
-            render_output->cursor_y = cursor_y;
-            render_output->cursor_width = cursor_width;
-            render_output->cursor_height = cursor_height;
-            render_output->cursor_border = 0;
-            render_output->cursor_blend_difference = screen->cursor_shape == 0;
-            memcpy(render_output->cursor_color, screen->default_cursor, sizeof(render_output->cursor_color));
-            if (screen->cursor_shape == 1) {
-                render_output->cursor_y = cursor_y;
-                render_output->cursor_height = 2.0;
-            } else if (screen->cursor_shape == 2) {
-                render_output->cursor_width = 2.0;
-            } else if (screen->cursor_shape == 3) {
-                render_output->cursor_border = 2.0;
-            }
-        }
-#endif
+
         CGColorRef cursor_color = CGColorCreateSRGB(
             screen->default_cursor[0] / 255.0,
             screen->default_cursor[1] / 255.0,
@@ -652,15 +660,6 @@ static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Met
         }
         CGColorRelease(cursor_color);
     }
-#ifdef SOKSAK_DIAGNOSTICS
-    else if (render_output) {
-        render_output->cursor_visible = 0;
-        render_output->cursor_blend_difference = 0;
-        render_output->cursor_x = render_output->cursor_y = 0;
-        render_output->cursor_width = render_output->cursor_height = 0;
-        render_output->cursor_border = 0;
-    }
-#endif
 
     CFRelease(font);
     CGContextRelease(ctx);
@@ -794,7 +793,8 @@ static int frame_compose(Frame *frame, NSData *rects) {
 // the fills of the CoreGraphics frame. It collects no render metadata (-3).
 static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, InlineImageRaster *images, uint32_t image_count,
                           RenderOutput *render_output) {
-    if (render_output) return -3;
+    // Metadata is gathered by this same strip draw. It requests every row
+    // once, so unchanged glyphs also have actual draw-time bounds.
     // A change of the frame, the font or the default colors draws every strip.
     NSMutableData *configuration = [NSMutableData data];
     serialize_append(configuration, &frame->width, sizeof(frame->width));
@@ -832,12 +832,12 @@ static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, Inl
     uint8_t *rows = selection.mutableBytes;
     uint32_t count = 0;
     for (uint32_t row = 0; row < screen->height; row++) {
-        if (row < drawn.count && [drawn[row] isEqualToData:cells[row]]) continue;
+        if (!render_output && row < drawn.count && [drawn[row] isEqualToData:cells[row]]) continue;
         rows[row] = 1;
         count++;
     }
     if (count > 0) {
-        int result = frame_draw_cg(frame, frame->strips, screen, metrics, NULL, 0, NULL, rows);
+        int result = frame_draw_cg(frame, frame->strips, screen, metrics, NULL, 0, render_output, rows);
         if (result != 0) {
             // A strip that failed holds unknown pixels, so the next draw draws every strip.
             [drawn removeAllObjects];
@@ -878,6 +878,10 @@ static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, Inl
     }
     int composed = frame_compose(frame, rects);
     if (composed != 0) return composed;
+#ifdef SOKSAK_DIAGNOSTICS
+    frame_cursor_metadata(frame, screen, metrics, render_output, YES);
+    if (render_output) render_output->bytes_per_row = IOSurfaceGetBytesPerRow(frame->surface);
+#endif
     return 0;
 }
 

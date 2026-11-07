@@ -696,7 +696,6 @@ impl Frame {
 
         match result {
             0 => {}
-            -3 => return Err("the strip frame collects no render metadata".to_string()),
             _ => return Err("Frame draw failed".to_string()),
         }
         if !collect_metadata {
