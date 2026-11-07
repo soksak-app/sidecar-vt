@@ -1310,6 +1310,9 @@ enum SurfaceCommand {
         policy: CursorPolicy,
     },
     ScreenRead,
+    ScreenWatch {
+        enabled: bool,
+    },
     ScreenObserve {
         request_id: u64,
     },
@@ -3765,6 +3768,7 @@ async fn surface_task(
     let mut engine = engine_factory();
     let mut inputs = ReplayInputs::new(log.clone());
     let mut screens = ScreenStream::default();
+    let mut screen_watched = false;
     let mut session_id: Option<String> = None;
     let mut daemon_events_rx = session_port.get_events().await;
     let mut image_state: Option<ImageState> = None;
@@ -3983,6 +3987,7 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::Reconnect => {
+                        screen_watched = false;
                         if !cancel_observation(&surface_id, &mut pending_observation, "observationClosed", "image owner reconnected").await { return; }
                         // The host sends the drawing state of the region again to a new connection.
                         hidden_image = None;
@@ -4837,6 +4842,11 @@ async fn surface_task(
                             }
                         }
                     }
+                    SurfaceCommand::ScreenWatch { enabled } => {
+                        screen_watched = enabled;
+                        let response = json!({"surface": surface_id, "body": {"event":"screen.watching", "enabled":enabled}});
+                        if output_tx.reply(response).await.is_err() { return; }
+                    }
                     SurfaceCommand::ScreenRead => {
                         // The reply of a screen read is the full form, from which the page continues.
                         screens.forget();
@@ -5044,6 +5054,13 @@ async fn surface_task(
                                 crate::engine_trace::record(&log, &surface_id, || format!("feed {}", base64_encode(&data)));
                                 inputs.output(sid, &data);
                                 engine.feed(&data);
+                                // Semantic invalidation follows engine mutation, independently
+                                // of a raster copy, frame clock or drawing visibility. Unwatched
+                                // surfaces prepare and send no notification.
+                                if screen_watched {
+                                    let response = json!({"surface": surface_id, "body": {"event":"screen.changed"}});
+                                    if output_tx.send(response.to_string()).await.is_err() { return; }
+                                }
                                 sync_deadline = engine.sync_deadline();
                                 record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
                                 if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart).await { return; }
@@ -6068,6 +6085,23 @@ where
                                     }
                                 }
                             }
+                            "screen.watch" => match body.get("enabled").and_then(Value::as_bool) {
+                                Some(enabled) => {
+                                    if tx
+                                        .send(SurfaceCommand::ScreenWatch { enabled })
+                                        .await
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                                None => {
+                                    let response = json!({"surface":surface_id,"body":{"error":"invalidParams","reason":"screen.watch requires boolean enabled"}});
+                                    if reply_tx.reply(response).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            },
                             "screen.read" => {
                                 if tx.send(SurfaceCommand::ScreenRead).await.is_err() {
                                     break;

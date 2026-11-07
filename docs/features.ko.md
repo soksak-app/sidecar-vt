@@ -1,5 +1,8 @@
 # 기능
 
+- [~] S168 — P0, core F584-5와 연결: PTY engine 출력은 raster 가시성·대기 copy 소유권과 무관하게 semantic screen watcher에 알려야 한다. screen.watch가 연결별 수요를 등록하고 screen.changed는 frame을 주장하지 않고 engine.feed 뒤에 오며 unwatch·재연결이 등록을 끝낸다. watcher가 없으면 event를 만들지 않는다. ROOT가 실제 actor owner의 unknown-operation RED를 확인했다. 남은 것: 같은 owner GREEN, 인접 lifecycle·기본 경로 검증, 실제 staged acceptance와 source commit.
+  검증: ROOT의 같은 actor owner와 인접 screen.observe owner 4개가 통과했고, 이어 serve_contract 전체 133개가 통과했다(실패·skip 0, f5845-screen-watch-vt-contract-green.log). 실제 두 plugin 소비자와 앱의 재검증은 남아 있다.
+
 [English](features.md)
 
 - [~] S167 — P0, core F584-5: 가려져 그리지 않는 이미지도 선택 해제를 한 번 완료한다. 실제 mygo 검사에서 selection.end와 mouse.up은 모두 전달됐지만 drawing:false·presented:null 상태에서 selectionReleases가 0에 머물렀다. 발행된 raster transfer가 있으면 consumed 뒤 순서를 유지하며, 진행 중 transfer가 없으면 새 consumed를 기다리지 않고 selection.copy 또는 selection.end를 보낸다. RED: 새 protocol owner가 그리지 않는 이미지의 selection.copy 1개 대신 0개를 받았다(f5845-paused-selection-target-red.log). 선택 없는 해제와 기존 in-flight 순서도 같은 기준으로 검증한다. GREEN: 같은 owner의 선택 있음/없음 두 경우와 인접 selection owner 총 7개가 strict link 검사 아래 통과했다(f5845-paused-selection-adjacent-strict.log). 실제 앱 재검증은 아직 남았다.

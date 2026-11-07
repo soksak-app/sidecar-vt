@@ -1,5 +1,8 @@
 # Features
 
+- [~] S168 — P0, linked to core F584-5: PTY engine output must notify a semantic screen watcher independently of raster visibility and pending-copy ownership. screen.watch registers explicit connection demand, screen.changed follows engine.feed without claiming a frame, and unwatch/reconnect end demand. No watcher prepares no event. ROOT established unknown-operation RED for the actual actor owner; remaining: unchanged owner GREEN, adjacent lifecycle/default owners, actual staged acceptance and source commit.
+  Verification: ROOT passed the same actor owner and four adjacent screen.observe owners, then all 133 serve_contract tests with zero failures or skips (f5845-screen-watch-vt-contract-green.log). Both plugin consumers and actual app verification remain open.
+
 [한국어](features.ko.md)
 
 - [~] S167 — P0, linked to core F584-5: a non-drawing image still completes each selection release once. The actual mygo check delivered selection.end and mouse.up, but selectionReleases stayed zero with drawing:false and presented:null. An issued raster transfer retains consumed ordering; without a pending transfer, selection.copy or selection.end completes without waiting for a new consumed message. RED: the new protocol owner received zero copy events instead of one for a non-drawing image (f5845-paused-selection-target-red.log). Empty releases and existing in-flight ordering retain the same criteria. GREEN: both selected and empty releases in the same owner and seven adjacent selection owners passed under the strict link checker (f5845-paused-selection-adjacent-strict.log). Actual app verification remains pending.

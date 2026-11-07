@@ -328,3 +328,73 @@ async fn screen_observe_without_diagnostics_is_explicitly_unavailable() {
     drop(input);
     task.await.unwrap().unwrap();
 }
+
+// A semantic watch is independent of both image visibility and the ownership
+// of an outstanding raster copy. No consumed message or redraw releases it.
+#[tokio::test]
+async fn screen_watch_notifies_engine_output_without_a_draw_and_stops_on_unwatch() {
+    for drawing in [false, true] {
+        let (mut input, mut lines, task, port) = fixture_with_port().await;
+        if !drawing {
+            send(&mut input, serde_json::json!({"image":{"drawing":{"name":"view","generation":3,"drawing":false}}})).await;
+        }
+        send(
+            &mut input,
+            serde_json::json!({"operation":"screen.watch","enabled":true}),
+        )
+        .await;
+        let subscribed = reply(&mut lines).await;
+        assert_eq!(
+            subscribed["body"],
+            serde_json::json!({"event":"screen.watching","enabled":true}),
+            "semantic watch must register before its initial read"
+        );
+        port.push_event(DaemonEvent::Output {
+            session_id: "observed".into(),
+            data: b"WATCH-AFTER-OUTPUT".to_vec(),
+        });
+        let changed = reply(&mut lines).await;
+        assert_eq!(
+            changed["body"],
+            serde_json::json!({"event":"screen.changed"}),
+            "engine output must notify without a new raster (drawing={drawing})"
+        );
+        let screen = read_screen(&mut input, &mut lines).await;
+        let cells = screen["body"]["cells"].as_array().unwrap();
+        assert!(
+            cells
+                .iter()
+                .filter_map(|cell| cell["grapheme"].as_str())
+                .collect::<String>()
+                .contains("WATCH-AFTER-OUTPUT"),
+            "notification must follow engine.feed: {screen}"
+        );
+        send(
+            &mut input,
+            serde_json::json!({"operation":"screen.watch","enabled":false}),
+        )
+        .await;
+        assert_eq!(
+            reply(&mut lines).await["body"],
+            serde_json::json!({"event":"screen.watching","enabled":false})
+        );
+        port.push_event(DaemonEvent::Output {
+            session_id: "observed".into(),
+            data: b"UNWATCHED".to_vec(),
+        });
+        // The same daemon channel orders this barrier after Output; unlike a
+        // timeout it proves that the actor processed the unwatched output.
+        port.push_event(DaemonEvent::InputHeld {
+            session_id: "observed".into(),
+            queued: 0,
+            held: false,
+        });
+        assert_eq!(
+            reply(&mut lines).await["body"]["event"],
+            "input_held",
+            "an unwatched output must send no screen.changed"
+        );
+        drop(input);
+        task.await.unwrap().unwrap();
+    }
+}
