@@ -2433,6 +2433,64 @@ async fn a_scroll_with_a_non_boolean_shift_is_refused() {
 }
 
 #[tokio::test]
+async fn selection_release_completes_while_the_image_is_not_drawing() {
+    // No raster is in flight: a covered image cannot produce a consumed reply.
+    // Both copied and empty releases must still finish through the protocol.
+    for selected in [Some("selected"), None] {
+        let calls = Arc::new(Mutex::new(Calls::default()));
+        let input = r#"{"surface":"s1","body":{"operation":"open","shell":"/bin/sh"}}
+{"surface":"s1","body":{"image":{"drawing":{"name":"view","generation":1,"drawing":false,"hidden":false}}}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","body":{"operation":"selection.start","x":1.0,"y":1.0}}
+{"surface":"s1","body":{"operation":"selection.update","x":25.0,"y":1.0}}
+{"surface":"s1","body":{"operation":"selection.end"}}
+"#;
+        let engine_factory = Arc::new(move || {
+            let mut engine = MockEngine::new();
+            engine.selection = selected.map(str::to_owned);
+            Box::new(engine) as Box<dyn Engine>
+        });
+        let calls_for_factory = calls.clone();
+        let session_port_factory = Arc::new(move || {
+            Arc::new(FakeSessionPort::new(
+                "unused".to_string(),
+                calls_for_factory.clone(),
+            )) as Arc<dyn SessionPort>
+        });
+        let mut writer = Vec::new();
+        serve(
+            engine_factory,
+            std::io::Cursor::new(input.as_bytes()),
+            &mut writer,
+            session_port_factory,
+        )
+        .await
+        .unwrap();
+        let output = String::from_utf8_lossy(&writer);
+        assert!(!output.contains("invalidParams"), "{output}");
+        let event = if selected.is_some() {
+            "selection.copy"
+        } else {
+            "selection.end"
+        };
+        assert_eq!(
+            output.matches(&format!("\"event\":\"{event}\"")).count(),
+            1,
+            "a non-drawing image must finish {event} without a raster-consumed message: {output}"
+        );
+        if selected.is_some() {
+            assert!(
+                output.contains("\"text\":\"selected\"")
+                    && output.contains("\"userInitiated\":true"),
+                "{output}"
+            );
+        } else {
+            assert!(output.contains("\"copied\":false"), "{output}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn test_selection_release_emits_one_user_copy_event() {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let input = r#"{"surface":"s1","body":{"operation":"open","shell":"/bin/sh"}}

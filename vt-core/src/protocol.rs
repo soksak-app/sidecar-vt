@@ -2128,11 +2128,14 @@ async fn end_selection(
                 {
                     return false;
                 }
-                *pending_selection_event =
-                    Some(json!({"surface": surface_id, "body": body}).to_string());
-                return true;
+                if state.pending_draw {
+                    *pending_selection_event =
+                        Some(json!({"surface": surface_id, "body": body}).to_string());
+                    return true;
+                }
             }
-            // A surface without a raster reports the release at once.
+            // A paused image issues no raster transfer. Without an in-flight
+            // transfer there is no consumed reply to await for this release.
             let response = json!({"surface": surface_id, "body": body});
             output_tx.send(response.to_string()).await.is_ok()
         }
