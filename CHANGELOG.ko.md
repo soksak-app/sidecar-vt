@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S169: one-shot `screen.observe` 요청과 `screen.observed` 응답, 그 오류를 제거하고 strip renderer는 다시 render metadata를 수집하지 않는다. `screen.read`·`screen.watch`·frame identity는 유지한다.
 - S165: make가 CARGO_HOME의 bin 폴더(CARGO_HOME이 없으면 `~/.cargo`)를 PATH에 넣으므로 GitHub runner에서 rustup이 설치한 cargo를 찾는다.
 - S164: Makefile이 `~/.cargo/bin`을 PATH에 넣고 거기서 한 번 정한 cargo를 실행하므로, GNU Make 3.81이 shell 없이 실행하는 recipe 줄에서도 make가 shell profile 없이 rustup의 cargo를 찾는다.
 - S163: Cargo를 실행하는 모든 명령이 `node --test tests/`를 포함해 Makefile의 `MACOS_MINIMUM`인 macOS 14.4로 build하고, linker가 더 새 macOS용 object를 보고하면 실패한다. 모든 link의 중복 `-lc`는 통과한다.

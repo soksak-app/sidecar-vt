@@ -1,8 +1,8 @@
 #[path = "support/events_test.rs"]
 mod events_test;
 use soksak_sidecar_vt_core::pty::{WriteCompletion, WriteOrigin, write_completed};
-#[path = "support/screen_observe_test.rs"]
-mod screen_observe;
+#[path = "support/screen_watch_test.rs"]
+mod screen_watch;
 #[path = "support/session_port_test.rs"]
 mod tracked_session_port;
 

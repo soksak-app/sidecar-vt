@@ -2,14 +2,6 @@
 
 [한국어](vt-core.ko.md)
 
-## On-demand reference observation (S166)
-
-`screen.observe` is an explicit diagnostics operation after a consumer's measured interval. Its positive safe-integer `requestId` identifies one `screen.observed` response with the actual reference draw's `frame`, `render`, full `cells`, `rows`, `cols`, `cursor`, `background` and `scrollback`. It may create a new image sequence; it never computes metadata for an older tuple and labels it as that older frame. An ordinary `screen` reply cannot complete this operation. A consumer still verifies the exact presented image region and captured pixels independently.
-
-An outstanding image copy keeps ownership of its raster until the matching `consumed` reply. Observation waits for that event before drawing, and holds its original response sink and request ID. Another outstanding observation is `observationBusy`; a missing diagnostic capability, unconfigured or non-drawing image is `observationUnavailable`. A failed draw is `observationFailed`, and closing the session is `observationClosed`. Invalid IDs are `invalidParams`. Image detachment, reconnection, replacement or loss of drawing settles a held observation explicitly rather than assigning its metadata to a different image owner.
-
-The reference uses the existing strip renderer and its existing CoreGraphics cell draw and composition. Its one-shot metadata request may draw all rows so every glyph has metadata; it must preserve the actual pixels, cursor shapes and subsequent unchanged-row cache. It does not switch to another renderer or enable startup engine tracing. Ordinary draws keep their existing metadata policy. Implementation verification is tracked in S166; reference acquisition and core benchmark integration are separate work.
-
 The terminal sidecar (`@soksak/sidecar-vt-core`) is the client module for the persistent terminal service defined by [persistent services](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.md). The service is one process per application configuration directory and owns the independent PTYs, shell processes, VT state, scrollback, and IOSurface-backed rendering. The sidecar accepts requests to control a terminal session and supplies screen images to a region.
 
 The `sidecar.json` declaration gives the service the process display identity `soksak://sidecar/vt`. The build reads and embeds that declaration in the executable; a missing or invalid `displayName` fails the build and names `sidecar.json`. The service does not depend on a host environment variable. The process writes its first start record, then registers the embedded value with LaunchServices before runtime initialization. Registration failure is reported on standard error and prevents the service from starting. The executable path and basename remain `build/sok-vt-alacritty` and `sok-vt-alacritty`.
