@@ -62,7 +62,9 @@ hook은 프롬프트 앞마다 `133;A`를 보고하고(bash는 readline이 프�
 
 서비스는 입력을 줄마다 request 하나로 읽는다. 줄은 줄바꿈 전에 67108864 bytes(64 MiB)의 한도를 가지며, 이는 사이드카 명세의 message 한도다. 줄이 한도를 넘으면 서비스는 `{"surface": "", "body": {"error": "invalidParams", "reason": "message exceeds 67108864 bytes"}}`로 응답하고, 애플리케이션 로그에 `request line`의 오류를 기록한다. 줄 decoder는 이 오류 뒤에 stream을 끝내므로, 연결의 입력은 거기서 끝난다. persistent가 아닌 연결은 자기 세션을 닫고, persistent 연결은 입력의 끝에서처럼 분리한다.
 
-터미널 사이드카는 종료 이유를 `sidecar.vt.session_stop` 이벤트에 적는다. 이유는 `folder-removed`, `endpoint-removed`, `endpoint-replaced`다.
+터미널 사이드카는 종료 이유를 `sidecar.vt.session_stop` 이벤트에 적는다. 이유는 `SIGTERM`, `SIGINT`, `shutdown`(shutdown 요청 뒤 마지막 client가 떠남), `folder-removed`, `endpoint-removed`, `endpoint-replaced`다.
+
+서비스는 SIGTERM과 SIGINT의 handler를 프로세스의 첫 단계로, start record보다 먼저 그리고 종료 때 지울 것을 만들기 전에 설치한다. 그래서 stop 요청이 signal의 기본 동작으로 프로세스를 끝내는 일은 없다. 설정 중에 온 요청은 보류된다. 설정은 끝까지 진행되고, serve loop는 첫 차례에 그 요청으로 끝난다. serve loop의 모든 종료는 한 정리를 거친다. 이유를 담은 `sidecar.vt.session_stop` 이벤트, `sidecar.vt.session_end` 이벤트, 아직 서비스 자신의 것인 endpoint와 socket 폴더의 제거, event writer의 flush다. flush는 writer가 쓰기 뒤에 주는 응답이나 writer의 끝을 기다리며 시간 한도가 없다. host는 서비스를 null device를 standard input으로 하여 시작하므로, standard input의 끝은 서비스의 stop 요청이 아니다.
 
 터미널 페이지는 이것을 재연결 신호로 쓴다. 페이지는 오래된 사이드카 오류를 해결하고, 입력이 다시 대기열에 들어가도록 세션 게이트를 닫으며, 세션 부트스트랩을 다시 실행한다. 부트스트랩은 `open`(보존된 세션에서는 아무것도 하지 않고, 새 서비스에서는 새 세션을 만든다)에 이어 마지막 테마, 선언된 글꼴, 커서 정책을 보낸다. session이 없는 표면의 `input`이나 `paste`는 `{error: "Session not open", request}`로 답하고, `request`는 거절한 본문이다. 다시 뜬 서비스는 페이지가 새 연결을 알기 전에 보낸 입력에 이 답을 주고, 페이지는 다시 여는 session에 그 본문을 다시 보낸다.
 
@@ -213,7 +215,7 @@ session의 image surface는 `Frame::new_strip`이 만든 frame으로 그린다. 
 
 반복 검사는 전체 화면 고정 TUI(`e2e/fixture-tui.mjs`)를 쓴다. 이 TUI는 `?1003` 움직임과 `?1006` SGR 보고를 켜고 자기 선택을 그린다. 검사는 OS 포인터 입력을 쓴다. 끌기, 같은 TUI 안의 세 번째 점 클릭, 그리고 다시 포커스하거나 상태를 재설정하지 않고 바로 다시 끌기를 한다. 실패한 뒤에만 검사는 다른 카드를 클릭해 복구를 관찰할 수 있다. 복구는 실패한 시도를 통과로 바꾸지 않는다. 각 호스트는 세 번 연속 중단 없는 주기를 통과해야 한다. 주기는 세 번째 점 영역(입력, 출력, 빈 곳)마다 하나씩이며, 가운데 주기는 느린 속도로 한다. 간헐적 실패는 반복 대상을 통해 재현하고 수용한다. 모든 제스처는 대응하는 입력 결과와 보이는 효과의 완전한 캡처 측정을 가진다. Shift 선택은 별도의 제어다.
 
-각 명시적 flush는 앞선 기록을 쓴 뒤 자신의 FIFO marker에 응답하며 이후 flush 또는 stop marker를 소비하지 않는다.
+각 명시적 flush는 앞선 기록을 쓴 뒤 자신의 FIFO marker에 응답하며 이후 flush 또는 stop marker를 소비하지 않는다. flush의 호출자는 그 응답이나 writer의 끝을 기다린다. 끝난 writer는 marker에 응답하지 않고 버리며, 그 flush는 오류가 된다. 대기에는 시간 한도가 없다.
 
 Packaged diagnostic owner는 `SOKSAK_DIAGNOSTIC_PACKAGE_RELEASE`의 release 또는 `SOKSAK_DIAGNOSTIC_PACKAGE_DIRECTORY`의 설치된 package directory를 검사한다. Application 활성화 없이 연속 ASCII 입력을 수행하여 종료 전 supplier 기록이 disk에 도달하는지 확인하고 종료 후 승인된 모든 기록을 확인한다. 실패한 실행은 diagnostic artifact를 보존한다.
 
