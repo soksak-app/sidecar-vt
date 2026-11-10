@@ -47,7 +47,7 @@ impl Config {
 }
 
 fn lines(log: &Events) -> Vec<Value> {
-    log.flush(DEADLINE).expect("flush the writer");
+    log.flush().expect("flush the writer");
     read_run_lines(log.path()).expect("read the events")
 }
 

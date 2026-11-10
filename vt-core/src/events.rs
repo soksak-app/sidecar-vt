@@ -631,16 +631,23 @@ impl EventLog {
         );
     }
 
-    /// Writes everything that is queued and waits until it is on disk, at most `deadline`.
-    pub fn flush(&self, deadline: Duration) -> Result<(), String> {
-        let (done, wait) = sync_channel(1);
-        // A request has a reserved slot, so this send is not refused by a full queue of events.
-        self.sender
-            .try_send(Message::Flush(done))
-            .map_err(|e| format!("the event writer did not take the flush request: {e}"))?;
-        wait.recv_timeout(deadline)
-            .map_err(|_| format!("the event writer did not flush within {deadline:?}"))
+    /// Writes everything that is queued and waits until it is on disk.
+    pub fn flush(&self) -> Result<(), String> {
+        request_flush(&self.sender)
     }
+}
+
+/// Asks the writer behind `sender` to write everything that is queued and waits for its answer. The writer answers after
+/// its write, and a writer that ends drops the request unanswered, so the wait ends by one of these two events and has no
+/// time limit.
+fn request_flush(sender: &SyncSender<Message>) -> Result<(), String> {
+    let (done, wait) = sync_channel(1);
+    // A request has a reserved slot, so this send is not refused by a full queue of events.
+    sender
+        .try_send(Message::Flush(done))
+        .map_err(|e| format!("the event writer did not take the flush request: {e}"))?;
+    wait.recv()
+        .map_err(|_| "the event writer ended before it answered the flush".to_string())
 }
 
 #[cfg(feature = "fault-injection")]
@@ -1312,7 +1319,7 @@ fn write_loop(
                 out.flush();
                 flushed = Instant::now();
                 if done.send(()).is_err() {
-                    out.record_failure("the flush was answered after its deadline".into());
+                    out.record_failure("the flush was answered after its waiter ended".into());
                 }
             }
             Message::Stop => {
@@ -1455,9 +1462,7 @@ pub mod test_support {
 
         /// The events written so far, after the writer put everything it holds on disk.
         pub fn lines(&self) -> Vec<serde_json::Value> {
-            self.handle
-                .flush(Duration::from_secs(10))
-                .expect("flush the writer");
+            self.handle.flush().expect("flush the writer");
             read_lines(self.handle.path()).expect("read the file of the events")
         }
     }

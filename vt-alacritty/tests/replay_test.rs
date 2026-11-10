@@ -57,8 +57,7 @@ async fn served_session() -> Vec<Value> {
     let mut answered = 0u64;
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            log.flush(Duration::from_secs(10))
-                .expect("flush the writer");
+            log.flush().expect("flush the writer");
             let lines = read_run_lines(log.path()).expect("read the events");
             let image = lines
                 .iter()
@@ -97,8 +96,7 @@ async fn served_session() -> Vec<Value> {
     let mut lines = BufReader::new(from_serve).lines();
     while lines.next_line().await.unwrap().is_some() {}
     task.await.unwrap();
-    log.flush(Duration::from_secs(10))
-        .expect("flush the writer");
+    log.flush().expect("flush the writer");
     let lines = read_run_lines(log.path()).expect("read the events");
     drop(directory);
     lines
@@ -268,8 +266,7 @@ async fn viewed_session() -> Vec<Value> {
         to_serve.write_all(send.as_bytes()).await.unwrap();
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
-                log.flush(Duration::from_secs(10))
-                    .expect("flush the writer");
+                log.flush().expect("flush the writer");
                 let lines = read_run_lines(log.path()).expect("read the events");
                 let image = lines
                     .iter()
@@ -348,8 +345,7 @@ async fn viewed_session() -> Vec<Value> {
     let mut lines = BufReader::new(from_serve).lines();
     while lines.next_line().await.unwrap().is_some() {}
     task.await.unwrap();
-    log.flush(Duration::from_secs(10))
-        .expect("flush the writer");
+    log.flush().expect("flush the writer");
     let lines = read_run_lines(log.path()).expect("read the events");
     drop(directory);
     lines

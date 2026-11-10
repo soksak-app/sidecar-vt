@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::signal::unix::{SignalKind, signal};
+use tokio::signal::unix::{Signal, SignalKind, signal};
 use tokio::task::JoinSet;
 use tokio::time::{Duration, timeout};
 use uuid::Uuid;
@@ -292,12 +292,44 @@ async fn authenticate(
     Ok((reader, write_half, hello.client))
 }
 
+/// The termination requests of the process: SIGTERM and SIGINT. `install` replaces the default
+/// action of both signals, which ends the process without its cleanup, so the process installs it
+/// before it creates anything that its exit must remove. A signal that arrives before the serve
+/// loop runs is held, and the loop ends with it on its first turn.
+pub struct Termination {
+    terminate: Signal,
+    interrupt: Signal,
+}
+
+impl Termination {
+    /// Installs the handlers of SIGTERM and SIGINT. It runs inside the runtime.
+    pub fn install() -> Result<Self, String> {
+        Ok(Self {
+            terminate: signal(SignalKind::terminate())
+                .map_err(|e| format!("terminate signal: {e}"))?,
+            interrupt: signal(SignalKind::interrupt())
+                .map_err(|e| format!("interrupt signal: {e}"))?,
+        })
+    }
+
+    /// Waits for the next termination request and returns the name of its signal.
+    pub async fn requested(&mut self) -> &'static str {
+        tokio::select! {
+            _ = self.terminate.recv() => "SIGTERM",
+            _ = self.interrupt.recv() => "SIGINT",
+        }
+    }
+}
+
 /// Runs the persistent service. The PTY service is shared by all accepted connections, so the
-/// session does not stop when a transport connection closes.
+/// session does not stop when a transport connection closes. `termination` holds the handlers that
+/// the process installed at its start; a request that arrived during the setup ends the loop on its
+/// first turn, so every exit records its stop and removes the endpoint and the socket folder.
 pub async fn serve_persistent(
     service_dir: &Path,
     engine_factory: Arc<dyn Fn() -> Box<dyn crate::protocol::Engine> + Send + Sync>,
     log: Events,
+    mut termination: Termination,
 ) -> Result<(), String> {
     crate::platform::darwin::frame::load_default_font()?;
     let _lock = match service_lock(service_dir) {
@@ -332,14 +364,6 @@ pub async fn serve_persistent(
         socket: socket.to_string_lossy().into_owned(),
         token,
     };
-    // On a termination request, the loop ends so the endpoint and socket directory are cleaned up.
-    // The session shell ends when its PTY closes. The handlers are installed before readiness is
-    // announced. If a termination request sent right after readiness is observed ends the process
-    // with the default action, cleanup does not run.
-    let mut terminate =
-        signal(SignalKind::terminate()).map_err(|e| format!("terminate signal: {e}"))?;
-    let mut interrupt =
-        signal(SignalKind::interrupt()).map_err(|e| format!("interrupt signal: {e}"))?;
     write_endpoint(service_dir, &endpoint)?;
     // The watch is started before the ready line, so a check that removes the folder after the
     // ready line is seen by it. The kernel reports each change of the folder and of the endpoint,
@@ -390,12 +414,10 @@ pub async fn serve_persistent(
     let mut had_client = false;
     loop {
         tokio::select! {
-            _ = terminate.recv() => {
-                record_stop(&log, "SIGTERM", clients.len());
-                return Ok(());
-            }
-            _ = interrupt.recv() => {
-                record_stop(&log, "SIGINT", clients.len());
+            // On a termination request, the loop ends so the endpoint and socket directory are
+            // cleaned up. The session shell ends when its PTY closes.
+            request = termination.requested() => {
+                record_stop(&log, request, clients.len());
                 return Ok(());
             }
             accepted = listener.accept() => {

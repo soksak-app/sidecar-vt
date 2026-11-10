@@ -7,8 +7,6 @@ use soksak_sidecar_vt_core::events::{EventLog, Level, Options, read_lines};
 use std::path::PathBuf;
 use std::time::Duration;
 
-const DEADLINE: Duration = Duration::from_secs(10);
-
 /// The limit of the file size belongs to the process, so the tests of this file run one at a time.
 static PROCESS_LIMIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -49,7 +47,7 @@ fn a_failed_write_is_recorded_as_log_dropped_when_writing_works_again() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let dir = directory("write");
     let log = EventLog::start(options(&dir)).unwrap();
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     let written = std::fs::metadata(log.path()).unwrap().len();
     limit_file_size(written + 100);
     assert!(log.emit(
@@ -57,10 +55,10 @@ fn a_failed_write_is_recorded_as_log_dropped_when_writing_works_again() {
         "sidecar.vt.test",
         &json!({"text": "x".repeat(1000)})
     ));
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     limit_file_size(libc::RLIM_INFINITY);
     assert!(log.emit(Level::Info, "sidecar.vt.test", &json!({"text": "after"})));
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     // Every line of the file is whole: the partial write was removed.
     let lines = read_lines(log.path()).unwrap();
     let events: Vec<(u64, String)> = lines
@@ -103,7 +101,7 @@ fn a_failed_rotation_step_is_an_error_record_in_the_file() {
     let mut rotating = options(&dir);
     rotating.rotate_bytes = 1500;
     let log = EventLog::start(rotating).unwrap();
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     // The folder refuses new names, so the file cannot move to its first generation.
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
     for index in 0..10 {
@@ -113,7 +111,7 @@ fn a_failed_rotation_step_is_an_error_record_in_the_file() {
             &json!({"index": index, "text": "y".repeat(300)})
         ));
     }
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     let lines = read_lines(log.path()).unwrap();
     let record = lines

@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S170: 서비스는 SIGTERM과 SIGINT의 handler를 start record보다 먼저 설치하므로 설정 중의 stop 요청도 정리 경로로 서비스를 끝내고, 종료 때의 flush는 시간 한도 없이 writer를 기다린다.
 - S169: one-shot `screen.observe` 요청과 `screen.observed` 응답, 그 오류를 제거하고 strip renderer는 다시 render metadata를 수집하지 않는다. `screen.read`·`screen.watch`·frame identity는 유지한다.
 - S165: make가 CARGO_HOME의 bin 폴더(CARGO_HOME이 없으면 `~/.cargo`)를 PATH에 넣으므로 GitHub runner에서 rustup이 설치한 cargo를 찾는다.
 - S164: Makefile이 `~/.cargo/bin`을 PATH에 넣고 거기서 한 번 정한 cargo를 실행하므로, GNU Make 3.81이 shell 없이 실행하는 recipe 줄에서도 make가 shell profile 없이 rustup의 cargo를 찾는다.

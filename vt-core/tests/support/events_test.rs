@@ -72,9 +72,7 @@ impl TestEvents {
     /// The events written so far, after the writer put everything it holds on disk. The levels of the debug channel are
     /// in the debug file, so both files of the run are read in the order of their seq.
     pub fn lines(&self) -> Vec<Value> {
-        self.handle
-            .flush(Duration::from_secs(10))
-            .expect("flush the writer");
+        self.handle.flush().expect("flush the writer");
         soksak_sidecar_vt_core::events::read_run_lines(self.handle.path())
             .expect("read the files of the events")
     }

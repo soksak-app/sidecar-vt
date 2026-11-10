@@ -1,5 +1,6 @@
 # Changelog
 
+- S170: The service installs its handlers of SIGTERM and SIGINT before its start record, so a stop request during its setup ends it through its cleanup, and the flush at its exit waits for the writer without a time limit.
 - S169: The one-shot `screen.observe` request, its `screen.observed` reply and its errors are removed, and the strip renderer again collects no render metadata; `screen.read`, `screen.watch` and the frame identity stay.
 - S165: make puts the bin folder of CARGO_HOME, `~/.cargo` when CARGO_HOME is unset, on PATH, so it finds the cargo that rustup installs on a GitHub runner.
 - S164: The Makefile puts `~/.cargo/bin` on PATH and runs the cargo that it resolves there once, so make finds the cargo of rustup without the shell profile, also on a recipe line that GNU Make 3.81 runs without a shell.
