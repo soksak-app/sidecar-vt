@@ -401,6 +401,71 @@ fn events_of(root: &std::path::Path) -> Vec<serde_json::Value> {
     soksak_sidecar_vt_core::events::read_lines(&files[0]).expect("read the event file")
 }
 
+// The handlers of SIGTERM and SIGINT are installed before the start record, so a stop request that arrives during the
+// setup, before the ready line, is held and ends the service through its cleanup: the service records its stop and its end,
+// removes the endpoint and the socket folder and exits with success. The default action of SIGTERM would end the process
+// with the signal and skip all of it.
+#[test]
+fn a_service_stopped_during_its_setup_ends_through_its_cleanup() {
+    let root = directory("setup-sigterm");
+    let child = Command::new(env!("CARGO_BIN_EXE_sok-vt-alacritty"))
+        .env_remove("SOKSAK_SIDECAR_DISPLAY_NAME")
+        .arg("--log-dir")
+        .arg(root.join("logs"))
+        .arg("--service-dir")
+        .arg(&*root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start the service");
+    let mut service = Service {
+        child,
+        socket_dir: None,
+    };
+    let mut stderr = BufReader::new(service.child.stderr.take().expect("service stderr"));
+    let mut started = String::new();
+    stderr
+        .read_line(&mut started)
+        .expect("read the start record");
+    start_record(started.trim_end());
+    // The request arrives while the service sets up, before it publishes its endpoint.
+    // SAFETY: the test asks the child process it started to end.
+    assert_eq!(unsafe { libc::kill(service.id() as i32, libc::SIGTERM) }, 0);
+    let output = service.wait_within(STALL);
+    assert!(output.status.success(), "{:?}", output.status);
+    let mut rest = String::new();
+    std::io::Read::read_to_string(&mut stderr, &mut rest).expect("read the standard error");
+    assert_eq!(rest, "", "the standard error after the start record");
+    // The setup runs to its end, and the held request ends the loop on its first turn, so the ready line was written and
+    // the folder it names is gone.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let ready = stdout.lines().next().expect("the ready line");
+    let endpoint: serde_json::Value = serde_json::from_str(ready).expect("ready endpoint");
+    let socket = PathBuf::from(endpoint["socket"].as_str().expect("socket path"));
+    let socket_dir = socket.parent().expect("socket folder").to_path_buf();
+    service.socket_dir = Some(socket_dir.clone());
+    assert!(!socket_dir.exists(), "{} remains", socket_dir.display());
+    assert!(!root.join("endpoint.json").exists(), "the endpoint remains");
+    let events = events_of(&root);
+    let names: Vec<&str> = events
+        .iter()
+        .map(|event| event["event"].as_str().unwrap())
+        .collect();
+    let stop = names
+        .iter()
+        .position(|name| *name == "sidecar.vt.session_stop")
+        .expect("the service records its stop");
+    let end = names
+        .iter()
+        .position(|name| *name == "sidecar.vt.session_end")
+        .expect("the service records its end");
+    assert!(stop < end, "{names:?}");
+    assert_eq!(events[stop]["fields"]["reason"], "SIGTERM");
+    assert_eq!(events[stop]["fields"]["clients"], 0);
+    assert_eq!(events[end]["fields"]["ok"], true);
+}
+
 #[test]
 fn a_service_stopped_by_sigint_records_the_signal() {
     let root = directory("sigint");

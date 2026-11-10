@@ -50,3 +50,31 @@ fn every_queued_flush_receives_its_own_acknowledgement() {
         "log.open"
     );
 }
+
+// The wait of a flush ends by an event of the writer and by nothing else: its answer after the write, or its end, which
+// drops the request unanswered. A writer that ends before it answers is an error of the flush, not a wait without end.
+#[test]
+fn a_flush_ends_with_the_end_of_a_writer_that_did_not_answer() {
+    let (sender, receiver) = sync_channel(1);
+    let writer = std::thread::spawn(move || match receiver.recv() {
+        // The writer ends with the request, so the answer of the request is never sent.
+        Ok(Message::Flush(done)) => drop(done),
+        _ => panic!("the writer did not receive the flush request"),
+    });
+    assert_eq!(
+        request_flush(&sender),
+        Err("the event writer ended before it answered the flush".to_string())
+    );
+    writer.join().expect("join the writer");
+}
+
+#[test]
+fn a_flush_returns_the_answer_of_its_writer() {
+    let (sender, receiver) = sync_channel(1);
+    let writer = std::thread::spawn(move || match receiver.recv() {
+        Ok(Message::Flush(done)) => done.send(()).expect("answer the flush"),
+        _ => panic!("the writer did not receive the flush request"),
+    });
+    assert_eq!(request_flush(&sender), Ok(()));
+    writer.join().expect("join the writer");
+}
