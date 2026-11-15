@@ -1,5 +1,6 @@
 # Changelog
 
+- S171: A test measures that the history of a terminal at its limit allocates no more memory (34.7 MB at 120 columns and 10000 lines).
 - S169: The one-shot `screen.observe` request, its `screen.observed` reply and its errors are removed, and the strip renderer again collects no render metadata; `screen.read`, `screen.watch` and the frame identity stay.
 - S165: make puts the bin folder of CARGO_HOME, `~/.cargo` when CARGO_HOME is unset, on PATH, so it finds the cargo that rustup installs on a GitHub runner.
 - S164: The Makefile puts `~/.cargo/bin` on PATH and runs the cargo that it resolves there once, so make finds the cargo of rustup without the shell profile, also on a recipe line that GNU Make 3.81 runs without a shell.
