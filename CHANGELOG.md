@@ -1,5 +1,6 @@
 # Changelog
 
+- S173: The candidate is 0.0.27.
 - S172: Each drawing function of the frame drains its own autorelease pool, so a draw on a thread without a pool keeps no `NSMutableData`; a sidecar that drew for 22 hours had kept 467 MB of such objects and pool pages.
 - S171: A test measures that the history of a terminal at its limit allocates no more memory (34.7 MB at 120 columns and 10000 lines).
 - S169: The one-shot `screen.observe` request, its `screen.observed` reply and its errors are removed, and the strip renderer again collects no render metadata; `screen.read`, `screen.watch` and the frame identity stay.

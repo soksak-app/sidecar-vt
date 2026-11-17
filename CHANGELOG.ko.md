@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S173: candidate는 0.0.27이다.
 - S172: frame의 draw 함수마다 자기 autorelease pool을 비워서, pool이 없는 thread에서 draw해도 `NSMutableData`가 남지 않는다. 22시간 draw한 sidecar는 이런 객체와 pool page를 467 MB 남겼었다.
 - S171: 한도에 이른 terminal history가 더 이상 memory를 할당하지 않음을 test가 잰다(120열, 10000행에서 34.7 MB).
 - S169: one-shot `screen.observe` 요청과 `screen.observed` 응답, 그 오류를 제거하고 strip renderer는 다시 render metadata를 수집하지 않는다. `screen.read`·`screen.watch`·frame identity는 유지한다.
