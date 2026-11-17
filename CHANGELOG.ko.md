@@ -1,6 +1,6 @@
 # 변경 기록
 
-- S174: draw memory test가 화면 10개를 돌아가며 그리고 두 바퀴 뒤부터 세서, system cache가 남긴 text를 남은 객체로 세지 않는다.
+- S174: draw memory test가 화면 10개를 돌아가며 그리고 400번 draw 세 구간의 남은 block을 센다. 마지막 구간은 draw 수보다 적은 block을 남겨야 하므로, 한도가 있는 system cache를 남은 객체로 세지 않는다.
 - S173: candidate는 0.0.27이다.
 - S172: frame의 draw 함수마다 자기 autorelease pool을 비워서, pool이 없는 thread에서 draw해도 `NSMutableData`가 남지 않는다. 22시간 draw한 sidecar는 이런 객체와 pool page를 467 MB 남겼었다.
 - S171: 한도에 이른 terminal history가 더 이상 memory를 할당하지 않음을 test가 잰다(120열, 10000행에서 34.7 MB).

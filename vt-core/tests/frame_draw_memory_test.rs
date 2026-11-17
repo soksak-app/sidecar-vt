@@ -29,6 +29,7 @@ fn blocks_in_use() -> u32 {
 // SCREENS screens, so a cache of the text that the system keeps is full after the first cycles and the draws that the test
 // counts add no text to it.
 const SCREENS: usize = 10;
+const WINDOWS: usize = 3;
 
 fn screen(draw: usize) -> Screen {
     let cols = 20;
@@ -66,7 +67,7 @@ fn screen(draw: usize) -> Screen {
 #[test]
 fn repeated_strip_draws_keep_no_allocation() {
     // A new thread has no autorelease pool, as the drawing thread of the sidecar.
-    let (before, after, draws) = std::thread::spawn(|| {
+    let (kept, draws) = std::thread::spawn(|| {
         let metrics = metrics(13.0, 2.0);
         let width = metrics.cell_width as u32 * 20;
         let height = metrics.cell_height as u32 * 40;
@@ -85,22 +86,29 @@ fn repeated_strip_draws_keep_no_allocation() {
                 .draw_with_theme(screen, &metrics, cursor, &theme)
                 .expect("draw");
         }
-        let before = blocks_in_use();
-        let draws = 200;
-        for screen in screens.iter().cycle().take(draws) {
-            frame
-                .draw_with_theme(screen, &metrics, cursor, &theme)
-                .expect("draw");
-        }
-        (before, blocks_in_use(), draws)
+        // The blocks that each window of draws keeps: a cache of the system fills in the first windows and keeps no more
+        // in the last one, while an object that each draw keeps adds a block in every window.
+        let draws = 400;
+        let kept: Vec<i64> = (0..WINDOWS)
+            .map(|_| {
+                let before = blocks_in_use();
+                for screen in screens.iter().cycle().take(draws) {
+                    frame
+                        .draw_with_theme(screen, &metrics, cursor, &theme)
+                        .expect("draw");
+                }
+                blocks_in_use() as i64 - before as i64
+            })
+            .collect();
+        (kept, draws)
     })
     .join()
     .expect("drawing thread");
-    let kept = after as i64 - before as i64;
-    println!("{kept} allocated blocks remain after {draws} strip draws of 40 rows");
+    println!("allocated blocks kept by each window of {draws} strip draws of 40 rows: {kept:?}");
+    let last = kept[WINDOWS - 1];
     // A draw that leaves one object to an outer pool keeps one block per draw.
     assert!(
-        kept < draws as i64,
-        "{kept} allocated blocks remain after {draws} strip draws of 40 rows"
+        last < draws as i64,
+        "the last window of {draws} strip draws of 40 rows kept {last} allocated blocks; each window kept {kept:?}"
     );
 }
