@@ -6,23 +6,79 @@ use soksak_sidecar_vt_core::platform::darwin::frame::{
 };
 use soksak_sidecar_vt_core::protocol::{Cell, Cursor, CursorShape, Screen};
 
+// Counts the allocated blocks of every malloc zone of this process with the enumerator of the zone, which `heap` uses.
+// `malloc_zone_statistics` is not used: on macOS 15 its count of blocks in use grows by blocks that no live object holds.
+type Task = u32;
+type Reader = Option<unsafe extern "C" fn(Task, usize, usize, *mut *mut std::ffi::c_void) -> i32>;
+type Recorder = unsafe extern "C" fn(Task, *mut std::ffi::c_void, u32, *const Range, u32);
+
 #[repr(C)]
-#[derive(Default)]
-struct MallocStatistics {
-    blocks_in_use: u32,
-    size_in_use: usize,
-    max_size_in_use: usize,
-    size_allocated: usize,
+struct Range {
+    address: usize,
+    size: usize,
 }
+
+#[repr(C)]
+struct Introspection {
+    enumerator:
+        unsafe extern "C" fn(Task, *mut std::ffi::c_void, u32, usize, Reader, Recorder) -> i32,
+}
+
+// The fields of malloc_zone_t up to its introspection pointer.
+#[repr(C)]
+struct Zone {
+    functions: [usize; 12],
+    introspect: *const Introspection,
+}
+
+const MALLOC_PTR_IN_USE_RANGE_TYPE: u32 = 1;
 
 unsafe extern "C" {
-    fn malloc_zone_statistics(zone: *mut std::ffi::c_void, stats: *mut MallocStatistics);
+    static mach_task_self_: Task;
+    fn malloc_get_all_zones(
+        task: Task,
+        reader: Reader,
+        addresses: *mut *mut usize,
+        count: *mut u32,
+    ) -> i32;
 }
 
-fn blocks_in_use() -> u32 {
-    let mut stats = MallocStatistics::default();
-    unsafe { malloc_zone_statistics(std::ptr::null_mut(), &mut stats) };
-    stats.blocks_in_use
+unsafe extern "C" fn record(
+    _: Task,
+    context: *mut std::ffi::c_void,
+    _: u32,
+    _: *const Range,
+    count: u32,
+) {
+    unsafe { *(context as *mut u64) += count as u64 };
+}
+
+fn blocks_in_use() -> u64 {
+    let mut addresses: *mut usize = std::ptr::null_mut();
+    let mut count = 0u32;
+    let task = unsafe { mach_task_self_ };
+    let result = unsafe { malloc_get_all_zones(task, None, &mut addresses, &mut count) };
+    assert_eq!(result, 0, "malloc_get_all_zones failed with {result}");
+    let mut blocks = 0u64;
+    for index in 0..count as usize {
+        let zone = unsafe { *addresses.add(index) } as *const Zone;
+        let introspect = unsafe { (*zone).introspect };
+        let result = unsafe {
+            ((*introspect).enumerator)(
+                task,
+                &mut blocks as *mut u64 as *mut std::ffi::c_void,
+                MALLOC_PTR_IN_USE_RANGE_TYPE,
+                zone as usize,
+                None,
+                record,
+            )
+        };
+        assert_eq!(
+            result, 0,
+            "the enumerator of zone {index} failed with {result}"
+        );
+    }
+    blocks
 }
 
 // A screen whose text holds its number, so every row differs from the row of the screen before it. The draws cycle through
