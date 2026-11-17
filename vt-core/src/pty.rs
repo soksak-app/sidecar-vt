@@ -230,6 +230,19 @@ pub struct PtyService {
 /// When the regional locale cannot be used, it sets `LC_CTYPE=UTF-8` and records that fact as an
 /// info record event.
 #[cfg(target_os = "macos")]
+/// Sets the variables that name the configuration directory and the surface of a process. The process
+/// replaces the values that its environment holds; a process without a surface has no `SOKSAK_SURFACE`.
+fn apply_surface_environment(command: &mut CommandBuilder, owner: &str, surface: &str) {
+    if !owner.is_empty() {
+        command.env("SOKSAK_CONFIG_DIR", owner);
+    }
+    if surface.is_empty() {
+        command.env_remove("SOKSAK_SURFACE");
+    } else {
+        command.env("SOKSAK_SURFACE", surface);
+    }
+}
+
 fn apply_shell_locale(command: &mut CommandBuilder, log: &Events) {
     let (language, region) = crate::platform::darwin::locale::codes();
     let locale = crate::locale::shell_locale(
@@ -293,15 +306,20 @@ impl PtyService {
     ) -> Result<String, String> {
         let mut command = CommandBuilder::new(program);
         self.apply_environment(&mut command);
+        apply_surface_environment(&mut command, "", "");
         command.args(args);
         self.spawn_owned("", command, cwd, cols, rows, events)
     }
 
     /// Starts the shell path `shell`, which is already checked, as a login shell (argv[0] is `-`
     /// followed by the shell name, and SHELL is the shell path).
+    /// The session shell belongs to `surface` and to the configuration directory `owner`: an empty
+    /// surface starts the shell without `SOKSAK_SURFACE`, and an empty owner keeps the value of the
+    /// environment of the process (a service on standard input and output).
     pub fn open_shell(
         &self,
         owner: &str,
+        surface: &str,
         shell: &str,
         cwd: Option<&str>,
         cols: u16,
@@ -310,6 +328,7 @@ impl PtyService {
     ) -> Result<String, String> {
         let mut command = CommandBuilder::new_default_prog();
         self.apply_environment(&mut command);
+        apply_surface_environment(&mut command, owner, surface);
         command.env("SHELL", shell);
         crate::shell_integration::apply(shell, &mut command, &self.log)?;
         self.spawn_owned(owner, command, cwd, cols, rows, events)

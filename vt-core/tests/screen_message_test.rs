@@ -48,6 +48,7 @@ fn screen_of(message: &Value) -> Option<Screen> {
             italic: attributes & 0x04 != 0,
             underline: attributes & 0x08 != 0,
             inverse: attributes & 0x20 != 0,
+            dim: attributes & 0x40 != 0,
             link: cell["link"].as_str().map(str::to_string),
         });
     }

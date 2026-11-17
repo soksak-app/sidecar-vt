@@ -1224,6 +1224,9 @@ pub struct ShellRequest {
     /// The absolute path of the directory the shell starts in. Without it, the home directory of
     /// the account is used.
     pub directory: Option<String>,
+    /// The surface whose request opens the session. The process of the session names it in
+    /// `SOKSAK_SURFACE`; an empty value means that no surface owns the process.
+    pub surface: String,
 }
 
 #[async_trait]
@@ -5602,6 +5605,7 @@ where
                                 let request = ShellRequest {
                                     shell: shell.to_string(),
                                     directory,
+                                    surface: surface_id.clone(),
                                 };
                                 if tx
                                     .send(SurfaceCommand::Open { image, request })
@@ -6510,6 +6514,7 @@ impl SessionPort for LocalSessionPort {
     async fn open(&self, request: &ShellRequest, cols: u16, rows: u16) -> Result<String, String> {
         let service = Arc::clone(&self.service);
         let owner = self.owner.clone();
+        let surface = request.surface.clone();
         let shell = crate::pty::resolve_shell(&request.shell)?;
         let directory = request
             .directory
@@ -6518,7 +6523,15 @@ impl SessionPort for LocalSessionPort {
             .transpose()?;
         let events = self.events_tx.clone();
         tokio::task::spawn_blocking(move || {
-            service.open_shell(&owner, &shell, directory.as_deref(), cols, rows, events)
+            service.open_shell(
+                &owner,
+                &surface,
+                &shell,
+                directory.as_deref(),
+                cols,
+                rows,
+                events,
+            )
         })
         .await
         .map_err(|error| format!("open PTY task failed: {error}"))?
