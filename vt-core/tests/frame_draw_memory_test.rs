@@ -106,9 +106,60 @@ fn repeated_strip_draws_keep_no_allocation() {
     .expect("drawing thread");
     println!("allocated blocks kept by each window of {draws} strip draws of 40 rows: {kept:?}");
     let last = kept[WINDOWS - 1];
+    if last >= draws as i64 {
+        report_leaks();
+    }
     // A draw that leaves one object to an outer pool keeps one block per draw.
     assert!(
         last < draws as i64,
         "the last window of {draws} strip draws of 40 rows kept {last} allocated blocks; each window kept {kept:?}"
     );
+}
+
+// Prints the unreferenced blocks of this process that `leaks` finds, counted by type, and the classes of the most live
+// objects, so a failing run names the objects that the draws keep.
+fn report_leaks() {
+    let output = std::process::Command::new("/usr/bin/leaks")
+        .arg(std::process::id().to_string())
+        .output()
+        .expect("run leaks");
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut types = std::collections::BTreeMap::<String, usize>::new();
+    for line in text
+        .lines()
+        .filter(|line| line.trim_start().starts_with("Leak:"))
+    {
+        let name = line.rsplit("  ").next().unwrap_or(line).trim().to_string();
+        *types.entry(name).or_default() += 1;
+    }
+    println!(
+        "leaks found {} leaked block lines by type: {types:?}",
+        types.values().sum::<usize>()
+    );
+    for line in text
+        .lines()
+        .filter(|line| line.contains("leaks for") || line.trim_start().starts_with("Leak:"))
+        .take(40)
+    {
+        println!("leaks: {line}");
+    }
+    eprintln!(
+        "leaks standard error: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // `leaks` counts only unreferenced blocks; the classes with the most live objects name a kept object that a pool or
+    // a cache still references.
+    let output = std::process::Command::new("/usr/bin/heap")
+        .arg(std::process::id().to_string())
+        .output()
+        .expect("run heap");
+    let text = String::from_utf8_lossy(&output.stdout);
+    let classes = text
+        .lines()
+        .skip_while(|line| !line.contains("CLASS_NAME"))
+        .skip(2)
+        .take(15);
+    for line in classes {
+        println!("heap: {line}");
+    }
 }
