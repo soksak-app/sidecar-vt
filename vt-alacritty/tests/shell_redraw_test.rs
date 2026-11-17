@@ -123,7 +123,17 @@ fn open(shell: &str, variable: &str, directory: &Path) -> Session {
         Some(directory.as_os_str().to_os_string()),
     )]);
     let (tx, rx) = soksak_sidecar_vt_core::pty::output_channel();
-    let opened = service.open_shell(ShellOwner { owner: "", surface: "" }, shell, None, 60, 12, tx);
+    let opened = service.open_shell(
+        ShellOwner {
+            owner: "",
+            surface: "",
+        },
+        shell,
+        None,
+        60,
+        12,
+        tx,
+    );
     let id = opened.expect("open a shell session");
     let mut engine = AlacrittyEngine::new();
     engine.resize(60, 12);
