@@ -261,6 +261,15 @@ fn apply_shell_locale(command: &mut CommandBuilder, log: &Events) {
     }
 }
 
+/// The owner of a session shell: the configuration directory `owner` and the surface `surface`.
+/// An empty surface starts the shell without `SOKSAK_SURFACE`, and an empty owner keeps the value of the
+/// environment of the process (a service on standard input and output).
+#[derive(Clone, Copy, Debug)]
+pub struct ShellOwner<'a> {
+    pub owner: &'a str,
+    pub surface: &'a str,
+}
+
 impl PtyService {
     /// The service whose sessions record every write to and read from the PTY, and their life, in
     /// `log`.
@@ -318,8 +327,7 @@ impl PtyService {
     /// environment of the process (a service on standard input and output).
     pub fn open_shell(
         &self,
-        owner: &str,
-        surface: &str,
+        owner: ShellOwner<'_>,
         shell: &str,
         cwd: Option<&str>,
         cols: u16,
@@ -328,10 +336,10 @@ impl PtyService {
     ) -> Result<String, String> {
         let mut command = CommandBuilder::new_default_prog();
         self.apply_environment(&mut command);
-        apply_surface_environment(&mut command, owner, surface);
+        apply_surface_environment(&mut command, owner.owner, owner.surface);
         command.env("SHELL", shell);
         crate::shell_integration::apply(shell, &mut command, &self.log)?;
-        self.spawn_owned(owner, command, cwd, cols, rows, events)
+        self.spawn_owned(owner.owner, command, cwd, cols, rows, events)
     }
 
     fn spawn_owned(

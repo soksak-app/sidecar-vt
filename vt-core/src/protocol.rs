@@ -6524,8 +6524,10 @@ impl SessionPort for LocalSessionPort {
         let events = self.events_tx.clone();
         tokio::task::spawn_blocking(move || {
             service.open_shell(
-                &owner,
-                &surface,
+                crate::pty::ShellOwner {
+                    owner: &owner,
+                    surface: &surface,
+                },
                 &shell,
                 directory.as_deref(),
                 cols,

@@ -9,7 +9,7 @@ use std::os::fd::AsRawFd;
 use std::sync::{Mutex, OnceLock};
 
 use soksak_sidecar_vt_core::DaemonEvent;
-use soksak_sidecar_vt_core::pty::{PtyService, resolve_directory, resolve_shell};
+use soksak_sidecar_vt_core::pty::{PtyService, ShellOwner, resolve_directory, resolve_shell};
 use tokio::time::{Duration, timeout};
 
 // Runs one at a time with the other PTY checks of the same workspace.
@@ -61,7 +61,7 @@ async fn a_session_shell_starts_as_a_login_shell() {
     let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
     let session = service
-        .open_shell("", "", "/bin/sh", None, 80, 24, tx)
+        .open_shell(ShellOwner { owner: "", surface: "" }, "/bin/sh", None, 80, 24, tx)
         .expect("open a login shell session");
     service
         .write(
@@ -154,7 +154,7 @@ async fn a_zsh_session_reads_the_user_startup_files_and_reports_prompt_and_comma
             Some(home.clone().into_os_string()),
         )]);
     let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
-    let opened = service.open_shell("", "", "/bin/zsh", None, 80, 24, tx);
+    let opened = service.open_shell(ShellOwner { owner: "", surface: "" }, "/bin/zsh", None, 80, 24, tx);
     let session = opened.expect("open a zsh session");
     let mut output = String::new();
     let prompted =
@@ -220,7 +220,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
             Some(home.clone().into_os_string()),
         )]);
     let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
-    let opened = service.open_shell("", "", "/bin/bash", None, 80, 24, tx);
+    let opened = service.open_shell(ShellOwner { owner: "", surface: "" }, "/bin/bash", None, 80, 24, tx);
     let session = opened.expect("open a bash session");
     let mut output = String::new();
     let prompted = collect_until(&mut rx, &mut output, |text| {
@@ -337,7 +337,7 @@ async fn a_bash_debug_trap_from_the_startup_files_is_kept_and_no_marks_are_repor
             Some(home.clone().into_os_string()),
         )]);
     let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
-    let opened = service.open_shell("", "", "/bin/bash", None, 80, 24, tx);
+    let opened = service.open_shell(ShellOwner { owner: "", surface: "" }, "/bin/bash", None, 80, 24, tx);
     let session = opened.expect("open a bash session");
     service
         .write(
@@ -373,7 +373,7 @@ async fn a_resize_during_bash_startup_does_not_report_a_command_at_the_first_pro
             Some(home.clone().into_os_string()),
         )]);
     let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
-    let opened = service.open_shell("", "", "/bin/bash", None, 80, 24, tx);
+    let opened = service.open_shell(ShellOwner { owner: "", surface: "" }, "/bin/bash", None, 80, 24, tx);
     let session = opened.expect("open a bash session");
     // The app sends the surface size right after it opens the session. SIGWINCH arrives while the
     // shell reads its startup files.
@@ -414,8 +414,7 @@ async fn a_session_starts_in_the_requested_directory() {
     let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
     let session = service
         .open_shell(
-            "",
-            "",
+            ShellOwner { owner: "", surface: "" },
             "/bin/sh",
             Some(directory.to_str().unwrap()),
             80,
@@ -469,7 +468,7 @@ async fn reports_its_directory(shell: &str, variable: &str, files: &[(&str, &str
             Some(home.clone().into_os_string()),
         )]);
     let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
-    let opened = service.open_shell("", "", shell, Some(start.to_str().unwrap()), 80, 24, tx);
+    let opened = service.open_shell(ShellOwner { owner: "", surface: "" }, shell, Some(start.to_str().unwrap()), 80, 24, tx);
     let session = opened.expect("open a shell session");
     let expected = directory_uri(&start);
     let mut output = String::new();
@@ -542,7 +541,7 @@ async fn a_session_shell_names_its_surface_and_config_directory() {
     ]);
     let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
     let session = service
-        .open_shell("/fixture/config", "surf-1", "/bin/sh", None, 80, 24, tx)
+        .open_shell(ShellOwner { owner: "/fixture/config", surface: "surf-1" }, "/bin/sh", None, 80, 24, tx)
         .expect("open a session shell");
     service
         .write(
@@ -571,7 +570,7 @@ async fn a_session_shell_without_a_surface_has_no_surface_variable() {
     ]);
     let (tx, mut rx) = soksak_sidecar_vt_core::pty::output_channel();
     let session = service
-        .open_shell("", "", "/bin/sh", None, 80, 24, tx)
+        .open_shell(ShellOwner { owner: "", surface: "" }, "/bin/sh", None, 80, 24, tx)
         .expect("open a session shell");
     service
         .write(

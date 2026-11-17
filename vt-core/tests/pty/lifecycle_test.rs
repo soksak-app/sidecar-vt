@@ -884,7 +884,7 @@ async fn a_shell_without_integration_is_recorded_when_its_session_starts() {
     let service = PtyService::new(events.handle());
     let (tx, _rx) = crate::pty::output_channel();
     let session_id = service
-        .open_shell("owner", "", "/bin/sh", None, 80, 24, tx)
+        .open_shell(ShellOwner { owner: "owner", surface: "" }, "/bin/sh", None, 80, 24, tx)
         .expect("PTY setup failed; environmental PTY errors must fail this test");
     service.close(&session_id).unwrap();
     let records = named(&events, "sidecar.vt.record.info");
