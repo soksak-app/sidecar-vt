@@ -25,7 +25,11 @@ fn blocks_in_use() -> u32 {
     stats.blocks_in_use
 }
 
-// A screen whose text holds the number of the draw, so every row differs from the row of the last draw.
+// A screen whose text holds its number, so every row differs from the row of the screen before it. The draws cycle through
+// SCREENS screens, so a cache of the text that the system keeps is full after the first cycles and the draws that the test
+// counts add no text to it.
+const SCREENS: usize = 10;
+
 fn screen(draw: usize) -> Screen {
     let cols = 20;
     let rows = 40;
@@ -75,16 +79,17 @@ fn repeated_strip_draws_keep_no_allocation() {
             unfocused: UnfocusedCursor::Hollow,
         };
         let frame = Frame::new_strip(width, height).expect("strip frame");
-        for draw in 0..20 {
+        let screens: Vec<Screen> = (0..SCREENS).map(screen).collect();
+        for screen in screens.iter().cycle().take(2 * SCREENS) {
             frame
-                .draw_with_theme(&screen(draw), &metrics, cursor, &theme)
+                .draw_with_theme(screen, &metrics, cursor, &theme)
                 .expect("draw");
         }
         let before = blocks_in_use();
         let draws = 200;
-        for draw in 20..20 + draws {
+        for screen in screens.iter().cycle().take(draws) {
             frame
-                .draw_with_theme(&screen(draw), &metrics, cursor, &theme)
+                .draw_with_theme(screen, &metrics, cursor, &theme)
                 .expect("draw");
         }
         (before, blocks_in_use(), draws)
