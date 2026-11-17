@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S177: `open_shell`은 owner를 하나의 `ShellOwner`(설정 디렉터리와 surface)로 받아 함수가 인자 일곱 개를 가지며, 경고를 오류로 보는 clippy 검사가 이를 통과한다. 후보는 0.0.28이다.
 - S176: 각 shell session process는 요청의 surface를 담은 `SOKSAK_SURFACE`와 연결의 설정 디렉터리를 담은 `SOKSAK_CONFIG_DIR`을 가지며 상속한 값을 대체한다. surface가 없는 process는 `SOKSAK_SURFACE`가 없다. `ShellRequest`가 surface를 담는다.
 - S175: SGR 2(dim, faint) cell을 전경색의 각 채널을 3분의 2로 줄여 그린다. engine은 cell의 DIM flag를 넘기고, 색이 없는 cell은 흐려진 기본 전경색을 쓰며, dim이 아닌 cell은 색을 그대로 둔다. 화면 hash에는 dim flag가 들어간다.
 - S174: draw memory test가 화면 10개를 돌아가며 그리고 400번 draw 세 구간의 남은 block을 센다. 마지막 구간은 draw 수보다 적은 block을 남겨야 하므로, 한도가 있는 system cache를 남은 객체로 세지 않는다.

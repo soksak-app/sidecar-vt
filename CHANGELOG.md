@@ -1,5 +1,6 @@
 # Changelog
 
+- S177: `open_shell` takes its owner as one `ShellOwner` (the configuration directory and the surface), so the function has seven arguments and the clippy check with warnings as errors accepts it; the candidate is 0.0.28.
 - S176: Each shell session process carries `SOKSAK_SURFACE` set to the surface of its request and `SOKSAK_CONFIG_DIR` set to the configuration directory of its connection, replacing inherited values; a process without a surface has no `SOKSAK_SURFACE`. The `ShellRequest` carries the surface.
 - S175: SGR 2 (dim, faint) cells are drawn with their foreground at two thirds of each channel; the engine passes the DIM flag of a cell, a cell without a color uses the dimmed default foreground, and an undimmed cell keeps its color. The screen hash includes the dim flag.
 - S174: The draw memory test cycles through 10 screens and counts the kept blocks of three windows of 400 draws; the last window must keep fewer blocks than draws, so a bounded system cache is not counted as kept objects.
