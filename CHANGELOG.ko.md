@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S175: SGR 2(dim, faint) cell을 전경색의 각 채널을 3분의 2로 줄여 그린다. engine은 cell의 DIM flag를 넘기고, 색이 없는 cell은 흐려진 기본 전경색을 쓰며, dim이 아닌 cell은 색을 그대로 둔다. 화면 hash에는 dim flag가 들어간다.
 - S174: draw memory test가 화면 10개를 돌아가며 그리고 400번 draw 세 구간의 남은 block을 센다. 마지막 구간은 draw 수보다 적은 block을 남겨야 하므로, 한도가 있는 system cache를 남은 객체로 세지 않는다.
 - S173: candidate는 0.0.27이다.
 - S172: frame의 draw 함수마다 자기 autorelease pool을 비워서, pool이 없는 thread에서 draw해도 `NSMutableData`가 남지 않는다. 22시간 draw한 sidecar는 이런 객체와 pool page를 467 MB 남겼었다.

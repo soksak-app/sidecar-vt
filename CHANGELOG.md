@@ -1,5 +1,6 @@
 # Changelog
 
+- S175: SGR 2 (dim, faint) cells are drawn with their foreground at two thirds of each channel; the engine passes the DIM flag of a cell, a cell without a color uses the dimmed default foreground, and an undimmed cell keeps its color. The screen hash includes the dim flag.
 - S174: The draw memory test cycles through 10 screens and counts the kept blocks of three windows of 400 draws; the last window must keep fewer blocks than draws, so a bounded system cache is not counted as kept objects.
 - S173: The candidate is 0.0.27.
 - S172: Each drawing function of the frame drains its own autorelease pool, so a draw on a thread without a pool keeps no `NSMutableData`; a sidecar that drew for 22 hours had kept 467 MB of such objects and pool pages.

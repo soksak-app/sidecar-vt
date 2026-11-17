@@ -555,7 +555,7 @@ impl Frame {
         let mut cells = Vec::new();
         for row in &render_screen.lines {
             for cell in row {
-                let (fg, has_fg) = cell_color(cell.fg);
+                let (fg, has_fg) = cell_foreground(cell, theme.foreground);
                 let (bg, has_bg) = cell_color(cell.bg);
 
                 cells.push(CCell {
@@ -1197,9 +1197,67 @@ pub fn metrics_for(
     })
 }
 
+/// The foreground that the draw receives for a cell. A dim cell (SGR 2) draws its foreground, or the
+/// default foreground when the cell has no color, at two thirds of each channel.
+fn cell_foreground(cell: &crate::protocol::Cell, default_foreground: [u8; 3]) -> ([u8; 3], bool) {
+    if !cell.dim {
+        return cell_color(cell.fg);
+    }
+    let [red, green, blue] = cell
+        .fg
+        .map_or(default_foreground, |crate::protocol::Rgb(rgb)| rgb);
+    let dim = |channel: u8| (u16::from(channel) * 2 / 3) as u8;
+    ([dim(red), dim(green), dim(blue)], true)
+}
+
 fn cell_color(color: Option<crate::protocol::Rgb>) -> ([u8; 3], bool) {
     match color {
         Some(crate::protocol::Rgb(rgb)) => (rgb, true),
         None => ([0, 0, 0], false),
+    }
+}
+
+#[cfg(test)]
+mod cell_foreground_tests {
+    use super::cell_foreground;
+    use crate::protocol::{Cell, Rgb};
+
+    #[test]
+    fn dim_cell_foreground_is_two_thirds_of_its_color() {
+        let cell = Cell {
+            fg: Some(Rgb([255, 240, 90])),
+            dim: true,
+            ..Cell::default()
+        };
+        assert_eq!(
+            cell_foreground(&cell, [200, 200, 200]),
+            ([170, 160, 60], true)
+        );
+    }
+
+    #[test]
+    fn dim_cell_without_color_uses_the_dimmed_default_foreground() {
+        let cell = Cell {
+            dim: true,
+            ..Cell::default()
+        };
+        assert_eq!(
+            cell_foreground(&cell, [255, 255, 255]),
+            ([170, 170, 170], true)
+        );
+    }
+
+    #[test]
+    fn undimmed_cell_foreground_is_unchanged() {
+        let cell = Cell {
+            fg: Some(Rgb([255, 240, 90])),
+            ..Cell::default()
+        };
+        assert_eq!(
+            cell_foreground(&cell, [200, 200, 200]),
+            ([255, 240, 90], true)
+        );
+        let plain = Cell::default();
+        assert_eq!(cell_foreground(&plain, [200, 200, 200]), ([0, 0, 0], false));
     }
 }

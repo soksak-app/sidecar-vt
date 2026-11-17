@@ -641,6 +641,15 @@ fn sgr_color_does_not_drop_the_character() {
 }
 
 #[test]
+fn sgr_dim_marks_only_the_dimmed_cells() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b[2mA\x1b[0mB");
+    let screen = engine.screen();
+    assert!(screen.lines[0][0].dim);
+    assert!(!screen.lines[0][1].dim);
+}
+
+#[test]
 fn alternate_screen_mode_is_exported() {
     let mut engine = AlacrittyEngine::new();
     engine.feed(b"\x1b[?1049h");
