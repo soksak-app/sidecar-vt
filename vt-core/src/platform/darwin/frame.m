@@ -163,14 +163,19 @@ static Frame* frame_create(uint32_t width_px, uint32_t height_px) {
     return frame;
 }
 
+// Each exported function that creates Objective-C objects drains its own autorelease pool: the threads that call it have
+// no pool, so an object left to an outer pool would stay allocated for the life of the thread.
 Frame* frame_new(uint32_t width_px, uint32_t height_px) {
-    return frame_create(width_px, height_px);
+    @autoreleasepool {
+        return frame_create(width_px, height_px);
+    }
 }
 
 // Creates a frame that keeps a strip per screen row and composes each draw on the CPU. A GPU pass is not used: its only work
 // is this copy and the rectangles of the cursor and the images, and the Metal driver keeps at least 70 MB for a process
 // that encodes any pass, while the copy costs less than a millisecond per frame (S1-13).
 Frame* frame_new_strip(uint32_t width_px, uint32_t height_px) {
+    @autoreleasepool {
     Frame *frame = frame_create(width_px, height_px);
     if (!frame) return NULL;
     uint8_t unused_nonce[16];
@@ -182,6 +187,7 @@ Frame* frame_new_strip(uint32_t width_px, uint32_t height_px) {
     }
     frame->rows = (__bridge_retained void *)[NSMutableArray array];
     return frame;
+    }
 }
 
 // A rectangle of pixels that a draw changes over the strips, in the order of the array: the overlay under an image, the
@@ -915,10 +921,12 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
                                   InlineImageRaster *images, uint32_t image_count,
                                   RenderOutput *render_output) {
     if (!frame || !screen || !metrics) return -1;
-    int selected = frame_select_target(frame);
-    if (selected != 0) return selected;
-    if (frame->strips) return frame_draw_strips(frame, screen, metrics, images, image_count, render_output);
-    return frame_draw_cg(frame, frame->surface, screen, metrics, images, image_count, render_output, NULL);
+    @autoreleasepool {
+        int selected = frame_select_target(frame);
+        if (selected != 0) return selected;
+        if (frame->strips) return frame_draw_strips(frame, screen, metrics, images, image_count, render_output);
+        return frame_draw_cg(frame, frame->surface, screen, metrics, images, image_count, render_output, NULL);
+    }
 }
 
 void frame_drop(Frame *frame) {
@@ -952,6 +960,7 @@ FrameFont *frame_font_system_monospace(void) {
 
 FrameFont *frame_font_named(const char *family) {
     if (!family) return NULL;
+    @autoreleasepool {
     NSString *wanted = [NSString stringWithUTF8String:family];
     if (wanted.length == 0) return NULL;
     CTFontDescriptorRef descriptor = CTFontDescriptorCreateWithAttributes(
@@ -974,13 +983,17 @@ FrameFont *frame_font_named(const char *family) {
     }
     font->descriptor = descriptor;
     return font;
+    }
 }
 
 char *frame_font_family(const FrameFont *font) {
     if (!font) return NULL;
     CFStringRef family = CTFontDescriptorCopyAttribute(font->descriptor, kCTFontFamilyNameAttribute);
     if (!family) return NULL;
-    char *result = strdup([(__bridge NSString *)family UTF8String]);
+    char *result;
+    @autoreleasepool {
+        result = strdup([(__bridge NSString *)family UTF8String]);
+    }
     CFRelease(family);
     return result;
 }
