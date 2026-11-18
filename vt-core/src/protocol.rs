@@ -253,6 +253,7 @@ async fn watch_requests(
                 None => return,
             },
             _ = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
+            // default: the branch is enabled only while a deadline is set, so the fallback instant is never used.
                 let Some(request) = waiting.pop_front().and_then(|request| request.upgrade()) else {
                     continue;
                 };
@@ -331,15 +332,27 @@ impl TransferStore {
     }
 
     fn images(&self) -> std::sync::MutexGuard<'_, Option<Vec<RetainedTransfer>>> {
-        self.images.lock().unwrap_or_else(|error| {
-            let images = error.into_inner();
-            self.log.record_error(
-                "image transfer store",
-                "transfer store lock was poisoned; transfer state retained",
-            );
-            self.images.clear_poison();
-            images
-        })
+        self.images
+            .lock()
+            // default: recover the retained transfer state; the poisoning is reported by recovered_images.
+            .unwrap_or_else(|error| self.recovered_images(error.into_inner()))
+    }
+
+    fn recovered_images<'a>(
+        &'a self,
+        state: std::sync::MutexGuard<'a, Option<Vec<RetainedTransfer>>>,
+    ) -> std::sync::MutexGuard<'a, Option<Vec<RetainedTransfer>>> {
+        self.log.emit_for(
+            Level::Error,
+            "sidecar.vt.record.error",
+            Subject::NONE,
+            &serde_json::json!({
+                "where": "image transfer store",
+                "text": "transfer store lock was poisoned; transfer state retained",
+            }),
+        );
+        self.images.clear_poison();
+        state
     }
 
     /// If the connection has ended, no reply can come, so the transfer image is released at once.
@@ -3817,6 +3830,7 @@ async fn surface_task(
                     && (cursor_policy.idle_timeout_ms == 0
                         || (cursor_activity.elapsed().as_millis() as u64) < cursor_policy.idle_timeout_ms)
                     && engine.screen().cursor.visible;
+            // default: the branch is enabled only while a sync deadline is set, so the fallback instant is never used.
                 if !blink_enabled {
                     continue;
                 }
@@ -3837,6 +3851,7 @@ async fn surface_task(
                     && let Some(state) = image_state.as_mut() {
                         if state.pending_draw {
                             state.dirty = true;
+            // default: the branch is enabled only while a frame clock is set, so the fallback instant is never used.
                         } else if let Some(due) = frame_due(state, last_input) {
                             // The frame clock draws the blink state together with the output.
                             state.dirty = true;
@@ -3911,6 +3926,7 @@ async fn surface_task(
                                 "body": {"event": "session", "sessionId": session_id}
                             });
                             if output_tx.send(response.to_string()).await.is_err() {
+                                // default: the branch is entered only when a requested image or an image state names the surface, so the empty name is never used.
                                 return;
                             }
                             // The session reports held input only when that changes, and the client
@@ -5518,6 +5534,7 @@ where
                                     )
                                     .await
                                 {
+                                    // default: a request without an image.detach field is answered with the plain stale attachment error.
                                     Ok(epoch) => {
                                         surface_epochs.insert(registry_key.clone(), epoch);
                                         cmd_tx
@@ -6227,6 +6244,7 @@ where
                                     .await
                                     .is_err()
                                 {
+                                        // default: a request without an image.detach field is answered with the plain invalidParams body, which carries the same reason.
                                     break;
                                 }
                             } else {
@@ -6337,6 +6355,7 @@ impl<R> PolledReader<R> {
     }
 }
 
+                // default: a line that does not parse as JSON has no body, so the reply below uses the empty surface.
 impl<R: AsyncRead + Unpin> AsyncRead for PolledReader<R> {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,

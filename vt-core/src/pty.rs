@@ -620,15 +620,27 @@ impl PtyService {
     }
 
     fn sessions(&self) -> MutexGuard<'_, HashMap<String, Arc<Session>>> {
-        self.sessions.lock().unwrap_or_else(|error| {
-            let sessions = error.into_inner();
-            self.log.record_error(
-                "pty registry",
-                "session registry lock was poisoned; sessions retained",
-            );
-            self.sessions.clear_poison();
-            sessions
-        })
+        self.sessions
+            .lock()
+            // default: recover the retained session registry; the poisoning is reported by recovered_sessions.
+            .unwrap_or_else(|error| self.recovered_sessions(error.into_inner()))
+    }
+
+    fn recovered_sessions<'a>(
+        &'a self,
+        sessions: MutexGuard<'a, HashMap<String, Arc<Session>>>,
+    ) -> MutexGuard<'a, HashMap<String, Arc<Session>>> {
+        self.log.emit_for(
+            Level::Error,
+            "sidecar.vt.record.error",
+            Subject::NONE,
+            &serde_json::json!({
+                "where": "pty registry",
+                "text": "session registry lock was poisoned; sessions retained",
+            }),
+        );
+        self.sessions.clear_poison();
+        sessions
     }
 
     fn session(&self, session_id: &str) -> Result<Arc<Session>, String> {

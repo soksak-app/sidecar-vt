@@ -353,6 +353,7 @@ pub async fn serve_persistent(
             Ok(Some(reason)) => {
                 // The loop takes the first reason, and a later one is not used after the loop
                 // ended.
+                // default: a send fails only when the receiver of the ended reason was dropped, so the reason has no reader.
                 let _ = ended_sender.send(reason);
             }
             Ok(None) => {}
