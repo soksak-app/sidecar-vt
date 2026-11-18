@@ -96,6 +96,8 @@
 
 ## Unreleased
 
+- S178: The `screen.read` request takes `from` and `count` and returns retained rows above the viewport, numbered by the absolute line numbers; the reply is the event `screen.rows`.
+- S175: A dim cell draws its foreground blended toward its background, and the screen hash covers the dim attribute.
 - F460-vt: `.gitignore` names the local output folder `/build/`.
 - F472-vt: The names of the commands state what they do, and `sok-check commands` holds them.
 - F468-vt: The repository runs `soksak-check docs` and `soksak-check events` of the kit with `event-sources.json`.

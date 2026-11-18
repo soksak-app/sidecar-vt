@@ -1700,6 +1700,47 @@ impl AlacrittyEngine {
         )
     }
 
+    /// Reads `count` rows from absolute line number `from`, without the selection highlight. The
+    /// absolute number of a row is `dropped + history + line`, where a history row has a negative
+    /// line, so the oldest kept history row has the number `dropped`. A row outside the retained
+    /// rows fails the whole read with the retained range; no row is clamped or skipped.
+    pub fn screen_rows(&self, from: u64, count: u32) -> Result<Vec<Vec<Cell>>, String> {
+        let grid = self.term.grid();
+        let first = self.dropped as u64;
+        let end = first + (grid.history_size() + grid.screen_lines()) as u64;
+        let stop = from.checked_add(u64::from(count));
+        if from < first || stop.is_none_or(|stop| stop > end) {
+            return Err(format!(
+                "screen.read from {from} count {count} is outside the retained rows {first} to {}",
+                end - 1
+            ));
+        }
+        let colors = self.term.colors();
+        let history = grid.history_size() as i64;
+        let mut rows = Vec::with_capacity(count as usize);
+        for number in from..from + u64::from(count) {
+            let line = (number - first) as i64 - history;
+            let line = i32::try_from(line).expect("retained row line fits the grid line type");
+            let mut row: Vec<Cell> = (0..grid.columns())
+                .map(|col| self.cell(&grid[Line(line)][Column(col)], colors))
+                .collect();
+            self.trim_row(&mut row);
+            rows.push(row);
+        }
+        Ok(rows)
+    }
+
+    /// Removes the trailing cells that draw as the default background and foreground without any
+    /// attribute, so a row holds only the cells that differ from the blank.
+    fn trim_row(&self, line: &mut Vec<Cell>) {
+        while line
+            .last()
+            .is_some_and(|cell| self.is_trimmable_default_cell(cell))
+        {
+            line.pop();
+        }
+    }
+
     /// Converts cell boundaries to alacritty cells and sides. Boundary c is the left side of cell
     /// c, and the column count is the right side of the last cell.
     fn edge_point(&self, edge: u16, row: u16) -> Result<(Point, Side), String> {
@@ -2035,6 +2076,10 @@ impl Engine for AlacrittyEngine {
         AlacrittyEngine::cursor(self)
     }
 
+    fn screen_rows(&self, from: u64, count: u32) -> Result<Vec<Vec<Cell>>, String> {
+        AlacrittyEngine::screen_rows(self, from, count)
+    }
+
     fn screen(&mut self) -> Screen {
         let cursor = self.cursor();
         let renderable = self.term.renderable_content();
@@ -2080,12 +2125,7 @@ impl Engine for AlacrittyEngine {
         }
 
         for line in &mut lines {
-            while line
-                .last()
-                .is_some_and(|cell| self.is_trimmable_default_cell(cell))
-            {
-                line.pop();
-            }
+            self.trim_row(line);
         }
 
         let (offset, history) = self.scrollback();

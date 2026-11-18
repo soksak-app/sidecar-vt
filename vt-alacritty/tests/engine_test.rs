@@ -855,6 +855,51 @@ fn the_viewport_scrolls_through_the_scrollback_and_returns_to_the_newest_output(
     assert!(engine.screen().cursor.visible);
 }
 
+/// The text of each row, without trailing blanks.
+fn row_texts(rows: &[Vec<soksak_sidecar_vt_core::Cell>]) -> Vec<String> {
+    rows.iter()
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.ch.as_deref().unwrap_or(" "))
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn screen_read_returns_rows_above_the_viewport() {
+    let mut engine = AlacrittyEngine::new();
+    engine.resize(20, 4);
+    for index in 0..10 {
+        engine.feed(format!("L{index:02}\r\n").as_bytes());
+    }
+    // Four screen rows hold L07 to L09 and the empty cursor row, so L00 to L06 are in history.
+    assert_eq!(engine.scrollback(), (0, 7));
+    assert_eq!(line_text(&engine.screen(), 0), "L07");
+
+    // Absolute numbers start at the oldest kept history row, which is 0 here.
+    let above = engine.screen_rows(0, 3).expect("rows 0 to 2 are retained");
+    assert_eq!(row_texts(&above), ["L00", "L01", "L02"]);
+
+    // A read that spans the history and the screen returns the rows in order.
+    let across = engine.screen_rows(5, 4).expect("rows 5 to 8 are retained");
+    assert_eq!(row_texts(&across), ["L05", "L06", "L07", "L08"]);
+
+    // The viewport read is unchanged.
+    assert_eq!(line_text(&engine.screen(), 0), "L07");
+
+    // A row past the retained rows fails with the retained range and returns no rows.
+    let error = engine
+        .screen_rows(0, 12)
+        .expect_err("row 11 is not retained");
+    assert_eq!(
+        error,
+        "screen.read from 0 count 12 is outside the retained rows 0 to 10"
+    );
+}
+
 /// Glyph of a cell drawn with the selection background (the default theme's selection color).
 fn inverted_text(screen: &soksak_sidecar_vt_core::Screen, row: usize) -> String {
     let selection = format!(

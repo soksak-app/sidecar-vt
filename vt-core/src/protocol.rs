@@ -759,6 +759,11 @@ impl PersistentRegistry {
     }
 }
 
+/// The largest `count` of a `screen.read` request with `from`. A request with a larger count is
+/// refused with `invalidParams` before the engine reads any row, so one reply holds at most this
+/// many rows.
+pub const SCREEN_ROWS_COUNT_MAX: u32 = 200;
+
 /// The trait that an engine implements. It is the contract of the VT processing engine.
 /// A terminal engine. It returns its replies to the program as `EngineEvent::PtyWrite` from
 /// `drain_events`, and the service queues them in order with the input of the session.
@@ -793,6 +798,12 @@ pub trait Engine: Send + 'static {
     fn scroll_to_newest(&mut self) -> bool;
     fn cursor(&self) -> Cursor;
     fn screen(&mut self) -> Screen;
+    /// The cells of the rows from absolute number `from` for `count` rows, in order. The numbers
+    /// are the absolute line numbers of the engine: the oldest kept history row has the number of
+    /// rows dropped or erased from the history, and the rows of the screen follow the history
+    /// rows. A row that is not retained is an error that names the retained range; nothing is
+    /// clamped.
+    fn screen_rows(&self, from: u64, count: u32) -> Result<Vec<Vec<Cell>>, String>;
     fn scroll_generation(&self) -> i64 {
         0
     }
@@ -1317,6 +1328,11 @@ enum SurfaceCommand {
         policy: CursorPolicy,
     },
     ScreenRead,
+    /// Rows from absolute number `from` for `count` rows, answered as the `screen.rows` body.
+    ScreenRows {
+        from: u64,
+        count: u32,
+    },
     ScreenWatch {
         enabled: bool,
     },
@@ -4726,6 +4742,18 @@ async fn surface_task(
                             return;
                         }
                     }
+                    SurfaceCommand::ScreenRows { from, count } => {
+                        // The rows are not part of the screen message, so no screen is sent and the
+                        // page's screen state is unchanged.
+                        let response = match engine.screen_rows(from, count) {
+                            Ok(rows) => json!({
+                                "surface": surface_id,
+                                "body": {"event": "screen.rows", "from": from, "count": count, "rows": rows}
+                            }),
+                            Err(reason) => json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": reason}}),
+                        };
+                        if output_tx.reply(response).await.is_err() { return; }
+                    }
                     SurfaceCommand::InlineImageDelete { name } => {
                         let Some(state) = image_state.as_mut() else {
                             let response = json!({
@@ -5941,7 +5969,41 @@ where
                                 }
                             },
                             "screen.read" => {
-                                if tx.send(SurfaceCommand::ScreenRead).await.is_err() {
+                                // Without `from` the reply is the viewport. With `from`, `count` is
+                                // required and names how many rows from that absolute number are read,
+                                // from 1 to SCREEN_ROWS_COUNT_MAX.
+                                let command = match (body.get("from"), body.get("count")) {
+                                    (None, None) => SurfaceCommand::ScreenRead,
+                                    (None, Some(_)) => {
+                                        let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "screen.read count requires from"}});
+                                        if reply_tx.reply(response).await.is_err() {
+                                            break;
+                                        }
+                                        continue;
+                                    }
+                                    (Some(from), count) => {
+                                        let from = from.as_u64();
+                                        let count = count
+                                            .and_then(Value::as_u64)
+                                            // silent: a value that does not fit is refused by the
+                                            // invalidParams reply that follows.
+                                            .and_then(|v| u32::try_from(v).ok())
+                                            .filter(|v| (1..=SCREEN_ROWS_COUNT_MAX).contains(v));
+                                        match (from, count) {
+                                            (Some(from), Some(count)) => {
+                                                SurfaceCommand::ScreenRows { from, count }
+                                            }
+                                            _ => {
+                                                let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": format!("screen.read requires an integer from and a count from 1 to {SCREEN_ROWS_COUNT_MAX}")}});
+                                                if reply_tx.reply(response).await.is_err() {
+                                                    break;
+                                                }
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                };
+                                if tx.send(command).await.is_err() {
                                     break;
                                 }
                             }
