@@ -11,6 +11,8 @@
       "page.call",
       "host.sidecar.request",
       "sidecar.vt.request",
+      "sidecar.vt.guard.allow",
+      "sidecar.vt.guard.refuse",
       "sidecar.vt.pty_write"
     ]
   },
@@ -185,6 +187,64 @@
         ]
       },
       "description": "Bytes written to the PTY of a session, all of them as hex, with the cids of the inputs that caused the write. A replay input: sequence counts the inputs of the session from 1 (core docs/spec/replay.md). error is present when the write failed."
+    },
+    "sidecar.vt.guard.allow": {
+      "layer": "sidecar",
+      "class": "input",
+      "level": "info",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "allow"
+            ]
+          },
+          "rule": {
+            "type": "null"
+          },
+          "reason": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "decision",
+          "rule",
+          "reason"
+        ]
+      },
+      "description": "The destructive-command guard allowed a command line that the input submits. The line text is not stored."
+    },
+    "sidecar.vt.guard.refuse": {
+      "layer": "sidecar",
+      "class": "input",
+      "level": "error",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "refuse"
+            ]
+          },
+          "rule": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision",
+          "rule",
+          "reason"
+        ]
+      },
+      "description": "The destructive-command guard refused a command line that the input submits; rule is the id of the rule that matched, or unparseable, undecidable or untracked. The line is not written to the session. The line text is not stored."
     },
     "sidecar.vt.pty_read": {
       "layer": "sidecar",

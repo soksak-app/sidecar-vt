@@ -8214,3 +8214,22 @@ async fn a_reconnect_reports_the_input_that_the_session_holds() {
         task.abort();
     }
 }
+
+#[tokio::test]
+async fn a_submitted_destructive_command_line_is_refused_and_writes_nothing() {
+    let refused = r#"{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"rm -rf ~","replacementRange":null,"attributed":false},{"type":"key","key":"Enter","shift":false,"alt":false,"ctrl":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+"#;
+    let (output, _, writes) = serve_scroll(None, refused).await;
+    assert!(output.contains("\"error\":\"guardRefused\""), "{output}");
+    assert!(output.contains("\"rule\":\"rm.recursive-force.root-or-home\""), "{output}");
+    assert_eq!(written(&writes), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn an_ordinary_submitted_command_line_is_written_to_the_session() {
+    let allowed = r#"{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"ls -la","replacementRange":null,"attributed":false},{"type":"key","key":"Enter","shift":false,"alt":false,"ctrl":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+"#;
+    let (output, _, writes) = serve_scroll(None, allowed).await;
+    assert!(!output.contains("guardRefused"), "{output}");
+    assert_eq!(written(&writes), vec!["ls -la\r".to_string()]);
+}

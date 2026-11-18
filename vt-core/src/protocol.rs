@@ -1,5 +1,6 @@
 use crate::encoding::{self, Key};
 use crate::events::{Events, Level, Subject};
+use crate::guard::{self, LineInput};
 use crate::inline_image::{Dimension, InlineImageCommand};
 use crate::policy::Class;
 use crate::screen_stream::{ScreenCells, ScreenOrder, ScreenStream, SentScreen, screen_cells};
@@ -252,8 +253,8 @@ async fn watch_requests(
                 Some(request) => waiting.push_back(request),
                 None => return,
             },
-            _ = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
             // default: the branch is enabled only while a deadline is set, so the fallback instant is never used.
+            _ = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
                 let Some(request) = waiting.pop_front().and_then(|request| request.upgrade()) else {
                     continue;
                 };
@@ -1434,6 +1435,47 @@ enum InputAction {
     Key(InputKey),
     Command(InputKey),
     Focus(bool),
+}
+
+/// The inputs of a transaction as the command line sees them. Focus changes do not change the line.
+fn line_inputs(actions: &[InputAction]) -> Vec<LineInput<'_>> {
+    actions
+        .iter()
+        .filter_map(|action| match action {
+            InputAction::Insert { text, .. } => Some(LineInput::Text(text.as_str())),
+            InputAction::Key(key) | InputAction::Command(key) => Some(line_key(key)),
+            InputAction::Focus(_) => None,
+        })
+        .collect()
+}
+
+/// A key as the command line sees it. Only plain keys and Ctrl-C or Ctrl-U have a known effect on the line; any other key
+/// makes the guard stop following the line.
+fn line_key(key: &InputKey) -> LineInput<'_> {
+    let plain = !key.ctrl && !key.alt;
+    match key.key.as_str() {
+        "Enter" | "KeypadEnter" if plain => LineInput::Enter,
+        "Backspace" if plain => LineInput::Backspace,
+        "Char" if plain => LineInput::Text(key.text.as_str()),
+        "Char" if key.ctrl && !key.alt && (key.text == "c" || key.text == "u") => LineInput::Discard,
+        _ if plain && !key.text.is_empty() => LineInput::Text(key.text.as_str()),
+        "Keypad0" if plain => LineInput::Text("0"),
+        "Keypad1" if plain => LineInput::Text("1"),
+        "Keypad2" if plain => LineInput::Text("2"),
+        "Keypad3" if plain => LineInput::Text("3"),
+        "Keypad4" if plain => LineInput::Text("4"),
+        "Keypad5" if plain => LineInput::Text("5"),
+        "Keypad6" if plain => LineInput::Text("6"),
+        "Keypad7" if plain => LineInput::Text("7"),
+        "Keypad8" if plain => LineInput::Text("8"),
+        "Keypad9" if plain => LineInput::Text("9"),
+        "KeypadDecimal" if plain => LineInput::Text("."),
+        "KeypadPlus" if plain => LineInput::Text("+"),
+        "KeypadMinus" if plain => LineInput::Text("-"),
+        "KeypadMultiply" if plain => LineInput::Text("*"),
+        "KeypadDivide" if plain => LineInput::Text("/"),
+        _ => LineInput::Other,
+    }
 }
 
 fn require_exact_fields(value: &Value, fields: &[&str], description: &str) -> Result<(), String> {
@@ -3739,6 +3781,8 @@ async fn surface_task(
     // A release that arrived while the event of the previous release waited, with the output that
     // answers its request.
     let mut deferred_selection_end: Option<OutputSink> = None;
+    // The command line that the shell of the session holds, as the input of this surface changes it (guard.rs).
+    let mut line_guard = guard::LineGuard::default();
     let mut preedit: Option<Preedit> = None;
     let mut current_theme = crate::palette::TerminalTheme::dark();
     // The first input of a session is the theme in force, so a replay starts from it and not from a
@@ -3786,6 +3830,7 @@ async fn surface_task(
             Some(result) = inputs.next_write_result(), if !inputs.pending_writes.is_empty() => {
                 if !inputs.finish_front_write(result).await { return; }
             }
+            // default: the branch is enabled only while a sync deadline is set, so the fallback instant is never used.
             _ = tokio::time::sleep_until(sync_deadline.unwrap_or_else(Instant::now)), if sync_deadline.is_some() => {
                 // The update ends at its deadline. The output that it held is then handled like the
                 // output of a feed: its events are sent, and the frame clock or a frame draws it.
@@ -3806,6 +3851,7 @@ async fn surface_task(
                     }
                 }
             }
+            // default: the branch is enabled only while a frame clock is set, so the fallback instant is never used.
             _ = tokio::time::sleep_until(frame_clock.unwrap_or_else(Instant::now)), if frame_clock.is_some() => {
                 frame_clock = None;
                 if session_id.is_some()
@@ -3830,7 +3876,6 @@ async fn surface_task(
                     && (cursor_policy.idle_timeout_ms == 0
                         || (cursor_activity.elapsed().as_millis() as u64) < cursor_policy.idle_timeout_ms)
                     && engine.screen().cursor.visible;
-            // default: the branch is enabled only while a sync deadline is set, so the fallback instant is never used.
                 if !blink_enabled {
                     continue;
                 }
@@ -3851,7 +3896,6 @@ async fn surface_task(
                     && let Some(state) = image_state.as_mut() {
                         if state.pending_draw {
                             state.dirty = true;
-            // default: the branch is enabled only while a frame clock is set, so the fallback instant is never used.
                         } else if let Some(due) = frame_due(state, last_input) {
                             // The frame clock draws the blink state together with the output.
                             state.dirty = true;
@@ -3882,6 +3926,7 @@ async fn surface_task(
                         if image.is_none() && (requested_image.is_some() || image_state.is_some()) {
                             let shown = requested_image.as_deref()
                                 .or(image_state.as_ref().map(|state| state.name.as_str()))
+                                // default: the branch is entered only when a requested image or an image state names the surface, so the empty name is never used.
                                 .unwrap_or_default();
                             let reason = format!("surface {surface_id} has the image {shown}; an open without image is refused");
                             log.record_error("open", &reason);
@@ -3926,7 +3971,6 @@ async fn surface_task(
                                 "body": {"event": "session", "sessionId": session_id}
                             });
                             if output_tx.send(response.to_string()).await.is_err() {
-                                // default: the branch is entered only when a requested image or an image state names the surface, so the empty name is never used.
                                 return;
                             }
                             // The session reports held input only when that changes, and the client
@@ -4272,6 +4316,21 @@ async fn surface_task(
                             if output_tx.reply(response).await.is_err() { return; }
                             continue;
                         }
+                        // A transaction that submits a refused command line writes nothing (guard.rs). The guard follows
+                        // only the line editing of the shell: an alternate screen or application keypad mode belongs to the
+                        // program that reads the keys, so the line is reset and the input is not judged.
+                        let shell_line = { let modes = engine.modes(); !modes.alt_screen && !modes.app_keypad };
+                        if !shell_line {
+                            line_guard = guard::LineGuard::default();
+                        }
+                        if let (Some(sid), true) = (session_id.as_deref(), shell_line) {
+                            let inputs_of_line = line_inputs(&actions);
+                            if let Some((rule, reason)) = guard::judge_transaction(&log, &mut line_guard, sid, &cids, &inputs_of_line) {
+                                let response = json!({"surface": surface_id, "body": {"error": "guardRefused", "rule": rule, "reason": reason}});
+                                if output_tx.reply(response).await.is_err() { return; }
+                                continue;
+                            }
+                        }
 
                         cursor_activity = Instant::now();
                         last_cursor_frame = None;
@@ -4320,6 +4379,19 @@ async fn surface_task(
                             }
                         }
                         if let Some(ref sid) = session_id {
+                            let shell_line = { let modes = engine.modes(); !modes.alt_screen && !modes.app_keypad };
+                            if !shell_line {
+                                line_guard = guard::LineGuard::default();
+                            }
+                            if shell_line
+                                && let Some((rule, reason)) = guard::judge_transaction(&log, &mut line_guard, sid, &cids, &[LineInput::Text(text.as_str())])
+                            {
+                                let response = json!({"surface": surface_id, "body": {"error": "guardRefused", "rule": rule, "reason": reason}});
+                                if output_tx.reply(response).await.is_err() {
+                                    return;
+                                }
+                                continue;
+                            }
                             let bytes = match encoding::encode_paste(&text, &engine.modes()) {
                                 Ok(bytes) => bytes,
                                 Err(error) => {
@@ -5462,6 +5534,7 @@ where
                                     .and_then(|detach| {
                                         image_detach_refusal(&surface_id, detach, "stale attachment", None)
                                     })
+                                    // default: a request without an image.detach field is answered with the plain stale attachment error.
                                     .unwrap_or_else(|| json!({"surface": surface_id, "body": {"error": "stale attachment"}}));
                                 if reply_tx.reply(response).await.is_err() {
                                     break;
@@ -5534,7 +5607,6 @@ where
                                     )
                                     .await
                                 {
-                                    // default: a request without an image.detach field is answered with the plain stale attachment error.
                                     Ok(epoch) => {
                                         surface_epochs.insert(registry_key.clone(), epoch);
                                         cmd_tx
@@ -6172,6 +6244,7 @@ where
                                                 Some(&reason),
                                             )
                                         })
+                                        // default: a request without an image.detach field is answered with the plain invalidParams body, which carries the same reason.
                                         .unwrap_or_else(|| {
                                             json!({"surface": surface_id,
                                             "body": {"error": "invalidParams", "reason": reason}})
@@ -6244,7 +6317,6 @@ where
                                     .await
                                     .is_err()
                                 {
-                                        // default: a request without an image.detach field is answered with the plain invalidParams body, which carries the same reason.
                                     break;
                                 }
                             } else {
@@ -6283,6 +6355,7 @@ where
                 // The surface and the cids are read from the line again, so an envelope that does
                 // not parse is answered on its surface when the surface is a string; a line without
                 // one is answered with an empty surface.
+                // default: a line that does not parse as JSON has no body, so the reply below uses the empty surface.
                 let line = serde_json::from_str::<Value>(trimmed).ok();
                 let surface = line
                     .as_ref()
@@ -6355,7 +6428,6 @@ impl<R> PolledReader<R> {
     }
 }
 
-                // default: a line that does not parse as JSON has no body, so the reply below uses the empty surface.
 impl<R: AsyncRead + Unpin> AsyncRead for PolledReader<R> {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,

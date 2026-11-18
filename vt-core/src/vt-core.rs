@@ -4,6 +4,7 @@ pub mod directory_uri;
 pub mod encoding;
 pub mod engine_trace;
 pub mod events;
+pub mod guard;
 pub mod inline_image;
 pub mod locale;
 pub mod palette;
