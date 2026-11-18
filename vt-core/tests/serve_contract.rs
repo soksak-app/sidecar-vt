@@ -131,6 +131,10 @@ impl MockEngine {
 }
 
 impl Engine for MockEngine {
+    fn screen_rows(&self, _from: u64, _count: u32) -> Result<Vec<Vec<Cell>>, String> {
+        Err("screen.read rows are not served by this test engine".to_string())
+    }
+
     fn set_theme(&mut self, theme: TerminalTheme) {
         self.themes.push(theme);
     }
@@ -5348,6 +5352,10 @@ async fn test_panicking_surface_reports_error() {
     }
 
     impl Engine for PanicEngine {
+    fn screen_rows(&self, _from: u64, _count: u32) -> Result<Vec<Vec<Cell>>, String> {
+        Err("screen.read rows are not served by this test engine".to_string())
+    }
+
         fn set_theme(&mut self, _theme: soksak_sidecar_vt_core::TerminalTheme) {}
 
         fn resize(&mut self, cols: u16, rows: u16) {

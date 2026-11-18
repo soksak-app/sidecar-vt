@@ -248,7 +248,7 @@ pub fn screen_hash_json(screen: &Value) -> Result<String, String> {
 
 /// The hash of the screen of the engine. A row or a cell that the engine leaves out is a blank cell; the colors of a cell are
 /// the true colors that the engine resolved (`#rrggbb`) or the default color. The attributes are those that a cell of the
-/// engine states: bold `01`, italic `04`, underline `08`, inverse `20` and dim `40`.
+/// engine states: bold `01`, italic `04`, underline `08`, inverse `20` and dim `02`.
 pub fn screen_hash(screen: &Screen) -> Result<String, String> {
     let cells = screen_cells(screen)?;
     Ok(digest(&canonical(
@@ -329,7 +329,7 @@ fn screen_cells(screen: &Screen) -> Result<Vec<HashCell<'_>>, String> {
                     | u8::from(cell.italic) << 2
                     | u8::from(cell.underline) << 3
                     | u8::from(cell.inverse) << 5
-                    | u8::from(cell.dim) << 6,
+                    | u8::from(cell.dim) << 1,
             });
         }
     }

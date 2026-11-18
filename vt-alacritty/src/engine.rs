@@ -1894,10 +1894,7 @@ impl AlacrittyEngine {
             } else {
                 1
             },
-            fg: match self.special_foreground(cell.flags, cell.fg) {
-                Some(rgb) => Some(soksak_sidecar_vt_core::Rgb([rgb.r, rgb.g, rgb.b])),
-                None => self.color(cell.fg, colors),
-            },
+            fg: self.cell_foreground(cell, colors),
             bg: self.color(cell.bg, colors),
             bold: cell.flags.contains(Flags::BOLD),
             italic: cell.flags.contains(Flags::ITALIC),
@@ -1905,6 +1902,28 @@ impl AlacrittyEngine {
             inverse: cell.flags.contains(Flags::INVERSE),
             dim: cell.flags.contains(Flags::DIM),
             link: cell.hyperlink().map(|link| link.uri().to_string()),
+        }
+    }
+
+    /// The foreground drawn for a cell. A dim cell blends its foreground toward its background
+    /// (two parts foreground, one part background); when either color is unknown, the foreground is
+    /// returned unchanged and the cell still carries `dim`.
+    fn cell_foreground(
+        &self,
+        cell: &alacritty_terminal::term::cell::Cell,
+        colors: &alacritty_terminal::term::color::Colors,
+    ) -> Option<soksak_sidecar_vt_core::Rgb> {
+        let foreground = match self.special_foreground(cell.flags, cell.fg) {
+            Some(rgb) => Some(soksak_sidecar_vt_core::Rgb([rgb.r, rgb.g, rgb.b])),
+            None => self.color(cell.fg, colors),
+        };
+        if !cell.flags.contains(Flags::DIM) {
+            return foreground;
+        }
+        let background = self.color(cell.bg, colors);
+        match (foreground, background) {
+            (Some(foreground), Some(background)) => Some(dim_toward(foreground, background)),
+            _ => foreground,
         }
     }
 
@@ -2175,3 +2194,14 @@ impl Engine for AlacrittyEngine {
 #[cfg(test)]
 #[path = "../tests/engine/poisoned_queue_test.rs"]
 mod poisoned_queue_test;
+
+/// Blends a foreground toward a background at two parts to one, the dim color of SGR 2.
+fn dim_toward(
+    foreground: soksak_sidecar_vt_core::Rgb,
+    background: soksak_sidecar_vt_core::Rgb,
+) -> soksak_sidecar_vt_core::Rgb {
+    let blend = |fore: u8, back: u8| ((u16::from(fore) * 2 + u16::from(back)) / 3) as u8;
+    let [fr, fg, fb] = foreground.0;
+    let [br, bg, bb] = background.0;
+    soksak_sidecar_vt_core::Rgb([blend(fr, br), blend(fg, bg), blend(fb, bb)])
+}

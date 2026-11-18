@@ -2493,3 +2493,26 @@ fn a_valid_osc_52_is_not_rejected() {
     engine.feed(b"\x1b]52;c;aGVsbG8=\x07\x1b]52;;aGVsbG8=\x07\x1b]52;s;?\x07");
     assert_eq!(rejections(&mut engine), Vec::<String>::new());
 }
+
+#[test]
+fn sgr_two_blends_the_dim_foreground_and_sets_bit_02() {
+    // The persistent services specification: a dim cell's foreground is blended two parts to one toward
+    // its background, and the screen message carries dim as attribute bit 02.
+    let mut engine = AlacrittyEngine::new();
+    engine.resize(20, 4);
+    engine.feed(b"\x1b[2mS\x1b[0mN");
+    let screen = engine.screen();
+    let message = serde_json::to_value(&screen).expect("screen serializes");
+    assert_eq!(
+        message["lines"][0][0]["fg"],
+        serde_json::json!("#949494"),
+        "the dim cell must draw its foreground blended toward the background: {message}"
+    );
+    let cells = soksak_sidecar_vt_core::screen_hash::message_cells(&screen).expect("cells");
+    assert_eq!(
+        cells[0]["attributes"].as_u64().expect("attributes") & 0x02,
+        0x02,
+        "the dim cell must carry attribute bit 02: {}",
+        cells[0]
+    );
+}

@@ -45,6 +45,10 @@ impl FakeEngine {
 }
 
 impl Engine for FakeEngine {
+    fn screen_rows(&self, _from: u64, _count: u32) -> Result<Vec<Vec<Cell>>, String> {
+        Err("screen.read rows are not served by this test engine".to_string())
+    }
+
     fn set_theme(&mut self, _theme: crate::palette::TerminalTheme) {}
 
     fn drain_events(&mut self) -> Vec<EngineEvent> {

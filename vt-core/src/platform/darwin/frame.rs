@@ -1197,17 +1197,17 @@ pub fn metrics_for(
     })
 }
 
-/// The foreground that the draw receives for a cell. A dim cell (SGR 2) draws its foreground, or the
-/// default foreground when the cell has no color, at two thirds of each channel.
+/// The foreground that the draw receives for a cell. The engine already blends a dim cell's foreground
+/// toward its background (persistent services specification), so the draw uses the color as given and
+/// does not dim it a second time.
 fn cell_foreground(cell: &crate::protocol::Cell, default_foreground: [u8; 3]) -> ([u8; 3], bool) {
     if !cell.dim {
         return cell_color(cell.fg);
     }
-    let [red, green, blue] = cell
+    let rgb = cell
         .fg
         .map_or(default_foreground, |crate::protocol::Rgb(rgb)| rgb);
-    let dim = |channel: u8| (u16::from(channel) * 2 / 3) as u8;
-    ([dim(red), dim(green), dim(blue)], true)
+    (rgb, true)
 }
 
 fn cell_color(color: Option<crate::protocol::Rgb>) -> ([u8; 3], bool) {
@@ -1223,7 +1223,7 @@ mod cell_foreground_tests {
     use crate::protocol::{Cell, Rgb};
 
     #[test]
-    fn dim_cell_foreground_is_two_thirds_of_its_color() {
+    fn dim_cell_foreground_is_drawn_as_the_engine_states_it() {
         let cell = Cell {
             fg: Some(Rgb([255, 240, 90])),
             dim: true,
@@ -1231,19 +1231,19 @@ mod cell_foreground_tests {
         };
         assert_eq!(
             cell_foreground(&cell, [200, 200, 200]),
-            ([170, 160, 60], true)
+            ([255, 240, 90], true)
         );
     }
 
     #[test]
-    fn dim_cell_without_color_uses_the_dimmed_default_foreground() {
+    fn dim_cell_without_color_uses_the_default_foreground() {
         let cell = Cell {
             dim: true,
             ..Cell::default()
         };
         assert_eq!(
             cell_foreground(&cell, [255, 255, 255]),
-            ([170, 170, 170], true)
+            ([255, 255, 255], true)
         );
     }
 

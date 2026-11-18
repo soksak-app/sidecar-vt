@@ -12,10 +12,7 @@ use events_test::TestEvents;
 // Frame producer: a serve with tracing enabled records the reason and the drawing time for each
 // frame.
 use soksak_sidecar_vt_core::policy::{Class, Policy};
-use soksak_sidecar_vt_core::protocol::{
-    Cursor, CursorShape, Engine, EngineEvent, Modes, Screen, SessionPort, ShellRequest,
-    make_default_session_port_factory, serve,
-};
+use soksak_sidecar_vt_core::protocol::{Cell, Cursor, CursorShape, Engine, EngineEvent, make_default_session_port_factory, Modes, Screen, serve, SessionPort, ShellRequest};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
@@ -51,6 +48,10 @@ fn contains(bytes: &[u8], needle: &[u8]) -> bool {
 
 #[async_trait::async_trait]
 impl Engine for TraceEngine {
+    fn screen_rows(&self, _from: u64, _count: u32) -> Result<Vec<Vec<Cell>>, String> {
+        Err("screen.read rows are not served by this test engine".to_string())
+    }
+
     fn set_theme(&mut self, _theme: soksak_sidecar_vt_core::TerminalTheme) {}
     fn resize(&mut self, cols: u16, rows: u16) {
         self.cols = cols;
@@ -506,6 +507,10 @@ struct InlineImageEngine {
 
 #[async_trait::async_trait]
 impl Engine for InlineImageEngine {
+    fn screen_rows(&self, _from: u64, _count: u32) -> Result<Vec<Vec<Cell>>, String> {
+        Err("screen.read rows are not served by this test engine".to_string())
+    }
+
     fn set_theme(&mut self, theme: soksak_sidecar_vt_core::TerminalTheme) {
         self.inner.set_theme(theme)
     }
