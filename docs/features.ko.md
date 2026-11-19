@@ -1,5 +1,6 @@
 # 기능
 
+- [o] S187 — P1, S181 후속: Rust 형식 검사(`cargo fmt --all --check`)가 통과한다. 입력: S181 변경이 `vt-core/src/guard.rs`, `vt-core/src/protocol.rs`, `vt-core/tests/guard_test.rs`, `vt-core/tests/serve_contract.rs`를 형식에 맞지 않게 남겨 main에서 검사가 22개 차이를 보고했다. 변경: rustfmt가 네 파일을 정리한다. 코드는 바뀌지 않았다. 검증: 형식 검사가 통과한다.
 - [ ] S183 — P2, core F905-2 연결: `frame_draw_memory_test`를 단독으로 repeat target에서 세 번 돌리고, 출력과 block 수를 기록한다. 입력: `vt-core/tests/frame_draw_memory_test.rs`의 `repeated_strip_draws_keep_no_allocation`이 이 저장소가 아니라 core 체크리스트에 등록되어 있었다. 기대: 세 실행 각각에서 draw 창마다 유지되는 block 수와 마지막 창의 수를 기록한다. 결과: 아직 실행하지 않았다. 리더의 build 알림을 기다린다.
 - [ ] S184 — P2, S180 ~ S182 후속: 영문 체크리스트에 있는 S180, S181, S182 항목이 한국어 체크리스트에 없다. 입력: 그 항목들을 커밋할 때 한국어 문서를 함께 갱신하지 않았다. 기대: 한국어 문서에 세 항목이 영문과 같은 내용으로 있다. 결과: 아직 하지 않았다. 별도 docs 커밋으로 처리한다.
 - [o] S179 — P1, S175 후속: dim 칸의 전경색은 배경 쪽으로 2 대 1 혼합하고, 화면 메시지와 hash에서 dim 속성은 bit 02이다(persistent services spec). draw는 색을 한 번 더 낮추지 않는다. 입력: S175는 전경색을 3분의 2로 그리고 bit 40을 썼다. Red: test `sgr_two_blends_the_dim_foreground_and_sets_bit_02`가 변경 전 전경색 assertion에서 실패했다(`#949494` 기대, `#d0d0d0` 그려짐). Green: 변경 후 통과하고 vt-core 전체가 통과한다.

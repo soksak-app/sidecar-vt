@@ -12,7 +12,10 @@ use soksak_sidecar_vt_core::guard::{
 
 fn assert_refused(command: &str, rule: &str) {
     match judge(command) {
-        Verdict::Refuse { rule: found, reason } => {
+        Verdict::Refuse {
+            rule: found,
+            reason,
+        } => {
             assert_eq!(found, rule, "{command:?} refused with reason {reason:?}");
             assert!(!reason.is_empty(), "{command:?} has a reason");
         }
@@ -21,7 +24,11 @@ fn assert_refused(command: &str, rule: &str) {
 }
 
 fn assert_allowed(command: &str) {
-    assert_eq!(judge(command), Verdict::Allow, "{command:?} is an ordinary command");
+    assert_eq!(
+        judge(command),
+        Verdict::Allow,
+        "{command:?} is an ordinary command"
+    );
 }
 
 #[test]
@@ -40,7 +47,10 @@ fn refuses_recursive_forced_delete_of_home() {
 fn refuses_recursive_forced_delete_of_home_variable() {
     assert_refused("rm -rf $HOME", "rm.recursive-force.root-or-home");
     assert_refused("rm -rf \"${HOME}\"", "rm.recursive-force.root-or-home");
-    assert_refused("rm --recursive --force $HOME/*", "rm.recursive-force.root-or-home");
+    assert_refused(
+        "rm --recursive --force $HOME/*",
+        "rm.recursive-force.root-or-home",
+    );
 }
 
 #[test]
@@ -54,7 +64,10 @@ fn refuses_forced_push_to_main() {
     assert_refused("git push --force origin main", "git.push.force-protected");
     assert_refused("git push -f origin HEAD:master", "git.push.force-protected");
     assert_refused("git push origin +main", "git.push.force-protected");
-    assert_refused("git push --force-with-lease origin refs/heads/main", "git.push.force-protected");
+    assert_refused(
+        "git push --force-with-lease origin refs/heads/main",
+        "git.push.force-protected",
+    );
 }
 
 #[test]
@@ -201,11 +214,17 @@ fn refuses_a_submitted_destructive_line_and_keeps_the_transaction_unwritten() {
     let verdicts = line.observe("s1", &[LineInput::Text("rm -rf ~"), LineInput::Enter]);
     assert!(matches!(
         verdicts.last(),
-        Some(Verdict::Refuse { rule: "rm.recursive-force.root-or-home", .. })
+        Some(Verdict::Refuse {
+            rule: "rm.recursive-force.root-or-home",
+            ..
+        })
     ));
     // The refused transaction is not written, so the shell line stays empty: an Enter on it runs nothing and is allowed,
     // and an ordinary line is allowed.
-    assert_eq!(line.observe("s1", &[LineInput::Enter]), vec![Verdict::Allow]);
+    assert_eq!(
+        line.observe("s1", &[LineInput::Enter]),
+        vec![Verdict::Allow]
+    );
     assert_eq!(
         line.observe("s1", &[LineInput::Text("ls"), LineInput::Enter]),
         vec![Verdict::Allow]
@@ -218,7 +237,10 @@ fn refuses_a_line_recalled_by_history_as_untracked() {
     let verdicts = line.observe("s1", &[LineInput::Other, LineInput::Enter]);
     assert!(matches!(
         verdicts.last(),
-        Some(Verdict::Refuse { rule: "untracked", .. })
+        Some(Verdict::Refuse {
+            rule: "untracked",
+            ..
+        })
     ));
 }
 
@@ -247,8 +269,11 @@ fn every_decision_of_an_input_is_written_to_the_event_log_with_its_rule() {
         .map(|class| (class.to_string(), json!("trace")))
         .collect();
     let policy = directory.path().join(POLICY_FILE);
-    std::fs::write(&policy, json!({"schema": 1, "classes": classes}).to_string())
-        .expect("write the policy file");
+    std::fs::write(
+        &policy,
+        json!({"schema": 1, "classes": classes}).to_string(),
+    )
+    .expect("write the policy file");
     let mut options = Options::service(directory.path().join("logs"), "test".to_string());
     options.policy_file = Some(policy);
     options.batch_interval = Duration::from_millis(20);
@@ -256,21 +281,32 @@ fn every_decision_of_an_input_is_written_to_the_event_log_with_its_rule() {
 
     let mut line = LineGuard::default();
     let cids = vec!["cid-1".to_string()];
-    let allowed = judge_transaction(&log, &mut line, "s1", &cids, &[LineInput::Text("ls"), LineInput::Enter]);
+    let allowed = judge_transaction(
+        &log,
+        &mut line,
+        "s1",
+        &cids,
+        &[LineInput::Text("ls"), LineInput::Enter],
+    );
     assert_eq!(allowed, None);
     let refused = judge_transaction(
         &log,
         &mut line,
         "s1",
         &cids,
-        &[LineInput::Discard, LineInput::Text("rm -rf ~"), LineInput::Enter],
+        &[
+            LineInput::Discard,
+            LineInput::Text("rm -rf ~"),
+            LineInput::Enter,
+        ],
     );
     assert_eq!(
         refused.map(|(rule, _)| rule),
         Some("rm.recursive-force.root-or-home")
     );
 
-    log.flush(Duration::from_secs(10)).expect("flush the writer");
+    log.flush(Duration::from_secs(10))
+        .expect("flush the writer");
     let lines = read_lines(log.path()).expect("read the file of the events");
     let decisions: Vec<(&str, &str)> = lines
         .iter()
@@ -284,6 +320,9 @@ fn every_decision_of_an_input_is_written_to_the_event_log_with_its_rule() {
         .collect();
     assert_eq!(
         decisions,
-        vec![(ALLOW_EVENT, ""), (REFUSE_EVENT, "rm.recursive-force.root-or-home")]
+        vec![
+            (ALLOW_EVENT, ""),
+            (REFUSE_EVENT, "rm.recursive-force.root-or-home")
+        ]
     );
 }

@@ -1457,7 +1457,9 @@ fn line_key(key: &InputKey) -> LineInput<'_> {
         "Enter" | "KeypadEnter" if plain => LineInput::Enter,
         "Backspace" if plain => LineInput::Backspace,
         "Char" if plain => LineInput::Text(key.text.as_str()),
-        "Char" if key.ctrl && !key.alt && (key.text == "c" || key.text == "u") => LineInput::Discard,
+        "Char" if key.ctrl && !key.alt && (key.text == "c" || key.text == "u") => {
+            LineInput::Discard
+        }
         _ if plain && !key.text.is_empty() => LineInput::Text(key.text.as_str()),
         "Keypad0" if plain => LineInput::Text("0"),
         "Keypad1" if plain => LineInput::Text("1"),

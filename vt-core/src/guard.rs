@@ -220,7 +220,9 @@ fn base_name(text: &str) -> &str {
 }
 
 fn is_command(words: &[Word], names: &[&str]) -> bool {
-    words.first().is_some_and(|word| names.contains(&base_name(&word.text)))
+    words
+        .first()
+        .is_some_and(|word| names.contains(&base_name(&word.text)))
 }
 
 /// Splits command text into simple commands, each a list of words. Quotes, escapes, comments, `$` expansions and command
@@ -262,9 +264,7 @@ fn tokenize(text: &str, substitutions: &mut Vec<String>) -> Result<Vec<Vec<Word>
                 let end = (index + 1..chars.len())
                     .find(|&j| chars[j] == '\'')
                     .ok_or("unbalanced single quote")?;
-                word_mut(&mut word)
-                    .text
-                    .extend(&chars[index + 1..end]);
+                word_mut(&mut word).text.extend(&chars[index + 1..end]);
                 index = end + 1;
             }
             '"' => {
@@ -480,7 +480,11 @@ fn rm_undecidable(words: &[Word]) -> bool {
         return false;
     }
     let (recursive, force, operands) = rm_arguments(words);
-    recursive && force && operands.iter().any(|operand| resolved_path(operand).is_none())
+    recursive
+        && force
+        && operands
+            .iter()
+            .any(|operand| resolved_path(operand).is_none())
 }
 
 /// The subcommand of `git` and the index of its word: global options that take a value are skipped with it.
@@ -512,7 +516,8 @@ fn git_push_force_protected(words: &[Word]) -> bool {
     let mut refspecs: Vec<&str> = Vec::new();
     for word in arguments {
         let text = word.text.as_str();
-        let short_force = text.starts_with('-') && !text.starts_with("--") && text[1..].contains('f');
+        let short_force =
+            text.starts_with('-') && !text.starts_with("--") && text[1..].contains('f');
         if text == "--force" || text.starts_with("--force-") || short_force {
             force = true;
         } else if text == "--mirror" {
@@ -536,7 +541,9 @@ fn git_push_force_protected(words: &[Word]) -> bool {
     refspecs[1..].iter().any(|refspec| {
         let spec = refspec.strip_prefix('+').unwrap_or(*refspec);
         let destination = spec.rsplit(':').next().unwrap_or(spec);
-        let branch = destination.strip_prefix("refs/heads/").unwrap_or(destination);
+        let branch = destination
+            .strip_prefix("refs/heads/")
+            .unwrap_or(destination);
         matches!(branch, "main" | "master" | "HEAD" | "")
     })
 }
@@ -592,7 +599,12 @@ fn disk_format(words: &[Word]) -> bool {
         && words.get(1).is_some_and(|word| {
             matches!(
                 word.text.as_str(),
-                "eraseDisk" | "eraseVolume" | "partitionDisk" | "secureErase" | "zeroDisk" | "randomDisk"
+                "eraseDisk"
+                    | "eraseVolume"
+                    | "partitionDisk"
+                    | "secureErase"
+                    | "zeroDisk"
+                    | "randomDisk"
             )
         })
 }
@@ -603,8 +615,11 @@ const BLOCK_DEVICE_PREFIXES: &[&str] = &[
 ];
 
 fn is_block_device(path: &str) -> bool {
-    path.strip_prefix("/dev/")
-        .is_some_and(|name| BLOCK_DEVICE_PREFIXES.iter().any(|prefix| name.starts_with(prefix)))
+    path.strip_prefix("/dev/").is_some_and(|name| {
+        BLOCK_DEVICE_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+    })
 }
 
 /// Whether a redirection of the simple command (`>`, `>>`) writes to a block device.
@@ -618,9 +633,7 @@ fn redirects_to_block_device(words: &[Word]) -> bool {
             }
             return is_block_device(target);
         }
-        index > 0
-            && words[index - 1].text.ends_with('>')
-            && is_block_device(&word.text)
+        index > 0 && words[index - 1].text.ends_with('>') && is_block_device(&word.text)
     })
 }
 

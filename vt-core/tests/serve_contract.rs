@@ -8221,7 +8221,10 @@ async fn a_submitted_destructive_command_line_is_refused_and_writes_nothing() {
 "#;
     let (output, _, writes) = serve_scroll(None, refused).await;
     assert!(output.contains("\"error\":\"guardRefused\""), "{output}");
-    assert!(output.contains("\"rule\":\"rm.recursive-force.root-or-home\""), "{output}");
+    assert!(
+        output.contains("\"rule\":\"rm.recursive-force.root-or-home\""),
+        "{output}"
+    );
     assert_eq!(written(&writes), Vec::<String>::new());
 }
 
