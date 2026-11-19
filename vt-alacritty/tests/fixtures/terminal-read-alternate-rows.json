@@ -298,6 +298,57 @@
           "dropped": 0
         }
       }
+    },
+    {
+      "name": "a synchronized update that enters the alternate screen and scrolls removes the earlier kept rows and keeps its own",
+      "rows": 5,
+      "cols": 10,
+      "historyLimit": 1000,
+      "output": "\u001b[?1049h\u001b[H1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\u001b[?1049l",
+      "reads": [
+        {
+          "screen": "alternate",
+          "from": 0,
+          "count": 7,
+          "text": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7"
+          ]
+        }
+      ],
+      "alternate": {
+        "active": false,
+        "history": 2,
+        "dropped": 0
+      },
+      "then": {
+        "output": "\u001b[?2026h\u001b[?1049h\u001b[Ha\r\nb\r\nc\r\nd\r\ne\r\nf\u001b[?2026l",
+        "reads": [
+          {
+            "screen": "alternate",
+            "from": 0,
+            "count": 6,
+            "text": [
+              "a",
+              "b",
+              "c",
+              "d",
+              "e",
+              "f"
+            ]
+          }
+        ],
+        "alternate": {
+          "active": true,
+          "history": 1,
+          "dropped": 0
+        }
+      }
     }
   ]
 }
