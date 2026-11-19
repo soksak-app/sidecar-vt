@@ -1,5 +1,6 @@
 # Changelog
 
+- S198: A resize of the primary screen in the prompt state keeps the prompt rows of the previous width on the screen, cut at the new width and without reflow, until the shell redraws; the screen presented between the resize and the redraw no longer shows the prompt erased.
 - S193: `scrollback.history` is the history of the active screen: the alternate screen keeps no history and reports `{offset: 0, history: 0}`, and the primary history returns unchanged when mode 1049 is reset; the engine no longer gives the alternate grid the history limit.
 - S192: Every answer of the engine keeps the order of the queries in the output, also inside a synchronized update: the engine holds the output of the update itself before its scan and processes it at the end of the update as any output, so the answers of the library and of the engine, the erases of the engine and the events of the update follow the output before them; the end of an update counts every row.
 - S190: The engine implements the color scheme notification of DEC private mode 2031: `CSI ? 996 n` answers `CSI ? 997 ; 1 n` (dark) or `CSI ? 997 ; 2 n` (light), DECRQM answers the state of mode 2031, and while a program has set the mode each theme change that the page sends writes the report after the new theme is in force; `CSI ? 2031 l` and a full reset turn it off.
