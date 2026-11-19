@@ -1,5 +1,6 @@
 # Changelog
 
+- S190: The engine implements the color scheme notification of DEC private mode 2031: `CSI ? 996 n` answers `CSI ? 997 ; 1 n` (dark) or `CSI ? 997 ; 2 n` (light), DECRQM answers the state of mode 2031, and while a program has set the mode each theme change that the page sends writes the report after the new theme is in force; `CSI ? 2031 l` and a full reset turn it off.
 - S186: The candidate is 0.0.29.
 - S186: v0.0.29 is published with the asset `soksak-sidecar-vt-alacritty-0.0.29-darwin-arm64.tgz`; it holds the view background of S185.
 - S188: Each `unwrap_or` of the guard states its default and each guard emit names its event, so the event-source check passes.

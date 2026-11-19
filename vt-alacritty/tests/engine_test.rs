@@ -2516,3 +2516,145 @@ fn sgr_two_blends_the_dim_foreground_and_sets_bit_02() {
         cells[0]
     );
 }
+
+/// The replies that the engine writes to the program, in order, and the other events.
+fn replies_and_others(engine: &mut AlacrittyEngine) -> (Vec<Vec<u8>>, Vec<EngineEvent>) {
+    let mut replies = Vec::new();
+    let mut others = Vec::new();
+    for event in engine.drain_events() {
+        match event {
+            EngineEvent::PtyWrite(bytes) => replies.push(bytes),
+            other => others.push(other),
+        }
+    }
+    (replies, others)
+}
+
+// DSR 996 answers the scheme of the theme in force whether or not mode 2031 is set, and the answer
+// keeps its place between the answers to the queries around it.
+#[test]
+fn color_scheme_query_answers_the_mode_of_the_theme_in_order() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b[6n\x1b[?996n\x1b[5n");
+    let (replies, others) = replies_and_others(&mut engine);
+    assert!(others.is_empty(), "{others:?}");
+    assert_eq!(
+        replies,
+        vec![
+            b"\x1b[1;1R".to_vec(),
+            b"\x1b[?997;1n".to_vec(),
+            b"\x1b[0n".to_vec()
+        ]
+    );
+    engine.set_theme(TerminalTheme::light());
+    engine.feed(b"\x1b[?996n");
+    let (replies, others) = replies_and_others(&mut engine);
+    assert!(others.is_empty(), "{others:?}");
+    assert_eq!(replies, vec![b"\x1b[?997;2n".to_vec()]);
+}
+
+// While mode 2031 is set, a theme change writes the report of the new scheme after the theme is in
+// force, so the OSC 11 query that the program sends in answer receives the new background. A theme
+// request with the theme in force writes nothing.
+#[test]
+fn color_scheme_mode_reports_each_theme_change_before_the_next_color_query() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b[?2031h");
+    let (replies, others) = replies_and_others(&mut engine);
+    assert!(
+        replies.is_empty() && others.is_empty(),
+        "{replies:?} {others:?}"
+    );
+
+    engine.set_theme(TerminalTheme::light());
+    let (replies, others) = replies_and_others(&mut engine);
+    assert!(others.is_empty(), "{others:?}");
+    assert_eq!(replies, vec![b"\x1b[?997;2n".to_vec()]);
+    engine.feed(b"\x1b]11;?\x1b\\");
+    let (replies, _) = replies_and_others(&mut engine);
+    assert_eq!(replies, vec![b"\x1b]11;rgb:f7f7/f7f7/f5f5\x1b\\".to_vec()]);
+
+    engine.set_theme(TerminalTheme::light());
+    let (replies, others) = replies_and_others(&mut engine);
+    assert!(
+        replies.is_empty() && others.is_empty(),
+        "{replies:?} {others:?}"
+    );
+
+    let mut dark = TerminalTheme::dark();
+    engine.set_theme(dark);
+    let (replies, _) = replies_and_others(&mut engine);
+    assert_eq!(replies, vec![b"\x1b[?997;1n".to_vec()]);
+    dark.background = [0x10, 0x14, 0x18];
+    engine.set_theme(dark);
+    let (replies, _) = replies_and_others(&mut engine);
+    assert_eq!(
+        replies,
+        vec![b"\x1b[?997;1n".to_vec()],
+        "a new color of the same scheme is a theme change"
+    );
+}
+
+// The mode is off until a program sets it, and CSI ? 2031 l and a full reset turn it off; a list
+// of modes sets it too.
+#[test]
+fn color_scheme_mode_is_set_only_by_a_program_and_reset_by_l_and_full_reset() {
+    let mut engine = AlacrittyEngine::new();
+    engine.set_theme(TerminalTheme::light());
+    let (replies, _) = replies_and_others(&mut engine);
+    assert!(
+        replies.is_empty(),
+        "no report without the mode: {replies:?}"
+    );
+
+    engine.feed(b"\x1b[?2031h\x1b[?2031l");
+    engine.set_theme(TerminalTheme::dark());
+    let (replies, _) = replies_and_others(&mut engine);
+    assert!(
+        replies.is_empty(),
+        "no report after CSI ? 2031 l: {replies:?}"
+    );
+
+    engine.feed(b"\x1b[?2031h\x1bc");
+    engine.set_theme(TerminalTheme::light());
+    let (replies, _) = replies_and_others(&mut engine);
+    assert!(
+        replies.is_empty(),
+        "no report after a full reset: {replies:?}"
+    );
+
+    engine.feed(b"\x1b[?1004;2031h");
+    engine.set_theme(TerminalTheme::dark());
+    let (replies, others) = replies_and_others(&mut engine);
+    assert!(others.is_empty(), "{others:?}");
+    assert_eq!(replies, vec![b"\x1b[?997;1n".to_vec()]);
+    assert!(
+        engine.modes().focus_in_out,
+        "the other mode of the list is set"
+    );
+}
+
+// DECRQM answers the state of mode 2031: 1 while it is set and 2 while it is reset, in the order of
+// the output.
+#[test]
+fn decrqm_answers_the_state_of_the_color_scheme_mode() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b[?2031$p\x1b[?2031h\x1b[?2031$p\x1b[?2004$p\x1bc\x1b[?2031$p");
+    let (replies, others) = replies_and_others(&mut engine);
+    // A full reset reports the reset cursor blinking; no sequence is rejected.
+    assert!(
+        !others
+            .iter()
+            .any(|event| matches!(event, EngineEvent::Error(_))),
+        "{others:?}"
+    );
+    assert_eq!(
+        replies,
+        vec![
+            b"\x1b[?2031;2$y".to_vec(),
+            b"\x1b[?2031;1$y".to_vec(),
+            b"\x1b[?2004;2$y".to_vec(),
+            b"\x1b[?2031;2$y".to_vec()
+        ]
+    );
+}

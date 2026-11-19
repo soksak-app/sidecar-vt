@@ -11,7 +11,7 @@ use base64::engine::general_purpose::STANDARD;
 use soksak_sidecar_vt_core::directory_uri::local_path;
 use soksak_sidecar_vt_core::{
     Cell, ClipboardSelection, Cursor, CursorShape as ProtocolCursorShape, Engine, EngineEvent,
-    InlineAnchor, Modes, Screen, ShellMarker, TerminalTheme, default_terminal_color,
+    InlineAnchor, Modes, Screen, ShellMarker, TerminalTheme, ThemeMode, default_terminal_color,
     inline_image::MAX_ENCODED_BYTES, inline_image::parse as parse_inline_image,
 };
 use std::collections::{HashMap, VecDeque};
@@ -667,6 +667,11 @@ pub const CSI_SELECTOR_INVENTORY: &[CsiSelectorEvidence] = &[
         test: "csi_private_modes_export_keyboard_paste_and_mouse_state",
     },
     CsiSelectorEvidence {
+        selector: "?2031h/l,?996n,?2031$p",
+        outcome: CsiOutcome::Implemented,
+        test: "color_scheme_mode_reports_each_theme_change_before_the_next_color_query",
+    },
+    CsiSelectorEvidence {
         selector: "ESC =/>",
         outcome: CsiOutcome::Implemented,
         test: "csi_application_keypad_mode_uses_the_private_equals_prefix",
@@ -797,6 +802,10 @@ pub struct AlacrittyEngine {
     /// enabled flags set by OSC 6 and 106.
     special_colors: [Option<Rgb>; 5],
     special_enabled: [bool; 5],
+    /// DEC private mode 2031: while set, a theme change writes the color scheme report to the
+    /// program (docs/spec/terminal-protocols.md#vendor-contracts). The library ignores the mode, does
+    /// not dispatch `CSI ? 996 n`, and answers DECRQM 2031 as not recognized, so the engine keeps it.
+    color_scheme_reports: bool,
 }
 
 /// The rows above the history limit that the engine counts at one time. The library frees the rows
@@ -844,6 +853,33 @@ impl AlacrittyEngine {
             highlight_foreground: None,
             special_colors: [None; 5],
             special_enabled: [false; 5],
+            color_scheme_reports: false,
+        }
+    }
+
+    /// The color scheme report of DSR 996 for the mode of the theme in force: 1 is dark, 2 is light.
+    fn color_scheme_report(&self) -> Vec<u8> {
+        match self.theme.mode {
+            ThemeMode::Dark => b"\x1b[?997;1n".to_vec(),
+            ThemeMode::Light => b"\x1b[?997;2n".to_vec(),
+        }
+    }
+
+    /// The answer of the engine to DSR 996 or to DECRQM of mode 2031, which the library does not
+    /// give; None for another sequence.
+    fn color_scheme_answer(
+        &self,
+        intermediates: &[u8],
+        action: char,
+        value: Option<u16>,
+    ) -> Option<Vec<u8>> {
+        match (action, intermediates, value) {
+            ('n', b"?", Some(996)) => Some(self.color_scheme_report()),
+            ('p', b"?$", Some(2031)) => {
+                let state = if self.color_scheme_reports { 1 } else { 2 };
+                Some(format!("\x1b[?2031;{state}$y").into_bytes())
+            }
+            _ => None,
         }
     }
 
@@ -1379,6 +1415,27 @@ impl AlacrittyEngine {
                     [param] if !ignored => param.first().copied(),
                     _ => None,
                 };
+                // The library ignores mode 2031 and sets the other modes of the list.
+                if !ignored
+                    && matches!(action, 'h' | 'l')
+                    && intermediates.as_slice() == b"?"
+                    && params.iter().any(|param| param.first() == Some(&2031))
+                {
+                    self.color_scheme_reports = action == 'h';
+                }
+                if let Some(answer) = self.color_scheme_answer(&intermediates, action, value) {
+                    // The answer follows the answers to the output before the sequence.
+                    let start = input[from..at]
+                        .iter()
+                        .rposition(|byte| *byte == 0x1b)
+                        .expect(
+                            "a CSI starts at an escape byte that the terminal has not received",
+                        );
+                    self.advance(&input[from..from + start]);
+                    self.events
+                        .push(QueuedEvent::Neutral(EngineEvent::PtyWrite(answer)));
+                    return at;
+                }
                 let erase = match (action, intermediates.as_slice(), value) {
                     ('J', b"", Some(2)) => Some(Erase::All),
                     ('J', b"", Some(1)) => Some(Erase::Above),
@@ -1441,6 +1498,10 @@ impl AlacrittyEngine {
                 intermediates,
                 byte,
             } => {
+                // A full reset (RIS) resets mode 2031; the library resets its own state.
+                if byte == b'c' && intermediates.is_empty() {
+                    self.color_scheme_reports = false;
+                }
                 if !esc_executed(&intermediates, byte) {
                     let intermediates = String::from_utf8_lossy(&intermediates);
                     self.events
@@ -1955,7 +2016,15 @@ impl AlacrittyEngine {
 
 impl Engine for AlacrittyEngine {
     fn set_theme(&mut self, theme: TerminalTheme) {
+        let changed = theme != self.theme;
         self.theme = theme;
+        // The report follows the new theme, so a color query that the program sends in answer
+        // receives the new colors.
+        if changed && self.color_scheme_reports {
+            let report = self.color_scheme_report();
+            self.events
+                .push(QueuedEvent::Neutral(EngineEvent::PtyWrite(report)));
+        }
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {
