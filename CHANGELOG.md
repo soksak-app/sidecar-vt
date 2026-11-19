@@ -1,5 +1,7 @@
 # Changelog
 
+- S202: A surface task of the persistent service that ends by a panic is reported as the error event `surface task ended: <message>` of its surface and as an error record, through the monitor that the direct service uses.
+- S203: `sok-check events` passes again: the folder claims of messaging recover a poisoned lock.
 - S200-1: Each file of the event writer holds its `log.open` line from the moment it exists: the writer writes the line to a new file and links it to the path, so a reader no longer finds an empty debug file, rotated file or main file before the next flush.
 - S200: `make repeat` runs the tests through the cargo-nextest runner of `make test`, each test in its own process, so the tests that count the allocations of their process measure only their own; it ran `cargo test`, where the memory tests of `engine_flood_test.rs` failed.
 - S198: A resize of the primary screen in the prompt state keeps the prompt rows of the previous width on the screen, cut at the new width and without reflow, until the shell redraws; the screen presented between the resize and the redraw no longer shows the prompt erased.

@@ -9121,14 +9121,13 @@ async fn a_persistent_surface_task_that_panics_is_reported_as_an_error_event() {
     let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
     let mut to_serve = to_serve;
     let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
-    let port: Arc<dyn SessionPort> = Arc::new(
-        soksak_sidecar_vt_core::LocalSessionPort::new_with_owner(
+    let port: Arc<dyn SessionPort> =
+        Arc::new(soksak_sidecar_vt_core::LocalSessionPort::new_with_owner(
             Arc::new(soksak_sidecar_vt_core::pty::PtyService::new(
                 events_test::TestEvents::new().handle(),
             )),
             String::new(),
-        ),
-    );
+        ));
     let factory = Arc::new(move || port.clone());
     let owner = PersistentOwner {
         close: Arc::new(|| Ok(())),

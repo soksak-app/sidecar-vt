@@ -3782,6 +3782,39 @@ fn local_surface_key(
 
 /// Asynchronous work per surface. It owns the engine and the daemon connection, and processes
 /// commands.
+/// Waits for the end of a surface task, and reports an end by a panic as the error event of its surface and as an
+/// error record, and a cancellation as an error record (core docs/spec/sidecars.md#failure).
+async fn report_surface_task_end(
+    surface_id: String,
+    task: tokio::task::JoinHandle<()>,
+    output: OutputSink,
+    log: Events,
+) {
+    match task.await {
+        Ok(()) => {}
+        Err(join_err) if join_err.is_panic() => {
+            let panic = join_err.into_panic();
+            let message = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|text| text.to_string()))
+                // default: a panic payload that is neither a String nor a &str carries no text.
+                .unwrap_or_else(|| "unknown".to_string());
+            let reason = format!("surface task ended: {message}");
+            log.record_error(&format!("surface {surface_id}"), &reason);
+            let response =
+                json!({"surface": surface_id, "body": {"event": "error", "reason": reason}});
+            if output.send(response.to_string()).await.is_err() {
+                log.record_error(
+                    "surface task",
+                    "the panic report was not delivered: the output has closed",
+                );
+            }
+        }
+        Err(error) => log.record_error("surface task", format!("cancelled: {error}")),
+    }
+}
+
 /// A `messages.wait` that no message has answered yet, with the sink of its request.
 struct MessageWait {
     after: u64,
@@ -5785,7 +5818,7 @@ where
                                 let sid = surface_id.clone();
                                 let task_trace = log.clone();
                                 let surface_claims = claims.clone();
-                                let actor = tokio::spawn(async move {
+                                let task = tokio::spawn(async move {
                                     surface_task(
                                         sid,
                                         task_trace,
@@ -5797,6 +5830,13 @@ where
                                     )
                                     .await;
                                 });
+                                // The registry keeps the task that watches the surface task for an end by a panic.
+                                let actor = tokio::spawn(report_surface_task_end(
+                                    surface_id.clone(),
+                                    task,
+                                    output_tx.clone(),
+                                    log.clone(),
+                                ));
                                 match registry
                                     .insert(
                                         registry_key.clone(),
@@ -5846,38 +5886,13 @@ where
                             .await;
                         });
 
-                        // Spawns a monitor task that watches for panics
-                        let out_tx_monitor = output_tx.clone();
-                        let log_monitor = log.clone();
-                        tasks.spawn(async move {
-                            match surface_handle.await {
-                                Ok(_) => {},
-                                Err(join_err) if join_err.is_panic() => {
-                                    // The task panicked, so an error event is sent
-                                    let panic_msg = if let Ok(panic_obj) = join_err.try_into_panic() {
-                                        if let Some(s) = panic_obj.downcast_ref::<String>() {
-                                            s.clone()
-                                        } else if let Some(&s) = panic_obj.downcast_ref::<&str>() {
-                                            s.to_string()
-                                        } else {
-                                            "unknown".to_string()
-                                        }
-                                    } else {
-                                        "unknown".to_string()
-                                    };
-                                    let response = json!({
-                                        "surface": sid_for_monitor,
-                                        "body": {"event": "error", "reason": format!("surface task ended: {}", panic_msg)}
-                                    });
-                                    if let Err(error) = out_tx_monitor.send(response.to_string()).await {
-                                        log_monitor.record_error("surface task", format!("the panic report was not delivered: {error:?}"));
-                                    }
-                                }
-                                Err(error) => {
-                                    log_monitor.record_error("surface task", format!("cancelled: {error}"));
-                                }
-                            }
-                        });
+                        // Watches the task for an end by a panic.
+                        tasks.spawn(report_surface_task_end(
+                            sid_for_monitor,
+                            surface_handle,
+                            output_tx.clone(),
+                            log.clone(),
+                        ));
 
                         surface_txs.insert(registry_key.clone(), cmd_tx.clone());
                         cmd_tx
