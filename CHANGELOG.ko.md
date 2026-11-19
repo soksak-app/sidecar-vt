@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S197-1: surface는 변경을 frame 요청 `{"image":{"want":{"name","generation"}}}`의 답인 tick에 그린다. 요청은 기다리는 요청이 없을 때 한 번 보내며, 변경이 없는 surface는 요청을 보내지 않는다. 입력 뒤 200 ms 안의 변경은 바로 그린다. 고정 33 ms frame clock은 제거되었다. cursor 깜빡임은 고정 50 ms 간격의 단계 대신, 그 변경의 timer로 cursor 설정의 깜빡임 간격의 다음 배수에 그린다([frame requests](docs/spec/vt-core.ko.md#frame-requests)). 검증: `output_without_input_is_drawn_at_the_tick_of_its_frame_request`, `the_cursor_blinks_at_the_interval_of_its_setting`, `the_next_blink_change_is_the_next_step_of_the_interval_of_the_setting`은 변경 전에 실패하고 변경 뒤에 통과한다.
 - S202: panic으로 끝난 persistent service의 surface task는 direct service가 쓰는 감시 함수를 통해 그 surface의 error event `surface task ended: <message>`와 error record로 보고된다.
 - S203: `sok-check events`가 다시 통과한다. messaging의 folder claim이 poison된 lock을 복구한다.
 - S200-1: event writer의 각 file은 존재하는 순간부터 `log.open` 줄을 담는다. writer가 그 줄을 새 file에 쓰고 path에 link하므로, reader는 다음 flush 전에 빈 debug file, 회전된 file, 주 file을 더 이상 찾지 않는다.

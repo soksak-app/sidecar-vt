@@ -35,8 +35,9 @@ pub struct ImageState {
     /// The time the pending transfer was sent. This is the instrument of the consumed wait time
     /// (V5-104).
     pub sent_at: Option<std::time::Instant>,
-    /// The time of the last frame, which the frame clock counts its interval from.
-    pub presented_at: Option<tokio::time::Instant>,
+    /// Whether a frame request waits for the tick of the host (core
+    /// docs/spec/native-surfaces.md#copy-path-frames).
+    pub frame_wanted: bool,
     /// The cursor and scrollback of the last `view` event, so that a frame that keeps both sends none.
     pub view_sent: Option<serde_json::Value>,
     /// The store of the connection that carries a transfer image awaiting a reply. If the surface
@@ -101,7 +102,7 @@ impl ImageState {
             inline_images: Vec::new(),
             presentation_events: Vec::new(),
             sent_at: None,
-            presented_at: None,
+            frame_wanted: false,
             view_sent: None,
             carrier: None,
             session: None,

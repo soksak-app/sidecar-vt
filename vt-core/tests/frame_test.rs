@@ -1,7 +1,7 @@
 use soksak_sidecar_vt_core::TerminalTheme;
 use soksak_sidecar_vt_core::platform::darwin::frame::{
     CursorBlinkPolicy, CursorRender, Frame, UnfocusedCursor, cursor_blink_visible,
-    effective_cursor_shape, metrics,
+    effective_cursor_shape, metrics, next_cursor_blink_change,
 };
 use soksak_sidecar_vt_core::protocol::{
     Cell, Cursor, CursorShape, InlineImagePlacement, JsonRange, Preedit, Screen,
@@ -1286,6 +1286,34 @@ fn unfocused_cursor_policy_selects_the_requested_shape_without_changing_program_
         effective_cursor_shape(CursorShape::Beam, true, UnfocusedCursor::Hollow),
         CursorShape::Beam
     );
+}
+
+// The next change of the blink visibility is the next multiple of the interval, or the idle timeout
+// when the cursor is hidden then, and none when the cursor does not blink: unfocused, Never, Off
+// without a blinking program, or after the idle timeout.
+#[test]
+fn the_next_blink_change_is_the_next_step_of_the_interval_of_the_setting() {
+    let next = |policy, program, focused, elapsed, idle| {
+        next_cursor_blink_change(policy, program, focused, elapsed, 530, idle)
+    };
+    assert_eq!(next(CursorBlinkPolicy::On, false, true, 0, 0), Some(530));
+    assert_eq!(next(CursorBlinkPolicy::On, false, true, 530, 0), Some(1060));
+    assert_eq!(
+        next(CursorBlinkPolicy::Always, false, true, 1059, 0),
+        Some(1060)
+    );
+    assert_eq!(next(CursorBlinkPolicy::Off, true, true, 100, 0), Some(530));
+    assert_eq!(next(CursorBlinkPolicy::Off, false, true, 100, 0), None);
+    assert_eq!(next(CursorBlinkPolicy::Never, true, true, 100, 0), None);
+    assert_eq!(next(CursorBlinkPolicy::On, false, false, 100, 0), None);
+    // Hidden from 530 to 1060, so the idle timeout at 1000 shows the cursor.
+    assert_eq!(
+        next(CursorBlinkPolicy::On, false, true, 600, 1000),
+        Some(1000)
+    );
+    // Shown from 1060, so the idle timeout at 1500 changes nothing.
+    assert_eq!(next(CursorBlinkPolicy::On, false, true, 1100, 1500), None);
+    assert_eq!(next(CursorBlinkPolicy::On, false, true, 1500, 1500), None);
 }
 
 #[test]

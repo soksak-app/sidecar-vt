@@ -105,6 +105,13 @@ test("packaged diagnostics binary reports matching render metadata and engine tr
   const deliver = (message) => {
     if (message.surface === surface && message.body?.event === "screen") applyScreen(held, message.body);
     const image = message.body?.image;
+    if (message.surface === surface && image?.want) {
+      // The host answers a frame request with one tick at the next display frame of the window
+      // (core docs/spec/native-surfaces.md#copy-path-frames).
+      socket.write(`${JSON.stringify({ surface, root: project, body: { image: { tick: {
+        name: image.want.name, generation: image.want.generation, sequence: 1, refreshRate: 120,
+      } } } })}\n`);
+    }
     if (message.surface === surface && image?.token) {
       images.push({ generation: image.generation, raster: image.raster, sequence: image.sequence });
       // The sidecar sends no screen with a frame; a read before the answer names the frame that shows the screen.
