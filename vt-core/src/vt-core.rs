@@ -7,6 +7,7 @@ pub mod events;
 pub mod guard;
 pub mod inline_image;
 pub mod locale;
+pub mod messaging;
 pub mod palette;
 pub mod platform;
 pub mod policy;

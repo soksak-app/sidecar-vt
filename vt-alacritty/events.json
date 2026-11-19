@@ -159,6 +159,54 @@
       },
       "description": "Reading the PTY of a session failed."
     },
+    "sidecar.vt.messages.registered": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "registration": {"type": "string"},
+          "folder": {"type": "string"}
+        },
+        "required": ["registration", "folder"]
+      },
+      "description": "A surface registered its message folder (core docs/spec/messaging.md). registration is the identifier of the registration, a version 4 UUID; folder is the absolute path of the folder."
+    },
+    "sidecar.vt.file.changed": {
+      "layer": "sidecar",
+      "class": "io",
+      "level": "debug",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "registration": {"type": "string"},
+          "path": {"type": "string"},
+          "from": {"type": "string"},
+          "kind": {"type": "string", "enum": ["created", "modified", "removed"]},
+          "seq": {"type": "integer", "minimum": 1}
+        },
+        "required": ["registration", "path", "from", "kind", "seq"]
+      },
+      "description": "A message file of a registered folder changed. path is the name of the file in the folder, from is the sender of its name, kind is created, modified or removed, and seq counts the file events of the registration from 1."
+    },
+    "sidecar.vt.registration.closed": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "registration": {"type": "string"},
+          "reason": {"type": "string", "enum": ["folder-removed"]}
+        },
+        "required": ["registration", "reason"]
+      },
+      "description": "The registered message folder was removed or renamed, and its registration and watch ended."
+    },
     "sidecar.vt.pty_write": {
       "layer": "sidecar",
       "class": "io",

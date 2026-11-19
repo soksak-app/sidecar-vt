@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S196: sidecar가 `messages.register`로 surface의 message folder를 등록하고 crate `notify`로 감시하며, message `<from>.<token>.txt`의 각 변화에 sender `from`과 함께 `file.changed`를, folder가 제거되거나 이름이 바뀌면 `registration.closed`를 보내고, cursor epoch `registration`과 함께 `messages.read`와 `messages.wait`에 답한다(core docs/spec/messaging.md). sender 없는 `.txt` 이름은 `invalid-sender`로, 다른 registration의 cursor는 `epoch-changed`로 거부되며, 임시 이름은 event를 주지 않는다. serve test와 core의 공유 이름 case가 변경하지 않은 sidecar에서 실패했고 이제 통과한다.
 - S195: sidecar가 core `docs/spec/terminal-state.md`의 터미널 상태를 보고한다: 어떤 engine에도 의존하지 않는 `vt-core`의 tracker가 OSC 133 mark를 `D`의 exit code와 함께 `idle`, `running`, `exited`로 옮기고, 각 변화는 surface event `shell.state`와 log event `sidecar.vt.shell.state`이며, `shell.state.read`는 `shell.state.current`로 답하고, engine은 exit code가 잘못된 `D`를 거부한다. core의 공유 case가 실제 engine과 실제 session으로 통과하며, 변경하지 않은 sidecar에서 test는 변화 event를 하나도 받지 못했다.
 - S193: `scrollback.history`는 활성 화면의 history다. 대체 화면은 history를 보존하지 않고 `{offset: 0, history: 0}`을 보고하며, 주 화면의 history는 모드 1049 해제 때 그대로 돌아온다. engine은 더 이상 대체 grid에 history 한도를 주지 않는다.
 - S192: synchronized update 안에서도 engine의 모든 답이 출력의 질의 순서를 지킨다. engine이 update의 출력을 자기 scan 전에 직접 잡고 update가 끝나면 다른 출력과 같이 처리하므로, library와 engine의 답, engine의 erase, update의 이벤트가 그 앞의 출력 뒤에 온다. update의 끝은 모든 행을 센다.
