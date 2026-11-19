@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S190: engine이 DEC private mode 2031의 color scheme notification을 구현한다. `CSI ? 996 n`은 `CSI ? 997 ; 1 n`(dark)이나 `CSI ? 997 ; 2 n`(light)으로 답하고, DECRQM은 mode 2031의 상태로 답하며, program이 mode를 켠 동안 page가 보내는 theme 변경마다 새 theme을 적용한 뒤 report를 쓴다. `CSI ? 2031 l`과 full reset이 mode를 끈다.
 - S186: candidate는 0.0.29다.
 - S186: v0.0.29가 asset `soksak-sidecar-vt-alacritty-0.0.29-darwin-arm64.tgz`와 함께 publish되었다. S185의 view background를 담는다.
 - S188: guard의 각 `unwrap_or`가 기본값을 설명하고 각 guard emit가 event 이름을 밝혀 event-source 검사가 통과한다.

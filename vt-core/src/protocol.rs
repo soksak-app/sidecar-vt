@@ -4674,6 +4674,10 @@ async fn surface_task(
                         let theme = *theme;
                         current_theme = theme;
                         inputs.set_theme(engine.as_mut(), session_id.as_deref(), theme);
+                        // The engine answers a theme change with the color scheme report of a
+                        // program that set mode 2031, which reaches the program after the theme
+                        // input (docs/spec/terminal-protocols.md#vendor-contracts).
+                        if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart).await { return; }
                         if let Some(state) = image_state.as_mut() {
                             state.theme = theme;
                             if state.pending_draw {
