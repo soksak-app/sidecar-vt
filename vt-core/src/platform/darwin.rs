@@ -3,5 +3,6 @@ pub mod file_watch;
 pub mod frame;
 pub mod locale;
 pub mod process_group;
+pub mod process_info;
 pub mod service;
 pub mod stall_sample;

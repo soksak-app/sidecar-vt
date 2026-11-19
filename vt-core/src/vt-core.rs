@@ -28,6 +28,6 @@ pub use palette::{
 };
 pub use protocol::{
     AlternateRows, Cell, ClipboardSelection, Cursor, CursorShape, DaemonEvent, Engine, EngineEvent,
-    InlineAnchor, LocalSessionPort, Modes, Preedit, Rgb, RowScreen, Screen, Scrollback,
+    Foreground, InlineAnchor, LocalSessionPort, Modes, Preedit, Rgb, RowScreen, Screen, Scrollback,
     SessionPort, ShellMarker, ShellRequest, make_default_session_port_factory, serve,
 };

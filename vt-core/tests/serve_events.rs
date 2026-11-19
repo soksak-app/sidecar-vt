@@ -157,6 +157,7 @@ impl Engine for TraceEngine {
                 preedit: None,
             },
             scrollback: Default::default(),
+            alternate: Default::default(),
             background: "#1e1e1e".to_string(),
             lines: Vec::new(),
         }
@@ -170,6 +171,14 @@ struct TracePort;
 
 #[async_trait::async_trait]
 impl SessionPort for TracePort {
+    /// This port has no terminal, so no process holds its foreground.
+    fn foreground(
+        &self,
+        _session_id: &str,
+    ) -> Result<Option<soksak_sidecar_vt_core::Foreground>, String> {
+        Ok(None)
+    }
+
     async fn open(
         &self,
         _request: &ShellRequest,
@@ -596,6 +605,14 @@ struct OutputPort(
 
 #[async_trait::async_trait]
 impl SessionPort for OutputPort {
+    /// This port has no terminal, so no process holds its foreground.
+    fn foreground(
+        &self,
+        _session_id: &str,
+    ) -> Result<Option<soksak_sidecar_vt_core::Foreground>, String> {
+        Ok(None)
+    }
+
     async fn open(
         &self,
         _request: &ShellRequest,
@@ -1071,6 +1088,14 @@ struct FailingOpenPort;
 
 #[async_trait::async_trait]
 impl SessionPort for FailingOpenPort {
+    /// This port has no terminal, so no process holds its foreground.
+    fn foreground(
+        &self,
+        _session_id: &str,
+    ) -> Result<Option<soksak_sidecar_vt_core::Foreground>, String> {
+        Ok(None)
+    }
+
     async fn open(
         &self,
         _request: &ShellRequest,
@@ -1620,6 +1645,14 @@ struct HeldOpenPort(Arc<tokio::sync::Semaphore>);
 
 #[async_trait::async_trait]
 impl SessionPort for HeldOpenPort {
+    /// This port has no terminal, so no process holds its foreground.
+    fn foreground(
+        &self,
+        _session_id: &str,
+    ) -> Result<Option<soksak_sidecar_vt_core::Foreground>, String> {
+        Ok(None)
+    }
+
     async fn open(
         &self,
         _request: &ShellRequest,

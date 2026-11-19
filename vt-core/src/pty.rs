@@ -512,6 +512,22 @@ impl PtyService {
         Ok(PtyMeasurement { pending, written })
     }
 
+    /// The leader of the foreground process group of the terminal of the session, with the path of
+    /// its executable and its working directory, or None when the terminal has no foreground process
+    /// group (core docs/spec/terminal-read.md#session-state).
+    pub fn foreground(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<crate::protocol::Foreground>, String> {
+        let session = self.session(session_id)?;
+        let guard = session.recover(&session.master, "master");
+        let master = guard
+            .as_ref()
+            .ok_or_else(|| "session master is closed".to_string())?;
+        Ok(process_group_leader(master.as_ref())
+            .map(crate::platform::darwin::process_info::foreground))
+    }
+
     pub fn close(&self, session_id: &str) -> Result<(), String> {
         let session = self.session(session_id)?;
         {

@@ -63,6 +63,7 @@ fn screen_of(message: &Value) -> Option<Screen> {
         rows,
         cursor: screen_cursor,
         scrollback: Default::default(),
+        alternate: Default::default(),
         background: "#000000".to_string(),
         lines,
     })
@@ -96,6 +97,7 @@ fn screen_message_reports_the_same_wrapped_preedit_caret_without_mutating_engine
             }),
         },
         scrollback: Default::default(),
+        alternate: Default::default(),
         background: "#1e1e1e".into(),
         lines: vec![vec![Cell::default(); 6]; 2],
     };
@@ -178,6 +180,7 @@ fn screen_message_reports_caret_in_the_cropped_preedit_viewport() {
             }),
         },
         scrollback: Default::default(),
+        alternate: Default::default(),
         background: "#1e1e1e".into(),
         lines: vec![vec![Cell::default(); 4]; 2],
     };
@@ -239,6 +242,7 @@ fn an_end_boundary_after_a_full_row_paints_on_the_last_occupied_cell() {
             }),
         },
         scrollback: Default::default(),
+        alternate: Default::default(),
         background: "#1e1e1e".into(),
         lines: vec![vec![Cell::default(); 4]; 2],
     };
@@ -289,6 +293,7 @@ fn a_boundary_inside_preedit_maps_to_the_next_grapheme_row() {
             }),
         },
         scrollback: Default::default(),
+        alternate: Default::default(),
         background: "#1e1e1e".into(),
         lines: vec![vec![Cell::default(); 4]; 2],
     };
@@ -336,6 +341,7 @@ fn a_one_row_wrap_pending_wide_end_boundary_keeps_raw_cursor_and_hash() {
             }),
         },
         scrollback: Default::default(),
+        alternate: Default::default(),
         background: "#1e1e1e".into(),
         lines: vec![vec![Cell::default(); 1]],
     };

@@ -938,7 +938,7 @@ impl RowScreen {
 
 /// The kept rows of the alternate screen: whether the alternate screen is active, the number of kept
 /// rows above its screen, and the number of kept rows that the bound dropped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct AlternateRows {
     pub active: bool,
     pub history: usize,
@@ -1237,12 +1237,26 @@ impl Modes {
     }
 }
 
-/// The number of lines by which the viewport is above the newest output, and the number of retained
-/// history lines.
+/// The number of lines by which the viewport is above the newest output, the number of retained
+/// history lines of the active screen, and the number of rows that the history limit dropped from
+/// the primary history (core docs/spec/terminal-read.md#session-state).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct Scrollback {
     pub offset: u32,
     pub history: u32,
+    pub dropped: u64,
+}
+
+/// The leader of the foreground process group of the terminal of a session, with the path of its
+/// executable and its working directory; a read that the system refused leaves both empty and names
+/// the read in `error` (core docs/spec/terminal-read.md#session-state).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Foreground {
+    pub pid: i32,
+    pub command: Option<String>,
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1252,6 +1266,9 @@ pub struct Screen {
     pub cursor: Cursor,
     #[serde(default)]
     pub scrollback: Scrollback,
+    /// The kept rows of the alternate screen (core docs/spec/terminal-read.md#session-state).
+    #[serde(default)]
+    pub alternate: AlternateRows,
     /// The current default background color (`#rrggbb`). It includes the value that the program
     /// changed with OSC 11. The raster fills the margin outside the cells with this color.
     pub background: String,
@@ -1336,6 +1353,9 @@ pub trait SessionPort: Send + Sync {
         Err("session PTY measurement is not supported".to_string())
     }
     async fn get_events(&self) -> mpsc::Receiver<DaemonEvent>;
+    /// The leader of the foreground process group of the terminal of the session, or None when the
+    /// terminal has no foreground process group (core docs/spec/terminal-read.md#session-state).
+    fn foreground(&self, session_id: &str) -> Result<Option<Foreground>, String>;
 }
 
 /// Envelope of a message received from the host
@@ -2299,6 +2319,35 @@ async fn end_selection(
     }
 }
 
+/// Reads the foreground of the terminal of the session after an output and sends the event
+/// `foreground` when it differs from the value sent before; a failed read is recorded once until
+/// the next read differs (core docs/spec/terminal-read.md#session-state). Returns false when the
+/// output is closed.
+async fn send_foreground(
+    surface_id: &str,
+    session_port: &dyn SessionPort,
+    session_id: &str,
+    last: &mut Option<Result<Option<Foreground>, String>>,
+    output_tx: &OutputSink,
+    log: &Events,
+) -> bool {
+    let read = session_port.foreground(session_id);
+    if last.as_ref() == Some(&read) {
+        return true;
+    }
+    match &read {
+        Ok(foreground) => {
+            let event = json!({"surface": surface_id, "body": {"event": "foreground", "foreground": foreground}});
+            if output_tx.send(event.to_string()).await.is_err() {
+                return false;
+            }
+        }
+        Err(reason) => log.record_error("foreground", reason),
+    }
+    *last = Some(read);
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn present_screen(
     surface_id: &str,
@@ -2415,11 +2464,11 @@ async fn present_screen(
     }
     let mut cursor = json!(screen.cursor);
     cursor["caret"] = json!({"row": layout.screen.cursor.row, "col": layout.screen.cursor.col});
-    let view = json!({"rows": screen.rows, "cols": screen.cols, "cursor": cursor, "scrollback": screen.scrollback, "background": screen.background});
+    let view = json!({"rows": screen.rows, "cols": screen.cols, "cursor": cursor, "scrollback": screen.scrollback, "alternate": screen.alternate, "background": screen.background});
     if state.view_sent.as_ref() != Some(&view) {
         let event = json!({
             "surface": surface_id,
-            "body": {"event": "view", "frame": frame, "rows": view["rows"], "cols": view["cols"], "cursor": view["cursor"], "scrollback": view["scrollback"], "background": view["background"]}
+            "body": {"event": "view", "frame": frame, "rows": view["rows"], "cols": view["cols"], "cursor": view["cursor"], "scrollback": view["scrollback"], "alternate": view["alternate"], "background": view["background"]}
         });
         if output_tx.send(event.to_string()).await.is_err() {
             return false;
@@ -3942,6 +3991,9 @@ async fn surface_task(
     let mut screens = ScreenStream::default();
     let mut screen_watched = false;
     let mut session_id: Option<String> = None;
+    // The last foreground read of the session: the value sent with the event `foreground`, or the
+    // error that was recorded (core docs/spec/terminal-read.md#session-state).
+    let mut foreground: Option<Result<Option<Foreground>, String>> = None;
     let mut daemon_events_rx = session_port.get_events().await;
     let mut image_state: Option<ImageState> = None;
     // The terminal state of the session of this surface, from the OSC 133 marks (shell_state.rs).
@@ -5361,6 +5413,7 @@ async fn surface_task(
                                 sync_deadline = engine.sync_deadline();
                                 record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
                                 if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut shell_state).await { return; }
+                                if !send_foreground(&surface_id, session_port.as_ref(), sid, &mut foreground, &output_tx, &log).await { return; }
                                 if headless || hold_while_presenting(&mut image_state) { continue; }
                                 if let Some(ref mut img_state) = image_state {
                                     // The frame request decides first, because a screen copies the
@@ -7122,6 +7175,10 @@ impl SessionPort for LocalSessionPort {
         session_id: &str,
     ) -> Result<crate::pty::PtyMeasurement, String> {
         self.service.pty_measurement(session_id)
+    }
+
+    fn foreground(&self, session_id: &str) -> Result<Option<Foreground>, String> {
+        self.service.foreground(session_id)
     }
 
     async fn get_events(&self) -> mpsc::Receiver<DaemonEvent> {

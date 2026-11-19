@@ -12,9 +12,10 @@ use soksak_sidecar_vt_core::platform::darwin::frame::fault;
 use soksak_sidecar_vt_core::platform::darwin::frame::{Frame, metrics};
 /// Serve contract integration tests that use a fake daemon
 use soksak_sidecar_vt_core::protocol::{
-    Cell, Cursor, CursorShape, DaemonEvent, Engine, EngineEvent, Modes, OutputSubmissionObserver,
-    OutputSubmissionStage, PersistentOwner, PersistentRegistry, Screen, SessionPort, ShellRequest,
-    serve as serve_with_events, serve_with_registry, serve_with_submission_observer,
+    Cell, Cursor, CursorShape, DaemonEvent, Engine, EngineEvent, Foreground, Modes,
+    OutputSubmissionObserver, OutputSubmissionStage, PersistentOwner, PersistentRegistry, Screen,
+    SessionPort, ShellRequest, serve as serve_with_events, serve_with_registry,
+    serve_with_submission_observer,
 };
 use soksak_sidecar_vt_core::pty::PtyMeasurement;
 use soksak_sidecar_vt_core::{
@@ -351,6 +352,7 @@ impl Engine for MockEngine {
                 preedit: None,
             },
             scrollback: Default::default(),
+            alternate: Default::default(),
             background: self.background.clone(),
             lines,
         }
@@ -547,6 +549,11 @@ impl FakeSessionPort {
 
 #[async_trait]
 impl SessionPort for FakeSessionPort {
+    /// This port has no terminal, so no process holds its foreground.
+    fn foreground(&self, _session_id: &str) -> Result<Option<Foreground>, String> {
+        Ok(None)
+    }
+
     async fn open(&self, request: &ShellRequest, cols: u16, rows: u16) -> Result<String, String> {
         let mut calls = self.calls.lock().unwrap();
         calls.opens.push((cols, rows));
@@ -5483,6 +5490,7 @@ async fn test_panicking_surface_reports_error() {
                     preedit: None,
                 },
                 scrollback: Default::default(),
+                alternate: Default::default(),
                 background: "#1e1e1e".to_string(),
                 lines: Vec::new(),
             }
@@ -7690,6 +7698,7 @@ fn rendered_glyph_count(message: &serde_json::Value) -> usize {
         rows,
         cursor: serde_json::from_value(body["cursor"].clone()).unwrap(),
         scrollback: Default::default(),
+        alternate: Default::default(),
         background: body["background"].as_str().unwrap().to_string(),
         lines,
     };
@@ -9268,7 +9277,7 @@ async fn the_foreground_event_names_the_program_that_holds_the_terminal() {
     let directory = std::fs::canonicalize("/tmp").expect("the folder of the session");
     let (mut to_serve, mut lines, _task) = start_messaging_service();
     for line in [
-        r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}"#,
+        r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","directory":"/tmp","image":"view"}}"#,
         r#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}"#,
     ] {
         to_serve

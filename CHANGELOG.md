@@ -1,5 +1,6 @@
 # Changelog
 
+- S208-1: The `view` event carries `scrollback.dropped` and `alternate {active, history, dropped}`, and after each output of a session the sidecar sends the event `foreground` with `{pid, command, cwd}` of the leader of the foreground process group of the PTY when it changes, the members of the session state of core `docs/spec/terminal-read.md#session-state`.
 - S208: The engine keeps the rows that a scroll moves off the top of the alternate screen and reads them with `screen.read {screen: "alternate", from, count}`, as core `docs/spec/terminal-read.md` defines: at most the history limit of rows, a `sidecar.vt.buffer_dropped` record with `buffer: "alternate rows"` for each drop, kept after the program leaves the screen and removed at its next entry. `screen` is required in a range read; `primary` is refused while the alternate screen is active. Red: `terminal_read_test` did not compile on the unchanged engine. Green: the six shared cases pass through the real engine.
 - S207: The catalog test admits the JSON Schema type `integer`, which the catalog uses for `seq` of `sidecar.vt.file.changed`; it failed on the correct catalog.
 - S206: The comment language check reads `.bash` and `.zsh` files with the bash grammar, and the comments of `vt-core/src/shell-integration/bash-integration.bash` are English.
