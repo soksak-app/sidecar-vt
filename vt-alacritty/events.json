@@ -188,6 +188,63 @@
       },
       "description": "Bytes written to the PTY of a session, all of them as hex, with the cids of the inputs that caused the write. A replay input: sequence counts the inputs of the session from 1 (core docs/spec/replay.md). error is present when the write failed."
     },
+    "sidecar.vt.shell.state": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "idle",
+              "running",
+              "exited",
+              null
+            ]
+          },
+          "to": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "running",
+              "exited"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "osc133"
+            ]
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "exit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 255
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "source",
+          "sequence",
+          "exit"
+        ]
+      },
+      "description": "The terminal state of a session changed (core docs/spec/terminal-state.md). from is the state before, or null for the first change; to is idle, running or exited; source is osc133, the OSC 133 marks of the shell; sequence counts the changes of the session from 1; exit is the exit code of exited, or null."
+    },
     "sidecar.vt.guard.allow": {
       "layer": "sidecar",
       "class": "input",

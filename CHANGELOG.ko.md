@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S195: sidecar가 core `docs/spec/terminal-state.md`의 터미널 상태를 보고한다: 어떤 engine에도 의존하지 않는 `vt-core`의 tracker가 OSC 133 mark를 `D`의 exit code와 함께 `idle`, `running`, `exited`로 옮기고, 각 변화는 surface event `shell.state`와 log event `sidecar.vt.shell.state`이며, `shell.state.read`는 `shell.state.current`로 답하고, engine은 exit code가 잘못된 `D`를 거부한다. core의 공유 case가 실제 engine과 실제 session으로 통과하며, 변경하지 않은 sidecar에서 test는 변화 event를 하나도 받지 못했다.
 - S193: `scrollback.history`는 활성 화면의 history다. 대체 화면은 history를 보존하지 않고 `{offset: 0, history: 0}`을 보고하며, 주 화면의 history는 모드 1049 해제 때 그대로 돌아온다. engine은 더 이상 대체 grid에 history 한도를 주지 않는다.
 - S192: synchronized update 안에서도 engine의 모든 답이 출력의 질의 순서를 지킨다. engine이 update의 출력을 자기 scan 전에 직접 잡고 update가 끝나면 다른 출력과 같이 처리하므로, library와 engine의 답, engine의 erase, update의 이벤트가 그 앞의 출력 뒤에 온다. update의 끝은 모든 행을 센다.
 - S190: engine이 DEC private mode 2031의 color scheme notification을 구현한다. `CSI ? 996 n`은 `CSI ? 997 ; 1 n`(dark)이나 `CSI ? 997 ; 2 n`(light)으로 답하고, DECRQM은 mode 2031의 상태로 답하며, program이 mode를 켠 동안 page가 보내는 theme 변경마다 새 theme을 적용한 뒤 report를 쓴다. `CSI ? 2031 l`과 full reset이 mode를 끈다.

@@ -1297,6 +1297,8 @@ struct Envelope {
 /// Commands sent to the surface action
 #[derive(Debug)]
 enum SurfaceCommand {
+    /// Reads the terminal state of the session (core docs/spec/terminal-state.md#state-read).
+    ShellStateRead,
     Open {
         image: Option<String>,
         request: ShellRequest,
@@ -3200,6 +3202,7 @@ async fn send_engine_events(
     emit_surface_events: bool,
     image_state: &mut Option<ImageState>,
     multipart: &mut Option<MultipartAssembly>,
+    shell_state: &mut crate::shell_state::ShellStateTracker,
 ) -> bool {
     let SurfacePorts {
         surface_id,
@@ -3374,6 +3377,40 @@ async fn send_engine_events(
                 }
             }
             EngineEvent::ShellState { marker, params } => {
+                // The tracker follows the marks of every output, so the state stays current while no event is sent
+                // (core docs/spec/terminal-state.md#change-event).
+                if let Some(session) = session_id {
+                    match shell_state.apply(session, marker, &params) {
+                        Ok(Some(transition)) => {
+                            let from = transition.from.map(|state| state.name());
+                            let fields = json!({
+                                "from": from,
+                                "to": transition.to.name(),
+                                "source": crate::shell_state::SOURCE_OSC133,
+                                "sequence": transition.sequence,
+                                "exit": transition.exit,
+                            });
+                            log.emit_for(
+                                Level::Info,
+                                "sidecar.vt.shell.state",
+                                Subject::session(session, &[]),
+                                &fields,
+                            );
+                            if emit_surface_events {
+                                let mut body = fields;
+                                body["event"] = Value::from("shell.state");
+                                let response = json!({"surface": surface_id, "body": body});
+                                if output_tx.send(response.to_string()).await.is_err() {
+                                    return false;
+                                }
+                            }
+                        }
+                        Ok(None) => {}
+                        // The engine rejects a malformed exit code before it gives the mark, so this is an error of the
+                        // engine, which is reported and changes no state.
+                        Err(reason) => log.record_error("shell state", reason),
+                    }
+                }
                 if !emit_surface_events {
                     continue;
                 }
@@ -3746,6 +3783,8 @@ async fn surface_task(
     let mut session_id: Option<String> = None;
     let mut daemon_events_rx = session_port.get_events().await;
     let mut image_state: Option<ImageState> = None;
+    // The terminal state of the session of this surface, from the OSC 133 marks (shell_state.rs).
+    let mut shell_state = crate::shell_state::ShellStateTracker::default();
     let mut preserved_inline_images = Vec::new();
     let mut multipart: Option<MultipartAssembly> = None;
     // The wheel modes of the last `sidecar.vt.mouse_modes` record of this surface.
@@ -3839,7 +3878,7 @@ async fn surface_task(
                 // output of a feed: its events are sent, and the frame clock or a frame draws it.
                 engine.stop_sync();
                 sync_deadline = engine.sync_deadline();
-                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart).await { return; }
+                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut shell_state).await { return; }
                 record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
                 if headless || hold_while_presenting(&mut image_state) { continue; }
                 if let Some(img_state) = image_state.as_mut() {
@@ -4528,6 +4567,22 @@ async fn surface_task(
                     // the reader has read, then answers. It is a diagnostic observation that
                     // distinguishes a successful write, the child's receipt, and the child's
                     // output.
+                    SurfaceCommand::ShellStateRead => {
+                        let response = match session_id.as_deref() {
+                            Some(session) => {
+                                let current = shell_state.current(session);
+                                json!({"surface": surface_id, "body": {
+                                    "event": "shell.state.current",
+                                    "state": current.state.map(|state| state.name()),
+                                    "source": current.state.map(|_| crate::shell_state::SOURCE_OSC133),
+                                    "sequence": current.sequence,
+                                    "exit": current.exit,
+                                }})
+                            }
+                            None => json!({"surface": surface_id, "body": {"error": "Session not open", "request": {"operation": "shell.state.read"}}}),
+                        };
+                        if output_tx.reply(response).await.is_err() { return; }
+                    }
                     SurfaceCommand::PtyPending => {
                         // An error reply also carries the same event marker. The reply alone must
                         // show that it answers a measurement request.
@@ -4677,7 +4732,7 @@ async fn surface_task(
                         // The engine answers a theme change with the color scheme report of a
                         // program that set mode 2031, which reaches the program after the theme
                         // input (docs/spec/terminal-protocols.md#vendor-contracts).
-                        if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart).await { return; }
+                        if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut shell_state).await { return; }
                         if let Some(state) = image_state.as_mut() {
                             state.theme = theme;
                             if state.pending_draw {
@@ -4808,7 +4863,7 @@ async fn surface_task(
                         if let Err(error) = engine.resolve_clipboard(request_id, &text) {
                             let response = json!({"surface": surface_id, "body": {"error": error}});
                             if output_tx.reply(response).await.is_err() { return; }
-                        } else if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, true, &mut image_state, &mut multipart).await {
+                        } else if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, true, &mut image_state, &mut multipart, &mut shell_state).await {
                             return;
                         }
                     }
@@ -5046,7 +5101,7 @@ async fn surface_task(
                                 }
                                 sync_deadline = engine.sync_deadline();
                                 record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
-                                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart).await { return; }
+                                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut shell_state).await { return; }
                                 if headless || hold_while_presenting(&mut image_state) { continue; }
                                 if let Some(ref mut img_state) = image_state {
                                     // The frame clock decides first, because a screen copies the
@@ -6044,6 +6099,11 @@ where
                                     .await
                                     .is_err()
                                 {
+                                    break;
+                                }
+                            }
+                            "shell.state.read" => {
+                                if tx.send(SurfaceCommand::ShellStateRead).await.is_err() {
                                     break;
                                 }
                             }

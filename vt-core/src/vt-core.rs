@@ -16,6 +16,7 @@ pub mod screen_hash;
 pub mod screen_stream;
 pub mod service;
 pub mod shell_integration;
+pub mod shell_state;
 pub mod stall;
 pub mod thread;
 
