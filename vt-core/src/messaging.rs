@@ -77,7 +77,9 @@ impl FolderClaims {
         let mut folders = self
             .folders
             .lock()
-            .map_err(|_| Refusal::new("already-registered", "the folder claims are poisoned"))?;
+            // default: the map of claims changes only by whole inserts and removals, so a panic of another holder leaves
+            // it consistent.
+            .unwrap_or_else(|error| error.into_inner());
         match folders.get(folder) {
             Some(holder) => Err(Refusal::new(
                 "already-registered",
@@ -91,10 +93,12 @@ impl FolderClaims {
     }
 
     fn release(&self, folder: &Path) {
-        // silent: a poisoned map holds no claim that a later registration could meet, because its holder ended.
-        if let Ok(mut folders) = self.folders.lock() {
-            folders.remove(folder);
-        }
+        self.folders
+            .lock()
+            // default: the map of claims changes only by whole inserts and removals, so a panic of another holder leaves
+            // it consistent.
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(folder);
     }
 }
 
