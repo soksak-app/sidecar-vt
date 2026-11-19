@@ -396,6 +396,17 @@ struct ShellMark {
 /// keeps an OSC in a `Vec` without a limit, so the engine bounds what it passes to the parsers.
 const HELD_SEQUENCE_BYTES: usize = MAX_ENCODED_BYTES + 4096;
 
+/// A synchronized update (DEC 2026) that is not closed ends this long after its last opening
+/// sequence, the time that `vte` 0.15 sets for its own hold (`SYNC_UPDATE_TIMEOUT`).
+const SYNCHRONIZED_UPDATE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
+/// A synchronized update ends before its held output reaches this size, the bound of `vte` 0.15
+/// (`SYNC_BUFFER_SIZE`).
+const SYNCHRONIZED_UPDATE_BYTES: usize = 0x20_0000;
+/// The opening and the closing sequence that a held update recognizes; like `vte`, only these exact
+/// bytes extend or end a held update.
+const SYNCHRONIZED_UPDATE_OPEN: &[u8] = b"\x1b[?2026h";
+const SYNCHRONIZED_UPDATE_CLOSE: &[u8] = b"\x1b[?2026l";
+
 /// A sequence that the scan found.
 enum Sequence {
     Osc {
@@ -806,6 +817,17 @@ pub struct AlacrittyEngine {
     /// program (docs/spec/terminal-protocols.md#vendor-contracts). The library ignores the mode, does
     /// not dispatch `CSI ? 996 n`, and answers DECRQM 2031 as not recognized, so the engine keeps it.
     color_scheme_reports: bool,
+    /// The output of a synchronized update after its opening sequence, until the update ends
+    /// (docs/spec/terminal-protocols.md#vendor-contracts). The library holds the output of an update
+    /// only for its own handler, so the engine's own answers, erases and events of the update would
+    /// come before the output before them; the engine holds the output itself, before its scan, and
+    /// ends the hold that the library opens at the opening sequence.
+    synchronized: Vec<u8>,
+    /// The deadline of the held update; None while no update is held.
+    synchronized_deadline: Option<Instant>,
+    /// Set while the engine processes the output of an update that ended, where an opening
+    /// sequence does not open a new update.
+    releasing: bool,
 }
 
 /// The rows above the history limit that the engine counts at one time. The library frees the rows
@@ -854,6 +876,9 @@ impl AlacrittyEngine {
             special_colors: [None; 5],
             special_enabled: [false; 5],
             color_scheme_reports: false,
+            synchronized: Vec::new(),
+            synchronized_deadline: None,
+            releasing: false,
         }
     }
 
@@ -1415,6 +1440,21 @@ impl AlacrittyEngine {
                     [param] if !ignored => param.first().copied(),
                     _ => None,
                 };
+                if !ignored
+                    && action == 'h'
+                    && intermediates.as_slice() == b"?"
+                    && params.iter().any(|param| param.first() == Some(&2026))
+                {
+                    // The library sets the other modes of the list and opens its own hold, which
+                    // the engine ends at once with nothing held; the engine holds the output.
+                    self.advance(&input[from..at]);
+                    self.processor.stop_sync(&mut self.term);
+                    if !self.releasing {
+                        self.synchronized_deadline =
+                            Some(Instant::now() + SYNCHRONIZED_UPDATE_TIMEOUT);
+                    }
+                    return at;
+                }
                 // The library ignores mode 2031 and sets the other modes of the list.
                 if !ignored
                     && matches!(action, 'h' | 'l')
@@ -1531,9 +1571,10 @@ impl AlacrittyEngine {
         self.events.push(QueuedEvent::Neutral(event));
     }
 
-    /// Scans `input` from `at` to `end`, acts on each sequence, and returns the new `from`.
+    /// Scans `input` from `at` to `end`, acts on each sequence, and returns the new `from`. The scan
+    /// stops after an opening sequence of a synchronized update.
     fn scan_range(&mut self, input: &[u8], mut from: usize, at: &mut usize, end: usize) -> usize {
-        while *at < end {
+        while *at < end && self.synchronized_deadline.is_none() {
             *at += self
                 .scanner
                 .advance_until_terminated(&mut self.scan, &input[*at..end]);
@@ -1564,22 +1605,100 @@ impl AlacrittyEngine {
         }
     }
 
-    /// Passes the output to the scan and to the terminal. A sequence cut between two inputs waits in
-    /// `held`, so that an erase or a rewrite can still replace it.
+    /// Passes the output to the scan and to the terminal, or holds it while a synchronized update is
+    /// open. Each output between two holds is scanned in turn, so an input of many updates uses no
+    /// recursion.
     fn feed_output(&mut self, bytes: &[u8]) {
+        let mut held = if self.synchronized_deadline.is_some() {
+            Some(bytes.to_vec())
+        } else {
+            self.scan_output(bytes)
+        };
+        while let Some(bytes) = held.take() {
+            held = self
+                .hold_synchronized(bytes)
+                .and_then(|rest| self.scan_output(&rest));
+        }
+    }
+
+    /// Adds output to the held update. Returns the output after the closing sequence when the update
+    /// ends, or the whole output after the held output is processed when it would reach
+    /// `SYNCHRONIZED_UPDATE_BYTES`; None while the update stays held.
+    fn hold_synchronized(&mut self, bytes: Vec<u8>) -> Option<Vec<u8>> {
+        if self.synchronized.len() + bytes.len() >= SYNCHRONIZED_UPDATE_BYTES - 1 {
+            self.end_synchronized();
+            return Some(bytes);
+        }
+        // A sequence cut between two outputs is found in the bytes before the new output.
+        let start = self
+            .synchronized
+            .len()
+            .saturating_sub(SYNCHRONIZED_UPDATE_CLOSE.len() - 1);
+        if self.synchronized.is_empty() {
+            self.synchronized = bytes;
+        } else {
+            self.synchronized.extend_from_slice(&bytes);
+        }
+        let added = &self.synchronized[start..];
+        let length = SYNCHRONIZED_UPDATE_CLOSE.len();
+        if let Some(close) = added
+            .windows(length)
+            .position(|window| window == SYNCHRONIZED_UPDATE_CLOSE)
+        {
+            let end = start + close + length;
+            let rest = self.synchronized.split_off(end);
+            self.end_synchronized();
+            return Some(rest);
+        }
+        if added
+            .windows(length)
+            .any(|window| window == SYNCHRONIZED_UPDATE_OPEN)
+        {
+            self.synchronized_deadline = Some(Instant::now() + SYNCHRONIZED_UPDATE_TIMEOUT);
+        }
+        None
+    }
+
+    /// Ends the held update and processes the output that it holds. The scan stopped at the opening
+    /// sequence, so no sequence of an earlier output waits in `held`.
+    fn end_synchronized(&mut self) {
+        debug_assert!(self.held.is_empty());
+        let held = std::mem::take(&mut self.synchronized);
+        self.synchronized_deadline = None;
+        self.releasing = true;
+        let opened = self.scan_input(held, 0);
+        self.releasing = false;
+        debug_assert!(opened.is_none());
+    }
+
+    /// Scans one output that follows the output before it.
+    fn scan_output(&mut self, bytes: &[u8]) -> Option<Vec<u8>> {
         let bytes = self.skip_discarded(bytes);
         let mut input = std::mem::take(&mut self.held);
-        let mut at = input.len();
+        let at = input.len();
         input.extend_from_slice(bytes);
+        self.scan_input(input, at)
+    }
+
+    /// Passes the output to the scan and to the terminal from `at`, the end of the sequence that
+    /// waited in `held`. A sequence cut between two inputs waits in `held`, so that an erase or a
+    /// rewrite can still replace it. Returns the output after the opening sequence of a synchronized
+    /// update, which the caller holds.
+    fn scan_input(&mut self, mut input: Vec<u8>, mut at: usize) -> Option<Vec<u8>> {
         let last_escape = input[at..]
             .iter()
             .rposition(|byte| *byte == 0x1b)
             .map(|position| at + position);
         // default: an input without an escape byte is one range up to its end.
         let mut from = self.scan_range(&input, 0, &mut at, last_escape.unwrap_or(input.len()));
-        if last_escape.is_some() {
+        if last_escape.is_some() && self.synchronized_deadline.is_none() {
             self.scan.left_sequence = false;
             from = self.scan_range(&input, from, &mut at, input.len());
+        }
+        if self.synchronized_deadline.is_some() {
+            debug_assert_eq!(from, at);
+            input.drain(..at);
+            return Some(input);
         }
         let held_from = if self.scan.left_sequence {
             None
@@ -1591,9 +1710,7 @@ impl AlacrittyEngine {
         };
         // default: with no sequence open, the terminal receives the input up to its end.
         self.advance(&input[from..held_from.unwrap_or(input.len())]);
-        let Some(held_from) = held_from else {
-            return;
-        };
+        let held_from = held_from?;
         if input.len() - held_from > HELD_SEQUENCE_BYTES {
             self.events
                 .push(QueuedEvent::Neutral(EngineEvent::Error(format!(
@@ -1602,10 +1719,11 @@ impl AlacrittyEngine {
             self.scanner = Parser::new();
             self.scan.left_sequence = true;
             self.discarding = true;
-            return;
+            return None;
         }
         input.drain(..held_from);
         self.held = input;
+        None
     }
 
     fn clipboard_selection(
@@ -2100,20 +2218,13 @@ impl Engine for AlacrittyEngine {
     }
 
     fn sync_deadline(&self) -> Option<Instant> {
-        self.processor
-            .sync_timeout()
-            .sync_timeout()
-            .map(Instant::from_std)
+        self.synchronized_deadline
     }
 
     fn stop_sync(&mut self) {
-        // The library processes the held bytes in one call, so the count covers them as it covers a
-        // slice of a feed.
-        self.term
-            .grid_mut()
-            .update_history(self.history_limit + COUNTED_ROWS);
-        self.processor.stop_sync(&mut self.term);
-        self.count_pushed_rows();
+        if self.synchronized_deadline.is_some() {
+            self.end_synchronized();
+        }
     }
 
     fn drain_events(&mut self) -> Vec<EngineEvent> {

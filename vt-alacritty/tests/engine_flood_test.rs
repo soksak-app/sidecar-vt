@@ -96,8 +96,10 @@ fn the_end_of_a_held_update_keeps_at_most_the_cached_rows() {
     );
 }
 
+/// The engine processes the output of a held update in the slices of any output, so the end of the
+/// update counts every row that it pushes above the history limit.
 #[test]
-fn rows_past_the_count_of_a_held_update_are_reported() {
+fn the_end_of_a_held_update_counts_every_row() {
     let mut engine = AlacrittyEngine::new();
     for _ in 0..2 {
         engine.feed(&b"y\n".repeat(30_000));
@@ -108,12 +110,7 @@ fn rows_past_the_count_of_a_held_update_are_reported() {
     engine.feed(&held);
     engine.stop_sync();
     let events = engine.drain_events();
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, soksak_sidecar_vt_core::EngineEvent::Error(reason) if reason.contains("row count may be low"))),
-        "{events:?}"
-    );
+    assert!(events.is_empty(), "{events:?}");
 }
 
 #[test]
