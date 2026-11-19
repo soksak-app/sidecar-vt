@@ -1305,17 +1305,36 @@ fn scrollback_keeps_recent_visible_lines_after_overflow_and_resize() {
 fn alternate_screen_is_separate_from_primary_scrollback() {
     let mut engine = AlacrittyEngine::new();
     engine.resize(20, 4);
-    engine.feed(b"primary\r\ntext");
+    engine.feed(b"one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nprimary\r\ntext");
     let primary = text(&engine.screen());
+    let history = engine.scrollback();
+    assert_eq!(
+        history,
+        (0, 3),
+        "the primary screen keeps three history lines"
+    );
     engine.feed(b"\x1b[?1049h");
-    engine.feed(b"alternate");
+    engine.feed(b"alternate\r\n1\r\n2\r\n3\r\n4\r\n5");
     assert!(engine.modes().alt_screen);
-    assert!(text(&engine.screen()).contains("alternate"));
+    assert!(text(&engine.screen()).contains('5'));
     assert!(!text(&engine.screen()).contains("primary"));
+    // The scrollback of the alternate screen, the active screen, has no history.
+    assert_eq!(engine.scrollback(), (0, 0));
+    engine.scroll_viewport(2);
+    assert_eq!(engine.scrollback(), (0, 0));
     engine.feed(b"\x1b[?1049l");
     assert!(!engine.modes().alt_screen);
     assert!(text(&engine.screen()).contains(&primary));
     assert!(!text(&engine.screen()).contains("alternate"));
+    // The primary history returns unchanged.
+    assert_eq!(engine.scrollback(), history);
+    let rows: Vec<String> = engine
+        .screen_rows(0, 3)
+        .expect("the primary history rows")
+        .iter()
+        .map(|row| row.iter().filter_map(|cell| cell.ch.as_deref()).collect())
+        .collect();
+    assert_eq!(rows, ["one", "two", "three"]);
 }
 
 #[test]
@@ -2273,7 +2292,7 @@ fn hex(text: &str) -> Vec<u8> {
 }
 
 // A synchronized update (DEC 2026) holds the output after its opening sequence until the update
-// ends. The library sets the deadline of the update 150 ms after the opening sequence, and the
+// ends. The engine sets the deadline of the update 150 ms after the opening sequence, and the
 // caller ends the update with `stop_sync` at that deadline.
 #[test]
 fn a_synchronized_update_holds_output_until_stop_sync_ends_it() {
@@ -2299,6 +2318,78 @@ fn a_synchronized_update_holds_output_until_stop_sync_ends_it() {
         "stop_sync did not process the output of the held update"
     );
     assert!(engine.sync_deadline().is_none());
+}
+
+/// The queries of `QUERIES` alternate between the library (DA, DSR 6) and the engine (DSR 996, DECRQM 2031, OSC 17), and
+/// `ANSWERS` holds their answers in the order of the queries.
+const QUERIES: &[u8] = b"\x1b[c\x1b[?996n\x1b[6n\x1b[?2031$p\x1b]17;?\x1b\\";
+const ANSWERS: [&str; 5] = [
+    "\x1b[?6c",
+    "\x1b[?997;1n",
+    "\x1b[1;1R",
+    "\x1b[?2031;2$y",
+    "\x1b]17;rgb:4444/4747/5a5a\x1b\\",
+];
+
+// Every answer of a synchronized update (docs/spec/terminal-protocols.md#vendor-contracts) keeps the order of the
+// queries of the update, whether the library or the engine answers it, and whether the closing sequence or
+// `stop_sync` ends the update.
+#[test]
+fn the_answers_of_a_synchronized_update_keep_the_order_of_its_queries() {
+    let mut engine = AlacrittyEngine::new();
+    let mut output = b"\x1b[?2026h".to_vec();
+    output.extend(QUERIES);
+    output.extend(b"\x1b[?2026l");
+    engine.feed(&output);
+    assert_eq!(replies(&mut engine), ANSWERS);
+
+    let mut output = b"\x1b[?2026h".to_vec();
+    output.extend(QUERIES);
+    engine.feed(&output);
+    assert_eq!(replies(&mut engine), Vec::<String>::new());
+    engine.stop_sync();
+    assert_eq!(replies(&mut engine), ANSWERS);
+
+    engine.feed(QUERIES);
+    assert_eq!(replies(&mut engine), ANSWERS);
+}
+
+// A closing sequence cut between two outputs ends the held update, and each update of one output ends at its own
+// closing sequence, so the output between two updates is drawn and the second update holds its output.
+#[test]
+fn each_synchronized_update_ends_at_its_closing_sequence() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b[?2026hfirst\x1b[?20");
+    assert!(!text(&engine.screen()).contains("first"));
+    engine.feed(b"26lbetween\x1b[?2026hsecond\x1b[?2026lthird\x1b[?2026hfourth");
+    let screen = text(&engine.screen());
+    assert!(
+        screen.contains("firstbetweensecondthird") && !screen.contains("fourth"),
+        "{screen:?}"
+    );
+    assert!(engine.sync_deadline().is_some());
+    engine.stop_sync();
+    assert!(text(&engine.screen()).contains("thirdfourth"));
+    assert!(engine.sync_deadline().is_none());
+}
+
+// An erase of the engine inside a synchronized update applies after the output before it in the update, so the output
+// that the erase removes stays removed when the update ends.
+#[test]
+fn an_erase_inside_a_synchronized_update_follows_the_output_before_it() {
+    for erase in [&b"\x1b[2J"[..], b"\x1b[1J"] {
+        let mut engine = AlacrittyEngine::new();
+        let mut output = b"\x1b[?2026hbefore".to_vec();
+        output.extend(erase);
+        output.extend(b"\x1b[2;1Hafter\x1b[?2026l");
+        engine.feed(&output);
+        let screen = text(&engine.screen());
+        assert!(
+            !screen.contains("before") && screen.contains("after"),
+            "erase {:?} inside the update left the screen {screen:?}",
+            String::from_utf8_lossy(erase)
+        );
+    }
 }
 
 fn rejections(engine: &mut AlacrittyEngine) -> Vec<String> {
