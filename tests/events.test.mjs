@@ -12,7 +12,8 @@ const catalog = JSON.parse(readFileSync(join(root, "vt-alacritty/events.json"), 
 
 const LEVELS = ["error", "warn", "info", "debug", "trace"];
 const CLASSES = ["lifecycle", "input", "call", "io", "frame"];
-const TYPES = ["string", "number", "boolean", "array", "object", "null"];
+// The seven types of JSON Schema 2020-12, which the fields of the catalog use; a count or a sequence is an integer.
+const TYPES = ["string", "number", "integer", "boolean", "array", "object", "null"];
 
 /** The text of every Rust source under vt-core/src, by path. */
 function sources(directory = join(root, "vt-core/src")) {
