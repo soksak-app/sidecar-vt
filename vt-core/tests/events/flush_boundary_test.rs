@@ -9,8 +9,7 @@ fn every_queued_flush_receives_its_own_acknowledgement() {
         "log.open",
         to_raw_value(&json!({"schema": SCHEMA})).expect("encode open record"),
     );
-    let output = Output::new(
-        File::create(&path).expect("create writer file"),
+    let mut output = Output::new(
         path.clone(),
         folder.path().join("writer.debug.jsonl"),
         1 << 20,
@@ -18,6 +17,7 @@ fn every_queued_flush_receives_its_own_acknowledgement() {
         &open,
         PolicyState::start(None),
     );
+    output.start().expect("create writer file");
     let (sender, receiver) = sync_channel(4);
     let (first, first_reply) = sync_channel(1);
     let (second, second_reply) = sync_channel(1);
@@ -37,7 +37,6 @@ fn every_queued_flush_receives_its_own_acknowledgement() {
             Arc::new(AtomicUsize::new(0)),
             Arc::new(Loss::new()),
             Duration::from_secs(1),
-            open,
         );
     });
     let first_result = first_reply.recv_timeout(Duration::from_secs(2));
