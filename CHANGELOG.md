@@ -1,5 +1,6 @@
 # Changelog
 
+- S188: Each `unwrap_or` of the guard states its default and each guard emit names its event, so the event-source check passes.
 - S185: The `view` event carries `background`, the default background of its frame (the theme background or the OSC 11 color), and a frame whose default background differs from the last `view` event sends one, as plugin terminal 0.0.47 requires.
 - S187: The S181 sources are formatted by rustfmt, so the Rust format check passes; no code changed.
 - S179: A dim cell's foreground is blended two parts to one toward its background, the draw does not dim it again, and the dim attribute is bit 02, replacing the two-thirds rule and bit 40 of S175.

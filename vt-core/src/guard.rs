@@ -216,6 +216,7 @@ fn is_assignment(text: &str) -> bool {
 }
 
 fn base_name(text: &str) -> &str {
+    // default: a text without a slash is its own base name.
     text.rsplit('/').next().unwrap_or(text)
 }
 
@@ -539,10 +540,13 @@ fn git_push_force_protected(words: &[Word]) -> bool {
         return true;
     }
     refspecs[1..].iter().any(|refspec| {
+        // default: a refspec without a plus sign is compared as written.
         let spec = refspec.strip_prefix('+').unwrap_or(*refspec);
+        // default: a spec without a colon is its own destination.
         let destination = spec.rsplit(':').next().unwrap_or(spec);
         let branch = destination
             .strip_prefix("refs/heads/")
+            // default: a destination without the heads prefix is compared as written.
             .unwrap_or(destination);
         matches!(branch, "main" | "master" | "HEAD" | "")
     })
@@ -763,6 +767,7 @@ pub fn judge_transaction(
     for verdict in line.observe(session, inputs) {
         match verdict {
             Verdict::Allow => {
+                // events: sidecar.vt.guard.allow
                 log.emit_for(
                     Level::Info,
                     ALLOW_EVENT,
@@ -771,6 +776,7 @@ pub fn judge_transaction(
                 );
             }
             Verdict::Refuse { rule, reason } => {
+                // events: sidecar.vt.guard.refuse
                 log.emit_for(
                     Level::Error,
                     REFUSE_EVENT,
