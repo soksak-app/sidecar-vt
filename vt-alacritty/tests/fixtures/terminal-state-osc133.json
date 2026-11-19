@@ -53,6 +53,26 @@
       "read": {"state": "idle", "source": "osc133", "sequence": 1, "exit": null}
     },
     {
+      "name": "an explicit prompt start of a continuation line gives idle",
+      "output": "\u001b]133;C\u0007\u001b]133;D;0\u0007\u001b]133;P;k=s\u0007",
+      "rejected": false,
+      "events": [
+        {"from": null, "to": "running", "source": "osc133", "sequence": 1, "exit": null},
+        {"from": "running", "to": "exited", "source": "osc133", "sequence": 2, "exit": 0},
+        {"from": "exited", "to": "idle", "source": "osc133", "sequence": 3, "exit": null}
+      ],
+      "read": {"state": "idle", "source": "osc133", "sequence": 3, "exit": null}
+    },
+    {
+      "name": "a prompt kind that is not defined is a malformed mark",
+      "output": "\u001b]133;C\u0007\u001b]133;P;k=x\u0007",
+      "rejected": true,
+      "events": [
+        {"from": null, "to": "running", "source": "osc133", "sequence": 1, "exit": null}
+      ],
+      "read": {"state": "running", "source": "osc133", "sequence": 1, "exit": null}
+    },
+    {
       "name": "output without a mark has no state",
       "output": "plain output\r\n",
       "rejected": false,

@@ -1,0 +1,328 @@
+{
+  "contract": "docs/spec/terminal-state.md#prompt-region",
+  "cases": [
+    {
+      "name": "a wrapped input line stands at the previous width until the shell draws it again",
+      "size": [20, 6],
+      "steps": [
+        {
+          "output": "o1\r\no2\r\n\u001b]133;A\u0007P> abcdefghijklmnopqrstuvwxyz",
+          "screen": ["o1", "o2", "P> abcdefghijklmnopq", "rstuvwxyz", "", ""],
+          "cursor": [3, 9]
+        },
+        {
+          "resize": [10, 6],
+          "screen": ["o1", "o2", "P> abcdefg", "rstuvwxyz", "", ""],
+          "history": [],
+          "cursor": [3, 0]
+        },
+        {
+          "output": "\u001b[1A\rP> abcdefghijklmnopqrstuvwxyz\u001b[J",
+          "screen": ["o1", "o2", "P> abcdefg", "hijklmnopq", "rstuvwxyz", ""],
+          "cursor": [4, 9]
+        },
+        {
+          "resize": [20, 6],
+          "screen": ["o1", "o2", "P> abcdefg", "hijklmnopq", "rstuvwxyz", ""],
+          "history": [],
+          "cursor": [4, 0]
+        },
+        {
+          "output": "\u001b[2A\rP> abcdefghijklmnopqrstuvwxyz\u001b[J",
+          "screen": ["o1", "o2", "P> abcdefghijklmnopq", "rstuvwxyz", "", ""],
+          "history": [],
+          "cursor": [3, 9]
+        }
+      ]
+    },
+    {
+      "name": "zsh draws a prompt of two lines again from the row of A",
+      "size": [20, 6],
+      "steps": [
+        {
+          "output": "o1\r\n\u001b]133;A\u0007\u001b]133;P;k=i\u0007LONG-FIRST-LINE\r\nP> \u001b]133;B\u0007ab",
+          "screen": ["o1", "LONG-FIRST-LINE", "P> ab", "", "", ""],
+          "cursor": [2, 5]
+        },
+        {
+          "resize": [10, 6],
+          "screen": ["o1", "LONG-FIRST", "P> ab", "", "", ""],
+          "history": [],
+          "cursor": [2, 0]
+        },
+        {
+          "output": "\u001b[1A\r\u001b]133;P;k=i\u0007LONG-FIRST-LINE\r\nP> \u001b]133;B\u0007ab\u001b[J",
+          "screen": ["o1", "LONG-FIRST", "-LINE", "P> ab", "", ""],
+          "cursor": [3, 5]
+        },
+        {
+          "resize": [20, 6],
+          "screen": ["o1", "LONG-FIRST", "-LINE", "P> ab", "", ""],
+          "history": [],
+          "cursor": [3, 0]
+        },
+        {
+          "output": "\u001b[2A\r\u001b]133;P;k=i\u0007LONG-FIRST-LINE\r\nP> \u001b]133;B\u0007ab\u001b[J",
+          "screen": ["o1", "LONG-FIRST-LINE", "P> ab", "", "", ""],
+          "history": [],
+          "cursor": [2, 5]
+        }
+      ]
+    },
+    {
+      "name": "bash draws again only the last line of its prompt, which P;k=s marks",
+      "size": [20, 6],
+      "steps": [
+        {
+          "output": "o1\r\n\u001b]133;A;redraw=last\u0007LONG-FIRST-LINE\r\n\u001b]133;P;k=s\u0007P> abcdefghijklmnopqrstuvwxyz",
+          "screen": ["o1", "LONG-FIRST-LINE", "P> abcdefghijklmnopq", "rstuvwxyz", "", ""],
+          "cursor": [3, 9]
+        },
+        {
+          "resize": [10, 6],
+          "screen": ["o1", "LONG-FIRST", "-LINE", "P> abcdefg", "rstuvwxyz", ""],
+          "history": [],
+          "cursor": [4, 0]
+        },
+        {
+          "output": "\u001b[1A\r\u001b]133;P;k=s\u0007P> abcdefghijklmnopqrstuvwxyz\u001b[J",
+          "screen": ["o1", "LONG-FIRST", "-LINE", "P> abcdefg", "hijklmnopq", "rstuvwxyz"],
+          "cursor": [5, 9]
+        },
+        {
+          "resize": [20, 6],
+          "screen": ["o1", "LONG-FIRST-LINE", "P> abcdefg", "hijklmnopq", "rstuvwxyz", ""],
+          "history": [],
+          "cursor": [4, 0]
+        },
+        {
+          "output": "\u001b[2A\r\u001b]133;P;k=s\u0007P> abcdefghijklmnopqrstuvwxyz\u001b[J",
+          "screen": ["o1", "LONG-FIRST-LINE", "P> abcdefghijklmnopq", "rstuvwxyz", "", ""],
+          "history": [],
+          "cursor": [3, 9]
+        }
+      ]
+    },
+    {
+      "name": "a right prompt is cut with its row and does not wrap",
+      "size": [30, 4],
+      "steps": [
+        {
+          "output": "\u001b]133;A\u0007\u001b]133;P;k=i\u0007P> \u001b]133;B\u0007\u001b[25GRIGHT\u001b[4Gab",
+          "screen": ["P> ab                   RIGHT", "", "", ""],
+          "cursor": [0, 5]
+        },
+        {
+          "resize": [20, 4],
+          "screen": ["P> ab", "", "", ""],
+          "history": [],
+          "cursor": [0, 0]
+        },
+        {
+          "resize": [30, 4],
+          "screen": ["P> ab", "", "", ""],
+          "history": [],
+          "cursor": [0, 0]
+        }
+      ]
+    },
+    {
+      "name": "a right prompt mark records no row",
+      "size": [20, 6],
+      "steps": [
+        {
+          "output": "o1\r\n\u001b]133;A\u0007LONG-FIRST-LINE\r\nP> \u001b]133;P;k=r\u0007\u001b[16GRIGHT\u001b[4Gab",
+          "screen": ["o1", "LONG-FIRST-LINE", "P> ab          RIGHT", "", "", ""],
+          "cursor": [2, 5]
+        },
+        {
+          "resize": [10, 6],
+          "screen": ["o1", "LONG-FIRST", "P> ab", "", "", ""],
+          "history": [],
+          "cursor": [2, 0]
+        }
+      ]
+    },
+    {
+      "name": "a continuation line of PS2 is the region and the lines above it reflow",
+      "size": [20, 6],
+      "steps": [
+        {
+          "output": "\u001b]133;A\u0007\u001b]133;P;k=i\u0007P> \u001b]133;B\u0007for x in a b c d e f\r\n\u001b]133;P;k=s\u0007for> \u001b]133;B\u0007echo",
+          "screen": ["P> for x in a b c d", "e f", "for> echo", "", "", ""],
+          "cursor": [2, 9]
+        },
+        {
+          "resize": [10, 6],
+          "screen": ["P> for x i", "n a b c d", "e f", "for> echo", "", ""],
+          "history": [],
+          "cursor": [3, 0]
+        },
+        {
+          "resize": [20, 6],
+          "screen": ["P> for x in a b c d", "e f", "for> echo", "", "", ""],
+          "history": [],
+          "cursor": [2, 0]
+        }
+      ]
+    },
+    {
+      "name": "a shell without marks reflows its rows and joins them again",
+      "size": [20, 6],
+      "steps": [
+        {
+          "output": "o1\r\nP> abcdefghijklmnopqrstuvwxyz",
+          "cursor": [2, 9]
+        },
+        {
+          "resize": [10, 6],
+          "screen": ["o1", "P> abcdefg", "hijklmnopq", "rstuvwxyz", "", ""],
+          "history": [],
+          "cursor": [3, 9]
+        },
+        {
+          "resize": [20, 6],
+          "screen": ["o1", "P> abcdefghijklmnopq", "rstuvwxyz", "", "", ""],
+          "history": [],
+          "cursor": [2, 9]
+        }
+      ]
+    },
+    {
+      "name": "the output of a running command reflows",
+      "size": [20, 6],
+      "steps": [
+        {
+          "output": "\u001b]133;A\u0007P> cmd\r\n\u001b]133;C\u0007out-abcdefghijklmnopqrstuvw",
+          "screen": ["P> cmd", "out-abcdefghijklmnop", "qrstuvw", "", "", ""],
+          "cursor": [2, 7]
+        },
+        {
+          "resize": [10, 6],
+          "screen": ["P> cmd", "out-abcdef", "ghijklmnop", "qrstuvw", "", ""],
+          "history": [],
+          "cursor": [3, 7]
+        },
+        {
+          "resize": [20, 6],
+          "screen": ["P> cmd", "out-abcdefghijklmnop", "qrstuvw", "", "", ""],
+          "history": [],
+          "cursor": [2, 7]
+        }
+      ]
+    },
+    {
+      "name": "the alternate screen has no region",
+      "size": [20, 6],
+      "steps": [
+        {
+          "output": "\u001b]133;A\u0007P> abc\u001b[?1049h\u001b[Hfull-screen-program"
+        },
+        {
+          "resize": [10, 6],
+          "screen": ["full-scree", "", "", "", "", ""],
+          "cursor": [0, 9]
+        },
+        {
+          "output": "\u001b[?1049l",
+          "screen": ["P> abc", "", "", "", "", ""],
+          "history": [],
+          "cursor": [0, 6]
+        }
+      ]
+    },
+    {
+      "name": "redraw=0 reflows the prompt until the next A",
+      "size": [20, 6],
+      "steps": [
+        {
+          "output": "o1\r\n\u001b]133;A;redraw=0\u0007P> abcdefghijklmnopqrstuvwxyz"
+        },
+        {
+          "resize": [10, 6],
+          "screen": ["o1", "P> abcdefg", "hijklmnopq", "rstuvwxyz", "", ""],
+          "history": [],
+          "cursor": [3, 9]
+        },
+        {
+          "output": "\r\n\u001b]133;A\u0007P> abcdefghijklmn",
+          "screen": ["o1", "P> abcdefg", "hijklmnopq", "rstuvwxyz", "P> abcdefg", "hijklmn"],
+          "cursor": [5, 7]
+        },
+        {
+          "resize": [20, 6],
+          "screen": ["o1", "P> abcdefghijklmnopq", "rstuvwxyz", "P> abcdefg", "hijklmn", ""],
+          "history": [],
+          "cursor": [4, 0]
+        }
+      ]
+    },
+    {
+      "name": "a prompt start that output pushed into the history is an error",
+      "size": [10, 3],
+      "steps": [
+        {
+          "output": "\u001b]133;A\u0007LINE-1\r\nLINE-2\r\nLINE-3\r\nP> ab",
+          "screen": ["LINE-2", "LINE-3", "P> ab"],
+          "history": ["LINE-1"],
+          "cursor": [2, 5]
+        },
+        {
+          "resize": [20, 3],
+          "screen": ["LINE-2", "LINE-3", "P> ab"],
+          "history": ["LINE-1"],
+          "cursor": [2, 5],
+          "errors": ["terminal resize: the prompt start row -1 lies above the screen"]
+        }
+      ]
+    },
+    {
+      "name": "a region taller than the screen stands from the top row",
+      "size": [10, 6],
+      "steps": [
+        {
+          "output": "o1\r\n\u001b]133;A\u0007LINE-1\r\nLINE-2\r\nP> ab"
+        },
+        {
+          "resize": [10, 2],
+          "screen": ["LINE-1", "LINE-2"],
+          "history": ["o1", ""],
+          "cursor": [1, 0],
+          "errors": ["terminal resize: the prompt region starts at the screen row -1 after the reflow, above the screen"]
+        }
+      ]
+    },
+    {
+      "name": "a wide character that the cut splits stands empty",
+      "size": [20, 4],
+      "steps": [
+        {
+          "output": "o1\r\n\u001b]133;A\u0007P>abcdefg\u6f22xy"
+        },
+        {
+          "resize": [10, 4],
+          "screen": ["o1", "P>abcdefg", "", ""],
+          "history": [],
+          "cursor": [1, 0]
+        }
+      ]
+    },
+    {
+      "name": "a prompt drawn again after a screen clear starts at the top row",
+      "size": [10, 8],
+      "steps": [
+        {
+          "output": "o1\r\no2\r\n\u001b]133;A\u0007PROMPT-LINE\r\nP>\u001b[H\u001b[2JPROMPT-LINE\r\nP>abcdefghijklmnopqrstuvwxyz0123",
+          "screen": ["PROMPT-LIN", "E", "P>abcdefgh", "ijklmnopqr", "stuvwxyz01", "23", "", ""],
+          "cursor": [5, 2]
+        },
+        {
+          "resize": [30, 8],
+          "screen": ["PROMPT-LIN", "E", "P>abcdefgh", "ijklmnopqr", "stuvwxyz01", "23", "", ""],
+          "history": [],
+          "cursor": [5, 0]
+        }
+      ]
+    }
+  ]
+}

@@ -8,7 +8,7 @@ mod engine;
 use engine::AlacrittyEngine;
 use soksak_sidecar_vt_core::events::{EventLog, Options};
 use soksak_sidecar_vt_core::pty::{PtyService, ShellOwner};
-use soksak_sidecar_vt_core::{DaemonEvent, Engine, Screen};
+use soksak_sidecar_vt_core::{DaemonEvent, Engine, EngineEvent, Screen};
 use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -63,9 +63,24 @@ struct Session {
     engine: AlacrittyEngine,
     cols: u16,
     rows: u16,
+    /// The errors that the engine reported.
+    errors: Vec<String>,
 }
 
 impl Session {
+    /// Keeps the errors among the events of the engine.
+    fn drain_errors(&mut self) {
+        let errors = self
+            .engine
+            .drain_events()
+            .into_iter()
+            .filter_map(|event| match event {
+                EngineEvent::Error(error) => Some(error),
+                _ => None,
+            });
+        self.errors.extend(errors);
+    }
+
     /// Feeds the output to the engine and waits until the screen satisfies the predicate. Returns
     /// the screen text if it is not satisfied.
     async fn until(
@@ -75,6 +90,7 @@ impl Session {
         let cols = self.cols as usize;
         let reached = timeout(Duration::from_secs(10), async {
             loop {
+                self.drain_errors();
                 let text = screen_text(&self.engine.screen(), cols);
                 if predicate(&text, &self.engine) {
                     return true;
@@ -82,7 +98,6 @@ impl Session {
                 match self.rx.recv().await {
                     Some(DaemonEvent::Output { data, .. }) => {
                         self.engine.feed(&data);
-                        self.engine.drain_events();
                     }
                     Some(_) => {}
                     None => return false,
@@ -144,6 +159,7 @@ fn open(shell: &str, variable: &str, directory: &Path) -> Session {
         engine,
         cols: 60,
         rows: 12,
+        errors: Vec::new(),
     }
 }
 
@@ -217,6 +233,107 @@ async fn resize_wrapped_input(mut session: Session) -> Result<(), String> {
     Ok(())
 }
 
+/// The rows of a screen text of `cols` columns without their trailing blanks.
+fn text_rows(text: &str, cols: usize) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    chars
+        .chunks(cols)
+        .map(|row| row.iter().collect::<String>().trim_end().to_string())
+        .collect()
+}
+
+/// The text of the output line above the prompt, which the alias `show` of the startup files prints.
+const ABOVE: &str = "ABOVE-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-END";
+/// The input line that the test types at the second prompt.
+const INPUT: &str = "true START-xxxxxxxxxxxxxxxxxxxx-END";
+
+/// The rows that a screen of `cols` columns shows: the first prompt of two lines with the command
+/// `show`, the output line, the second prompt with the input, and empty rows.
+fn two_line_prompt_rows(cols: usize, rows: usize) -> Vec<String> {
+    let wrap = |line: &str| -> Vec<String> {
+        let chars: Vec<char> = line.chars().collect();
+        chars
+            .chunks(cols)
+            .map(|chunk| chunk.iter().collect::<String>())
+            .collect()
+    };
+    let mut expected = vec!["LINE-ONE".to_string(), "P> show".to_string()];
+    expected.extend(wrap(ABOVE));
+    expected.push("LINE-ONE".to_string());
+    expected.extend(wrap(&format!("P> {INPUT}")));
+    expected.resize(rows, String::new());
+    expected
+}
+
+/// Narrows and then widens a terminal whose shell shows a prompt of two lines below an output line.
+/// After the redraw of each step the screen must show each row once: the output line rewrapped at
+/// the width, both prompts with their two lines, no empty or left-over row between them, an empty
+/// history, and the cursor at the end of the input; the output line joins again exactly when the
+/// width returns. The engine must report no error.
+async fn resize_two_line_prompt(mut session: Session) -> Result<(), String> {
+    session
+        .until(|text, _| text.contains("P> "))
+        .await
+        .map_err(|screen| format!("no prompt: {screen:?}"))?;
+    session
+        .service
+        .write(
+            &session.id,
+            soksak_sidecar_vt_core::pty::WriteOrigin::Person,
+            &b"show\n"[..],
+        )
+        .unwrap();
+    session
+        .until(|text, _| text.contains("-END") && text.matches("P> ").count() == 2)
+        .await
+        .map_err(|screen| format!("no output line: {screen:?}"))?;
+    session
+        .service
+        .write(
+            &session.id,
+            soksak_sidecar_vt_core::pty::WriteOrigin::Person,
+            INPUT.as_bytes(),
+        )
+        .unwrap();
+    for (step, cols) in [("before", 60u16), ("narrow", 30), ("wide", 60)] {
+        if session.cols != cols {
+            session.resize(cols);
+        }
+        let rows = usize::from(session.rows);
+        let expected = two_line_prompt_rows(usize::from(cols), rows);
+        let end = format!("P> {INPUT}").chars().count();
+        let cursor_row = expected.len()
+            - expected
+                .iter()
+                .rev()
+                .position(|row| !row.is_empty())
+                .unwrap()
+            - 1;
+        let reached = session
+            .until(|text, engine| {
+                let cursor = engine.cursor();
+                text_rows(text, usize::from(cols)) == expected
+                    && usize::from(cursor.row) == cursor_row
+                    && usize::from(cursor.col) == end % usize::from(cols)
+            })
+            .await;
+        let errors = std::mem::take(&mut session.errors);
+        if let Err(screen) = reached {
+            return Err(format!(
+                "{step} at {cols} columns: {screen:?}, expected {expected:?}, errors {errors:?}"
+            ));
+        }
+        let history = session.engine.scrollback().1;
+        if history != 0 || !errors.is_empty() {
+            return Err(format!(
+                "{step} at {cols} columns: {history} history rows, errors {errors:?}"
+            ));
+        }
+    }
+    let _ = session.service.close(&session.id);
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_resize_redraws_a_wrapped_zsh_input_line_without_rows_of_the_previous_width() {
     let _lock = native_pty_test_lock();
@@ -237,6 +354,38 @@ async fn a_resize_redraws_a_wrapped_bash_input_line_without_rows_of_the_previous
         )],
     );
     let result = resize_wrapped_input(open("/bin/bash", "HOME", &directory)).await;
+    let _ = std::fs::remove_dir_all(&directory);
+    result.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_resize_keeps_one_zsh_prompt_of_two_lines_and_rejoins_the_output_above_it() {
+    let _lock = native_pty_test_lock();
+    let directory = startup_directory(
+        "soksak-zsh-two-line-prompt-test",
+        &[(
+            ".zshrc",
+            &format!("PS1=$'LINE-ONE\\nP> '\nalias show='print -r -- {ABOVE}'\n"),
+        )],
+    );
+    let result = resize_two_line_prompt(open("/bin/zsh", "ZDOTDIR", &directory)).await;
+    let _ = std::fs::remove_dir_all(&directory);
+    result.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_resize_keeps_one_bash_prompt_of_two_lines_and_rejoins_the_output_above_it() {
+    let _lock = native_pty_test_lock();
+    let directory = startup_directory(
+        "soksak-bash-two-line-prompt-test",
+        &[(
+            ".bash_profile",
+            &format!(
+                "export BASH_SILENCE_DEPRECATION_WARNING=1\nPS1='LINE-ONE\\nP> '\nalias show='printf \"%s\\n\" {ABOVE}'\n"
+            ),
+        )],
+    );
+    let result = resize_two_line_prompt(open("/bin/bash", "HOME", &directory)).await;
     let _ = std::fs::remove_dir_all(&directory);
     result.unwrap();
 }
