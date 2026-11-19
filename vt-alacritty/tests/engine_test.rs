@@ -1305,17 +1305,36 @@ fn scrollback_keeps_recent_visible_lines_after_overflow_and_resize() {
 fn alternate_screen_is_separate_from_primary_scrollback() {
     let mut engine = AlacrittyEngine::new();
     engine.resize(20, 4);
-    engine.feed(b"primary\r\ntext");
+    engine.feed(b"one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nprimary\r\ntext");
     let primary = text(&engine.screen());
+    let history = engine.scrollback();
+    assert_eq!(
+        history,
+        (0, 3),
+        "the primary screen keeps three history lines"
+    );
     engine.feed(b"\x1b[?1049h");
-    engine.feed(b"alternate");
+    engine.feed(b"alternate\r\n1\r\n2\r\n3\r\n4\r\n5");
     assert!(engine.modes().alt_screen);
-    assert!(text(&engine.screen()).contains("alternate"));
+    assert!(text(&engine.screen()).contains('5'));
     assert!(!text(&engine.screen()).contains("primary"));
+    // The scrollback of the alternate screen, the active screen, has no history.
+    assert_eq!(engine.scrollback(), (0, 0));
+    engine.scroll_viewport(2);
+    assert_eq!(engine.scrollback(), (0, 0));
     engine.feed(b"\x1b[?1049l");
     assert!(!engine.modes().alt_screen);
     assert!(text(&engine.screen()).contains(&primary));
     assert!(!text(&engine.screen()).contains("alternate"));
+    // The primary history returns unchanged.
+    assert_eq!(engine.scrollback(), history);
+    let rows: Vec<String> = engine
+        .screen_rows(0, 3)
+        .expect("the primary history rows")
+        .iter()
+        .map(|row| row.iter().filter_map(|cell| cell.ch.as_deref()).collect())
+        .collect();
+    assert_eq!(rows, ["one", "two", "three"]);
 }
 
 #[test]
