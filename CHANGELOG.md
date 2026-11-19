@@ -1,5 +1,6 @@
 # Changelog
 
+- S200: `make repeat` runs the tests through the cargo-nextest runner of `make test`, each test in its own process, so the tests that count the allocations of their process measure only their own; it ran `cargo test`, where the memory tests of `engine_flood_test.rs` failed.
 - S198: A resize of the primary screen in the prompt state keeps the prompt rows of the previous width on the screen, cut at the new width and without reflow, until the shell redraws; the screen presented between the resize and the redraw no longer shows the prompt erased.
 - S193: `scrollback.history` is the history of the active screen: the alternate screen keeps no history and reports `{offset: 0, history: 0}`, and the primary history returns unchanged when mode 1049 is reset; the engine no longer gives the alternate grid the history limit.
 - S192: Every answer of the engine keeps the order of the queries in the output, also inside a synchronized update: the engine holds the output of the update itself before its scan and processes it at the end of the update as any output, so the answers of the library and of the engine, the erases of the engine and the events of the update follow the output before them; the end of an update counts every row.

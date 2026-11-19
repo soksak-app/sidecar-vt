@@ -183,3 +183,15 @@ test("each Cargo command of build, test and repeat runs under the link check (S1
     assert.match(command, /\bnode scripts\/check-link\.mjs \S*\bcargo (?:build|clippy|test)\b|\bnode scripts\/nextest-run\.mjs\b/, `the command runs Cargo outside the link check: ${command}`);
   }
 });
+
+// A test that measures the allocations of its process, as the tests of engine_flood_test.rs do, requires that no other test
+// runs in that process. make test runs each test in its own process through cargo-nextest, so make repeat runs the tests
+// through the same runner instead of cargo test, which runs the tests of one binary in threads of one process (S200).
+test("make repeat runs each test in its own process through the runner of make test (S200)", { timeout: 30000 }, () => {
+  const lines = recipe("repeat", ["PACKAGE=soksak-sidecar-vt-alacritty", "COUNT=1", "TEST=a_flood_of_line_feeds_reports_no_lost_rows"]).split("\n");
+  assert.ok(!lines.some((line) => /\bcargo test\b/.test(line)), `make repeat runs cargo test:\n${lines.join("\n")}`);
+  const runs = lines.filter((line) => /\bnode scripts\/nextest-run\.mjs --config-file \.config\/nextest\.toml\b/.test(line));
+  assert.equal(runs.length, 1, `make repeat runs no cargo-nextest run:\n${lines.join("\n")}`);
+  assert.match(runs[0], / -p soksak-sidecar-vt-alacritty /);
+  assert.match(runs[0], / -E 'test\(=a_flood_of_line_feeds_reports_no_lost_rows\)'/);
+});

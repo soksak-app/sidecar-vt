@@ -103,14 +103,15 @@ check-push:
 	pnpm exec sok-check docs --range "$(or $(RANGE),origin/main..HEAD)"
 
 # Repeats the tests of PACKAGE, or only the test TEST, COUNT times and reports each run with its elapsed time; the
-# first failing run prints its output and fails. FEATURES selects the package features used by each run.
+# first failing run prints its output and fails. FEATURES selects the package features used by each run. Each run goes
+# through the runner of make test, which runs each test in its own process, because the tests that measure the
+# allocations of their process require that no other test runs in it (S200).
 repeat:
 	@case "$(PACKAGE)" in '') echo "make repeat PACKAGE=<package> COUNT=<n> [TEST=<name>] [FEATURES=<features>]" >&2; exit 2;; esac
 	@case "$(COUNT)" in ''|*[!0-9]*|0) echo "make repeat requires COUNT=<n> with n >= 1" >&2; exit 2;; esac
-	@$(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) $(CHECK_LINK) $(CARGO) test -q -p $(PACKAGE) $(CARGO_FEATURE_ARGS) --no-run
 	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT; run=1; while [ $$run -le $(COUNT) ]; do \
 	  started=$$(date +%s); \
-	  if ! $(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) $(CHECK_LINK) $(CARGO) test -q -p $(PACKAGE) $(CARGO_FEATURE_ARGS) $(if $(TEST),-- --exact $(TEST)) > "$$output" 2>&1; then \
+	  if ! $(NEXTEST) -p $(PACKAGE) $(CARGO_FEATURE_ARGS) $(if $(TEST),-E 'test(=$(TEST))') > "$$output" 2>&1; then \
 	    cat "$$output"; echo "FAIL run $$run of $(COUNT) after $$(( $$(date +%s) - started )) s"; exit 1; fi; \
 	  echo "PASS run $$run of $(COUNT) in $$(( $$(date +%s) - started )) s"; run=$$((run + 1)); done
 
