@@ -364,6 +364,44 @@ pub fn cursor_blink_visible(
     (elapsed_ms / interval).is_multiple_of(2)
 }
 
+/// The elapsed time of the cursor activity, in milliseconds, at which the blink visibility of the
+/// cursor changes next.
+pub fn next_cursor_blink_change(
+    policy: CursorBlinkPolicy,
+    program_blinking: bool,
+    focused: bool,
+    elapsed_ms: u64,
+    interval_ms: u64,
+    idle_timeout_ms: u64,
+) -> Option<u64> {
+    if !focused || (idle_timeout_ms != 0 && elapsed_ms >= idle_timeout_ms) {
+        return None;
+    }
+    let enabled = match policy {
+        CursorBlinkPolicy::Never => false,
+        CursorBlinkPolicy::Always | CursorBlinkPolicy::On => true,
+        CursorBlinkPolicy::Off => program_blinking,
+    };
+    if !enabled {
+        return None;
+    }
+    let interval = interval_ms.max(1);
+    let next = (elapsed_ms / interval + 1) * interval;
+    if idle_timeout_ms != 0 && next >= idle_timeout_ms {
+        // The idle timeout shows the cursor, which is a change only while the cursor is hidden.
+        let visible = cursor_blink_visible(
+            policy,
+            program_blinking,
+            focused,
+            elapsed_ms,
+            interval_ms,
+            idle_timeout_ms,
+        );
+        return (!visible).then_some(idle_timeout_ms);
+    }
+    Some(next)
+}
+
 pub fn effective_cursor_shape(
     program_shape: crate::protocol::CursorShape,
     focused: bool,

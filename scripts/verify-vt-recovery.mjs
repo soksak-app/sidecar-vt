@@ -87,6 +87,13 @@ const lineClient = async (endpoint, clientName, { root = null } = {}) => {
       const value = JSON.parse(line);
       if (value.body?.event === "screen") applyScreen(screens, value);
       const image = value.body?.image;
+      if (root && value.surface && image?.want) {
+        // The host answers a frame request with one tick at the next display frame of the window
+        // (core docs/spec/native-surfaces.md#copy-path-frames).
+        socket.write(`${JSON.stringify({ surface: value.surface, root, body: { image: { tick: {
+          name: image.want.name, generation: image.want.generation, sequence: 1, refreshRate: 120,
+        } } } })}\n`);
+      }
       if (root && value.surface && image?.token) {
         socket.write(`${JSON.stringify({ surface: value.surface, root, body: { image: { consumed: {
           name: image.name, generation: image.generation, raster: image.raster, sequence: image.sequence,

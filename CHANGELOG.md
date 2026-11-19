@@ -1,5 +1,6 @@
 # Changelog
 
+- S197-1: A surface draws a change at the tick that answers its frame request `{"image":{"want":{"name","generation"}}}`, sent once while no request waits, and a surface without a change sends no request; a change within 200 ms after an input is drawn at once. The fixed frame clock of 33 ms is removed. The cursor blink is drawn at the next multiple of the blink interval of the cursor setting, by a timer of that change, instead of a step of a fixed 50 ms interval ([frame requests](docs/spec/vt-core.md#frame-requests)). Verification: `output_without_input_is_drawn_at_the_tick_of_its_frame_request`, `the_cursor_blinks_at_the_interval_of_its_setting` and `the_next_blink_change_is_the_next_step_of_the_interval_of_the_setting` failed before the change and pass after it.
 - S202: A surface task of the persistent service that ends by a panic is reported as the error event `surface task ended: <message>` of its surface and as an error record, through the monitor that the direct service uses.
 - S203: `sok-check events` passes again: the folder claims of messaging recover a poisoned lock.
 - S200-1: Each file of the event writer holds its `log.open` line from the moment it exists: the writer writes the line to a new file and links it to the path, so a reader no longer finds an empty debug file, rotated file or main file before the next flush.

@@ -81,7 +81,7 @@ hook은 프롬프트 앞마다 `133;A`를 보고하고(bash는 readline이 프�
 
 Byte 순서 검증은 raw, no-echo child가 읽고 반환한 전체 byte를 종료 직전 출력까지 포함하여 queue에 넣은 payload의 순서와 비교한다. write 결과를 기다리는 것만으로 수신이나 순서를 증명하지 못한다. 검사는 기대한 payload 뒤의 추가 byte를 포함하여 순서 변경, 누락, 중복 byte를 거부해야 한다.
 
-**child 종료.** child가 reap되면 task는 read가 0을 돌려주거나 대기해야 할 때까지, 또는 64 KiB를 더 읽을 때까지 읽는다. queue에 있거나 일부만 쓰인 입력을 각각 `ok: false`와 이유 `child exited`로 끝내고, master descriptor 둘을 닫은 다음, chunk와 `Exit`를 출력 channel로 보낸다. 그 뒤 남은 job이 쓰는 바이트는 다른 session의 job에서도 그 job에서 오류로 실패하거나 hangup으로 그 job을 끝낸다. service는 그 바이트를 읽지 않았고 쥐지 않는다. macOS에서는 session leader의 종료가 master가 열려 있어도 이미 그 write를 실패시키고, master를 닫으면 terminal이 풀린다. reaper가 보고하기 전에 master write가 EIO로 실패하면 queue는 그 보고나 close를 기다린다. child 종료는 아무것도 kill하지 않는다. 세션 항목은 명시적 close나 owner close까지 남는다. `Exit` 뒤 write는 `session writer is closed`를, resize와 측정은 `session master is closed`를 돌려준다. `Exit` 뒤 첫 close는 process group을 kill하고 `sidecar.vt.kill`로 기록하고 항목을 지운다. surface는 `Exit`로 끝나기 전에 frame clock이 쥔 화면을 그린다.
+**child 종료.** child가 reap되면 task는 read가 0을 돌려주거나 대기해야 할 때까지, 또는 64 KiB를 더 읽을 때까지 읽는다. queue에 있거나 일부만 쓰인 입력을 각각 `ok: false`와 이유 `child exited`로 끝내고, master descriptor 둘을 닫은 다음, chunk와 `Exit`를 출력 channel로 보낸다. 그 뒤 남은 job이 쓰는 바이트는 다른 session의 job에서도 그 job에서 오류로 실패하거나 hangup으로 그 job을 끝낸다. service는 그 바이트를 읽지 않았고 쥐지 않는다. macOS에서는 session leader의 종료가 master가 열려 있어도 이미 그 write를 실패시키고, master를 닫으면 terminal이 풀린다. reaper가 보고하기 전에 master write가 EIO로 실패하면 queue는 그 보고나 close를 기다린다. child 종료는 아무것도 kill하지 않는다. 세션 항목은 명시적 close나 owner close까지 남는다. `Exit` 뒤 write는 `session writer is closed`를, resize와 측정은 `session master is closed`를 돌려준다. `Exit` 뒤 첫 close는 process group을 kill하고 `sidecar.vt.kill`로 기록하고 항목을 지운다. surface는 `Exit`로 끝나기 전에 frame을 기다리는 화면을 그린다.
 
 **close.**
 
@@ -120,7 +120,7 @@ Byte 순서 검증은 raw, no-echo child가 읽고 반환한 전체 byte를 종�
 
 화면 지우기 2(`ESC[2J`)는 화면의 모든 셀을 현재 배경으로 지우고 기록과 커서는 그대로 둔다. 그래서 기록(`ESC[3J`)을 지운 뒤 화면을 지우는 `clear`는 되돌아갈 기록도 스크롤바도 남기지 않는다. 화면 지우기 1(`ESC[1J`)은 커서 위의 모든 줄과 커서 줄의 커서 셀까지를 지운다. 엔진은 두 동작을 격자 라이브러리에 넘기지 않고 출력의 그 위치에서 직접 적용한다. 라이브러리는 `ESC[2J`에서 보이는 줄을 기록으로 옮기고, 커서가 둘째 줄에 있을 때 `ESC[1J`에서 첫 줄을 남기기 때문이다.
 
-사이드카는 호스트가 앞의 래스터에 `consumed`로 답한 뒤에만 래스터를 그린다. 호스트가 래스터를 들고 있는 동안 화면을 바꾸는 출력, 스크롤, 입력은 그 화면을 바뀐 것으로 표시만 하고 그리지 않는다. 호스트가 답하면 사이드카는 [frame clock](#frame-clock)에 맞춰 현재 화면을 한 번 그린다. 그래서 출력이 많이 쏟아져도 출력 조각마다가 아니라 호스트의 답마다, 그리고 clock 구간마다 많아야 래스터 하나가 생긴다. `screen` 답의 구성원은 [화면 메시지](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.ko.md#화면-메시지)에 정의되어 있다.
+사이드카는 호스트가 앞의 래스터에 `consumed`로 답한 뒤에만 래스터를 그린다. 호스트가 래스터를 들고 있는 동안 화면을 바꾸는 출력, 스크롤, 입력은 그 화면을 바뀐 것으로 표시만 하고 그리지 않는다. 호스트가 답하면 사이드카는 창의 [frame](#frame-requests)에 현재 화면을 한 번 그린다. 그래서 출력이 많이 쏟아져도 출력 조각마다가 아니라 호스트의 답마다, 그리고 창의 display frame마다 많아야 래스터 하나가 생긴다. `screen` 답의 구성원은 [화면 메시지](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.ko.md#화면-메시지)에 정의되어 있다.
 
 터미널 래스터는 실제로 적용된 애플리케이션 외관을 따른다. 표면 페이지는 사이드카가 시작할 때와 애플리케이션 테마나 모드가 바뀔 때마다 `theme`을 보낸다. 내용은 `mode`(`dark` 또는 `light`)와, 페이지가 받은 테마 토큰에서 얻은 네 색이다. `background`는 `--card`이고, `foreground`와 `cursor`는 `--fg`다. 터미널이 채우는 카드의 색이므로, 터미널은 애플리케이션의 다른 모든 표면처럼 카드의 일부로 보인다. `selection`은 `--rail`, 즉 테마의 강조 레일이므로 선택된 텍스트가 카드와 테두리와 뚜렷이 구분된다. 테마에는 표면 색이 따로 없다. 셸 페이지, 터미널, 네이티브 표면이 그리기 전에 보이는 대역 모두 `--card`와 `--fg`를 쓰므로, 어떤 표면도 애플리케이션의 다른 곳이 쓰지 않는 색을 보이지 않는다. 사이드카는 다른 모드와 `#rrggbb`가 아닌 색을 거부한다. 색은 기본 배경과 전경, 커서, 선택 배경을 바꾼다. 선택된 셀은 프로그램이 OSC 17이나 19 강조 색을 정하지 않는 한 그 배경 위에서 자기 텍스트 색을 유지한다. `mode`는 인덱스 ANSI 팔레트를 고르며, 테마는 그 팔레트를 바꾸지 않는다. 프로그램이 표준 팔레트와의 대비에 맞춰 그 색을 고르기 때문이다. 페이지는 적용된 모드와 배경을 `terminal.session`의 `theme`과 `background`로 보고한다. 래스터는 셀 격자 밖의 그림, 즉 마지막 열의 오른쪽과 마지막 행 아래를 현재 기본 배경으로 채운다. 기본 배경은 테마 배경이거나, 프로그램이 OSC 11로 정한 색이다. 화면과 각 `view` 이벤트는 그 색을 `background`로 보고한다. DEC private mode 2031을 켠 프로그램은 `theme` 요청이 적용 중인 theme을 바꾼 뒤 새 `mode`의 color scheme report를 받고, `CSI ? 996 n`은 언제든 그 mode로 답한다([DEC 2031](terminal-protocols.ko.md#vendor-계약)). mode가 없으면 프로그램은 OSC 10이나 OSC 11을 다시 물어야만 새 theme을 알 수 있다. 이 변경은 이후와 기존 화면 셀에 적용되며, PTY, 세션, 텍스트, 커서 위치, 셀 메트릭을 다시 만들지 않는다. 모드는 그림 표면의 속성이며 다음 완전한 프레임에 적용된다. 전송 중인 그림은 바뀌지 않는다.
 
@@ -181,9 +181,11 @@ Native IME는 marked text를 소유한다. 각 native input report는 순서 있
 
 `sidecar`와 `native image` 원천은 카드가 보여 주는 표면 오류도 보고한다. 둘 다 해결되지 않으므로, 카드 표시와 `terminal.session.error`는 표면이 닫힐 때까지 그 오류를 보여 준다.
 
-### Frame clock
+### Frame requests
 
-surface는 session 출력을 33 ms frame clock으로 그린다. 마지막 frame 뒤 33 ms가 지나기 전에 온 변경은 33 ms가 지났을 때 그 구간의 다른 변경과 함께 그리고, 더 긴 멈춤 뒤에 온 변경은 바로 그린다. cursor blink도 같은 clock을 따른다. `input`이나 `paste` 요청 뒤 200 ms 동안은 출력을 바로 그리므로 타이핑의 echo가 기다리지 않는다. 변경이 없는 clock tick은 frame을 그리지 않는다. frame 기록은 clock의 frame을 reason `clock`으로 적는다.
+surface는 core의 [copy path frames](https://github.com/soksak-app/core/blob/main/docs/spec/native-surfaces.md#copy-path-frames)가 정하는 대로 화면의 변경을 host에 요청한 창의 display frame에 그리며, 자신의 frame 간격을 갖지 않는다. 변경은 화면을 바뀐 것으로 표시하고, 기다리는 요청이 없으면 frame 요청 `{"image":{"want":{"name","generation"}}}`를 한 번 보낸다. 그 답인 tick은 바뀐 화면을 frame reason `tick`으로 그린다. 그 tick까지의 변경은 함께 그린다. 변경이 없는 surface는 요청을 보내지 않고 frame을 그리지 않는다. `input`이나 `paste` 요청 뒤 200 ms 동안은 변경을 요청 없이 바로 그리므로 타이핑의 echo가 기다리지 않는다. host가 래스터를 들고 있는 동안의 변경은 그 답 뒤에, 200 ms 안이면 바로, 그 밖에는 요청의 tick에 그린다. tick은 요청을 끝낸다. 그리기를 멈춘 region과 요청의 거부(`notAttached`, `stale`, `malformed`)도 요청을 끝내며, 거부는 surface의 오류 기록이다.
+
+cursor의 깜빡임은 어떤 event도 알리지 않는 변경이므로, surface는 그것을 깜빡임 보임이 다음에 바뀌는 때의 timer로 예약한다. 그때는 cursor의 마지막 활동 뒤 cursor 설정의 깜빡임 간격의 다음 배수이고, 그때 cursor가 숨어 있으면 idle timeout이다. 간격은 설정의 시간 길이이며 frame 시간이 아니다. 그때 깜빡임은 위와 같은 변경이다. focus가 없거나 숨은 cursor, policy가 `Never`인 cursor, 깜빡이는 program 없이 policy가 `Off`인 cursor, idle timeout이 지난 cursor는 깜빡이지 않으므로 timer가 없다.
 
 ### Strip frame
 
