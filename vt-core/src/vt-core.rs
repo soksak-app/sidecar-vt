@@ -7,6 +7,7 @@ pub mod events;
 pub mod guard;
 pub mod inline_image;
 pub mod locale;
+pub mod messaging;
 pub mod palette;
 pub mod platform;
 pub mod policy;
@@ -16,6 +17,7 @@ pub mod screen_hash;
 pub mod screen_stream;
 pub mod service;
 pub mod shell_integration;
+pub mod shell_state;
 pub mod stall;
 pub mod thread;
 

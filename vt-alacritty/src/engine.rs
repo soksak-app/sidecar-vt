@@ -327,14 +327,17 @@ fn parse_vendor_osc(selector: &[u8], payload: &[u8]) -> Result<Option<EngineEven
                 "D" => ShellMarker::CommandFinished,
                 value => return Err(format!("OSC 133 shell marker is unsupported: {value}")),
             };
-            Ok(Some(EngineEvent::ShellState {
-                marker,
-                params: if params.is_empty() {
-                    Vec::new()
-                } else {
-                    params.split(';').map(str::to_string).collect()
-                },
-            }))
+            let params: Vec<String> = if params.is_empty() {
+                Vec::new()
+            } else {
+                params.split(';').map(str::to_string).collect()
+            };
+            // A finished mark carries the exit code of the command; a malformed code rejects the mark
+            // (core docs/spec/terminal-state.md#marks).
+            if marker == ShellMarker::CommandFinished {
+                soksak_sidecar_vt_core::shell_state::exit_code(&params)?;
+            }
+            Ok(Some(EngineEvent::ShellState { marker, params }))
         }
         "1337" => Ok(None),
         _ => Err(format!("unsupported vendor OSC selector {selector}")),
