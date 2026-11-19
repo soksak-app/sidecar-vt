@@ -30,6 +30,8 @@ test("the kinds of the tracked sources are Rust, JavaScript, shell and the line 
   assert.equal(sourceKind("vt-core/src/pty.rs", ""), "rust");
   assert.equal(sourceKind("scripts/check.mjs", ""), "javascript");
   assert.equal(sourceKind("vt-core/src/shell-integration/zshenv", ""), "bash");
+  assert.equal(sourceKind("vt-core/src/shell-integration/bash-integration.bash", ""), "bash");
+  assert.equal(sourceKind("vt-core/src/shell-integration/zsh-integration.zsh", ""), "bash");
   assert.equal(sourceKind("tool", "#!/bin/sh\n"), "bash");
   assert.equal(sourceKind("Makefile", ""), "lines");
   assert.equal(sourceKind(".github/workflows/ci.yml", ""), "lines");

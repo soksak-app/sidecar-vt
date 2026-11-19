@@ -27,7 +27,7 @@ const GRAMMARS = {
 export function sourceKind(path, text) {
   if (path.endsWith(".rs")) return "rust";
   if (/\.(mjs|cjs|js)$/.test(path)) return "javascript";
-  if (path.endsWith(".sh") || /^#!.*\b(sh|bash|zsh)\b/.test(text) || /^\.?z(shenv|shrc|profile|login)$/.test(basename(path))) return "bash";
+  if (/\.(sh|bash|zsh)$/.test(path) || /^#!.*\b(sh|bash|zsh)\b/.test(text) || /^\.?z(shenv|shrc|profile|login)$/.test(basename(path))) return "bash";
   if (basename(path) === "Makefile" || /\.(toml|ya?ml)$/.test(path)) return "lines";
   return null;
 }
