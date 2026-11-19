@@ -8201,6 +8201,11 @@ async fn a_frame_sends_its_view_when_the_cursor_or_the_scrollback_changes() {
     assert!(view["cursor"]["visible"].is_boolean(), "{view}");
     assert!(view["scrollback"]["history"].is_u64(), "{view}");
     assert!(view["scrollback"]["offset"].is_u64(), "{view}");
+    // The members of the session state of core docs/spec/terminal-read.md#session-state.
+    assert!(view["scrollback"]["dropped"].is_u64(), "{view}");
+    assert!(view["alternate"]["active"].is_boolean(), "{view}");
+    assert!(view["alternate"]["history"].is_u64(), "{view}");
+    assert!(view["alternate"]["dropped"].is_u64(), "{view}");
 }
 
 #[tokio::test]
@@ -9249,4 +9254,53 @@ async fn a_persistent_surface_task_that_panics_is_reported_as_an_error_event() {
         "surface task ended: one surface task consumes the events of a session port",
         "{event}"
     );
+}
+
+/// Covers core docs/spec/terminal-read.md#session-state: after each output of a real PTY session the sidecar reads
+/// the leader of the foreground process group of the terminal, and sends the event `foreground` when it differs from
+/// the value it sent before. `less` takes the terminal and draws its screen, so its output names it; `q` returns the
+/// terminal to the shell, whose prompt names the shell again. Every wait ends on an output line of the sidecar.
+#[tokio::test]
+async fn the_foreground_event_names_the_program_that_holds_the_terminal() {
+    let file = tempfile::NamedTempFile::new().expect("a file for less");
+    let numbered: String = (1..=200).map(|line| format!("{line}\n")).collect();
+    std::fs::write(file.path(), numbered).expect("the numbered lines are written");
+    let directory = std::fs::canonicalize("/tmp").expect("the folder of the session");
+    let (mut to_serve, mut lines, _task) = start_messaging_service();
+    for line in [
+        r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}"#,
+        r#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}"#,
+    ] {
+        to_serve
+            .write_all(format!("{line}\n").as_bytes())
+            .await
+            .expect("the request line was not written");
+    }
+    let is_foreground = |value: &serde_json::Value| {
+        value["surface"] == "s1" && value["body"]["event"] == "foreground"
+    };
+    let shell = next_line_where(&mut lines, is_foreground).await;
+    let shell = shell["body"]["foreground"].clone();
+    assert!(shell["pid"].is_i64(), "{shell}");
+    assert!(shell["command"].is_string(), "{shell}");
+    assert_eq!(shell["cwd"], directory.to_str().unwrap(), "{shell}");
+    let input = serde_json::json!({"surface": "s1", "body": {"operation": "input", "actions": [{"type": "insert", "text": format!("/usr/bin/less {}\r", file.path().display()), "replacementRange": null, "attributed": false}], "preedit": {"text": "", "markedRange": null, "selectedRange": null, "replacementRange": null, "attributed": false}}});
+    to_serve
+        .write_all(format!("{input}\n").as_bytes())
+        .await
+        .expect("the input line was not written");
+    let less = next_line_where(&mut lines, |value| {
+        is_foreground(value) && value["body"]["foreground"]["command"] == "/usr/bin/less"
+    })
+    .await;
+    let less = less["body"]["foreground"].clone();
+    assert_ne!(less["pid"], shell["pid"], "{less}");
+    assert_eq!(less["cwd"], directory.to_str().unwrap(), "{less}");
+    let quit = serde_json::json!({"surface": "s1", "body": {"operation": "input", "actions": [{"type": "insert", "text": "q", "replacementRange": null, "attributed": false}], "preedit": {"text": "", "markedRange": null, "selectedRange": null, "replacementRange": null, "attributed": false}}});
+    to_serve
+        .write_all(format!("{quit}\n").as_bytes())
+        .await
+        .expect("the input line was not written");
+    let back = next_line_where(&mut lines, is_foreground).await;
+    assert_eq!(back["body"]["foreground"], shell, "{back}");
 }

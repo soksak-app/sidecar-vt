@@ -1305,6 +1305,46 @@ fn scrollback_keeps_recent_visible_lines_after_overflow_and_resize() {
     assert!(!text(&wide).contains("one"));
 }
 
+/// The screen carries the members of the session state of core docs/spec/terminal-read.md: the rows that the
+/// history limit dropped from the primary history, and the alternate member with its kept rows.
+#[test]
+fn the_screen_carries_the_dropped_primary_rows_and_the_alternate_member() {
+    let mut engine = AlacrittyEngine::with_history_limit(3);
+    engine.resize(10, 4);
+    engine.feed(b"1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9");
+    let screen = engine.screen();
+    let scrollback = screen.scrollback;
+    assert_eq!(
+        (scrollback.offset, scrollback.history, scrollback.dropped),
+        (0, 3, 2),
+        "nine lines on four rows push five rows up, and a limit of three drops two"
+    );
+    assert_eq!(
+        screen.alternate,
+        soksak_sidecar_vt_core::AlternateRows {
+            active: false,
+            history: 0,
+            dropped: 0
+        }
+    );
+    engine.feed(b"\x1b[?1049h\x1b[Ha\r\nb\r\nc\r\nd\r\ne\r\nf");
+    let screen = engine.screen();
+    let scrollback = screen.scrollback;
+    assert_eq!(
+        (scrollback.offset, scrollback.history, scrollback.dropped),
+        (0, 0, 2),
+        "the alternate screen has no history and the primary drop count stays"
+    );
+    assert_eq!(
+        screen.alternate,
+        soksak_sidecar_vt_core::AlternateRows {
+            active: true,
+            history: 2,
+            dropped: 0
+        }
+    );
+}
+
 #[test]
 fn alternate_screen_is_separate_from_primary_scrollback() {
     let mut engine = AlacrittyEngine::new();
