@@ -1,6 +1,7 @@
 # 변경 기록
 
 - S186: candidate는 0.0.29다.
+- S186: v0.0.29가 asset `soksak-sidecar-vt-alacritty-0.0.29-darwin-arm64.tgz`와 함께 publish되었다. S185의 view background를 담는다.
 - S188: guard의 각 `unwrap_or`가 기본값을 설명하고 각 guard emit가 event 이름을 밝혀 event-source 검사가 통과한다.
 - S185: `view` 이벤트가 그 frame의 기본 배경(테마 배경이나 OSC 11 색)인 `background`를 담고, 기본 배경이 마지막 `view` 이벤트와 다른 frame은 `view` 이벤트를 보낸다. plugin terminal 0.0.47이 이를 요구한다.
 - S187: S181 소스를 rustfmt로 정리해 Rust 형식 검사가 통과한다. 코드는 바뀌지 않았다.
