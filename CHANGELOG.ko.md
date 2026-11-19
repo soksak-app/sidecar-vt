@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S200-1: event writer의 각 file은 존재하는 순간부터 `log.open` 줄을 담는다. writer가 그 줄을 새 file에 쓰고 path에 link하므로, reader는 다음 flush 전에 빈 debug file, 회전된 file, 주 file을 더 이상 찾지 않는다.
 - S200: `make repeat`는 `make test`의 cargo-nextest runner로 각 test를 자기 process에서 실행하므로, 자기 process의 allocation을 세는 test는 자기 것만 잰다. 이전에는 `cargo test`를 실행했고, 거기서 `engine_flood_test.rs`의 memory test가 실패했다.
 - S198: 프롬프트 상태에서 주 화면의 크기가 바뀌면, 셸이 다시 그릴 때까지 이전 너비의 프롬프트 행이 새 너비에서 잘린 채 재배치 없이 화면에 남는다. 크기 변경과 다시 그리기 사이에 표시되는 화면은 더 이상 지워진 프롬프트를 보이지 않는다.
 - S193: `scrollback.history`는 활성 화면의 history다. 대체 화면은 history를 보존하지 않고 `{offset: 0, history: 0}`을 보고하며, 주 화면의 history는 모드 1049 해제 때 그대로 돌아온다. engine은 더 이상 대체 grid에 history 한도를 주지 않는다.

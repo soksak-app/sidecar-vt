@@ -1,5 +1,6 @@
 # Changelog
 
+- S200-1: Each file of the event writer holds its `log.open` line from the moment it exists: the writer writes the line to a new file and links it to the path, so a reader no longer finds an empty debug file, rotated file or main file before the next flush.
 - S200: `make repeat` runs the tests through the cargo-nextest runner of `make test`, each test in its own process, so the tests that count the allocations of their process measure only their own; it ran `cargo test`, where the memory tests of `engine_flood_test.rs` failed.
 - S198: A resize of the primary screen in the prompt state keeps the prompt rows of the previous width on the screen, cut at the new width and without reflow, until the shell redraws; the screen presented between the resize and the redraw no longer shows the prompt erased.
 - S193: `scrollback.history` is the history of the active screen: the alternate screen keeps no history and reports `{offset: 0, history: 0}`, and the primary history returns unchanged when mode 1049 is reset; the engine no longer gives the alternate grid the history limit.

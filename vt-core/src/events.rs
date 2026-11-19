@@ -389,7 +389,7 @@ impl EventLog {
         EventLog::start(options).map(Arc::new)
     }
 
-    /// Creates the folder (mode 0700) and the file (mode 0600), writes `log.open` and starts the writer thread.
+    /// Creates the folder (mode 0700) and the file (mode 0600) with its `log.open` line, and starts the writer thread.
     pub fn start(options: Options) -> Result<EventLog, String> {
         if options.rotate_bytes == 0 {
             return Err("event writer: rotate_bytes must be positive".into());
@@ -411,13 +411,6 @@ impl EventLog {
         let debug_path = options
             .directory
             .join(format!("{ROLE}-{}.debug.jsonl", options.boot));
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .custom_flags(libc::O_CLOEXEC)
-            .open(&path)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
         let (sender, receiver) = sync_channel(options.queue_events + RESERVED_FOR_REQUESTS);
         let queued_events = Arc::new(AtomicUsize::new(0));
         let queued_bytes = Arc::new(AtomicUsize::new(0));
@@ -441,34 +434,32 @@ impl EventLog {
             }))
             .map_err(|e| format!("log.open: {e}"))?,
         );
+        let mut output = Output::new(
+            path.clone(),
+            debug_path.clone(),
+            options.rotate_bytes,
+            options.generations,
+            &open,
+            policy,
+        );
+        output
+            .start()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
         let writer = {
             let queued_bytes = Arc::clone(&queued_bytes);
             let queued_events = Arc::clone(&queued_events);
             let loss = Arc::clone(&loss);
             let interval = options.batch_interval;
-            let path_for_writer = path.clone();
-            let debug_path_for_writer = debug_path.clone();
-            let rotate_bytes = options.rotate_bytes;
-            let generations = options.generations;
             std::thread::Builder::new()
                 .name("event-log-writer".into())
                 .spawn(move || {
                     write_loop(
-                        Output::new(
-                            file,
-                            path_for_writer,
-                            debug_path_for_writer,
-                            rotate_bytes,
-                            generations,
-                            &open,
-                            policy,
-                        ),
+                        output,
                         receiver,
                         queued_bytes,
                         queued_events,
                         loss,
                         interval,
-                        open,
                     )
                 })
                 .map_err(|e| format!("event writer thread: {e}"))?
@@ -885,7 +876,6 @@ struct Output {
 impl Output {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        file: File,
         path: PathBuf,
         debug_path: PathBuf,
         rotate_bytes: u64,
@@ -895,15 +885,30 @@ impl Output {
     ) -> Output {
         Output {
             policy,
-            files: [
-                LogFile::new(path, Some(file)),
-                LogFile::new(debug_path, None),
-            ],
+            files: [LogFile::new(path, None), LogFile::new(debug_path, None)],
             rotate_bytes,
             generations,
             open_fields: open.fields.get().to_string(),
             seq: 0,
         }
+    }
+
+    /// Creates the main file with its `log.open` line.
+    fn start(&mut self) -> std::io::Result<()> {
+        self.open_file(0)
+    }
+
+    /// Creates the file of a channel with the `log.open` line of the next `seq` on disk, so a reader that finds the file
+    /// finds its first line (read_run_lines reads the debug file as soon as it exists).
+    fn open_file(&mut self, channel: usize) -> std::io::Result<()> {
+        let text = format!("{}\n", line(self.seq + 1, &self.open_event()));
+        let file = create_log_file(&self.files[channel].path, &text)?;
+        self.seq += 1;
+        let entry = &mut self.files[channel];
+        entry.file = Some(file);
+        entry.size = text.len() as u64;
+        entry.file_len = entry.size;
+        Ok(())
     }
 
     /// Adds the line of an event with the next `seq` to the batch of a file.
@@ -1034,12 +1039,8 @@ impl Output {
     fn push(&mut self, pending: &Pending) {
         let channel = channel_of(pending.level);
         if self.files[channel].file.is_none() {
-            match open_log_file(&self.files[channel].path) {
-                Ok(file) => {
-                    self.files[channel].file = Some(file);
-                    let open = self.open_event();
-                    self.append(channel, &open);
-                }
+            match self.open_file(channel) {
+                Ok(()) => {}
                 Err(error) => {
                     // The event is not written; its seq stays taken, so the audit shows the gap next to this report.
                     self.seq += 1;
@@ -1061,12 +1062,7 @@ impl Output {
             let full = self.files[channel].size;
             match self.rotate(channel) {
                 Ok(removed) => {
-                    let file = &mut self.files[channel];
-                    file.size = 0;
-                    file.file_len = 0;
-                    file.retry_rotation_at = 0;
-                    let open = self.open_event();
-                    self.append(channel, &open);
+                    self.files[channel].retry_rotation_at = 0;
                     let rotated = Pending::of_writer(
                         Level::Info,
                         "log.rotated",
@@ -1223,20 +1219,43 @@ impl Output {
         std::fs::rename(&path, generation(1))
             .map_err(|error| format!("rotation could not move {}: {error}", path.display()))?;
         // The new file is opened before the old one is released, so a failure leaves the writer with a file to write.
-        let next = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .custom_flags(libc::O_CLOEXEC)
-            .open(&path)
-            .map_err(|error| format!("rotation could not open {}: {error}", path.display()))?;
-        let full = self.files[channel].file.replace(next);
+        let full = self.files[channel].file.take();
+        if let Err(error) = self.open_file(channel) {
+            self.files[channel].file = full;
+            return Err(format!(
+                "rotation could not open {}: {error}",
+                path.display()
+            ));
+        }
         if let Some(file) = full
             && let Err(error) = file.sync_all()
         {
             self.record_failure(format!("rotation could not sync the full file: {error}"));
         }
         Ok(removed)
+    }
+}
+
+/// Creates the file of `path` with its first line `first` on disk and opens it to append. The line is written to a new
+/// file of the same folder, which is then linked to `path` without replacing a file there, so no reader finds the file
+/// without its first line. A file that is already at `path` gets the line appended, as a writer that opens an existing
+/// file to append writes it.
+fn create_log_file(path: &Path, first: &str) -> std::io::Result<File> {
+    let folder = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other(format!("{} has no folder", path.display())))?;
+    let mut staged = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o600))
+        .tempfile_in(folder)?;
+    staged.write_all(first.as_bytes())?;
+    match staged.persist_noclobber(path) {
+        Ok(_) => open_log_file(path),
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let mut file = open_log_file(path)?;
+            file.write_all(first.as_bytes())?;
+            Ok(file)
+        }
+        Err(error) => Err(error.error),
     }
 }
 
@@ -1257,9 +1276,7 @@ fn write_loop(
     queued_events: Arc<AtomicUsize>,
     loss: Arc<Loss>,
     interval: Duration,
-    open: Pending,
 ) {
-    out.push(&open);
     out.start_policy();
     let record_loss = |out: &mut Output| {
         for reason in Reason::ALL {
@@ -1466,3 +1483,7 @@ pub mod test_support {
 #[cfg(test)]
 #[path = "../tests/events/flush_boundary_test.rs"]
 mod flush_boundary_test;
+
+#[cfg(test)]
+#[path = "../tests/events/file_start_test.rs"]
+mod file_start_test;
