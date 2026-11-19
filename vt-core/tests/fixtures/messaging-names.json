@@ -1,0 +1,16 @@
+{
+  "contract": "docs/spec/messaging.md#message",
+  "cases": [
+    {"name": "s1.a1b2.txt", "result": {"from": "s1"}},
+    {"name": "surface.with.dots.token.txt", "result": {"from": "surface.with.dots"}},
+    {"name": "3f2c9a10-7e7b-4d1e-9a3c-2b6a1d0e9f11.0001.txt", "result": {"from": "3f2c9a10-7e7b-4d1e-9a3c-2b6a1d0e9f11"}},
+    {"name": "note.txt", "result": "invalid-sender"},
+    {"name": ".token.txt", "result": "invalid-sender"},
+    {"name": "s1..txt", "result": "invalid-sender"},
+    {"name": ".txt", "result": "invalid-sender"},
+    {"name": ".tmp-8d1f", "result": "ignored"},
+    {"name": "s1.a1b2.txt.tmp", "result": "ignored"},
+    {"name": "s1.a1b2.TXT", "result": "ignored"},
+    {"name": "s1.a1b2.md", "result": "ignored"}
+  ]
+}
