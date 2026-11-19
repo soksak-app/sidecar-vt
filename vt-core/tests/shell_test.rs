@@ -443,6 +443,165 @@ async fn a_resize_during_bash_startup_does_not_report_a_command_at_the_first_pro
     );
 }
 
+/// Opens `shell` with the startup files in a folder that `variable` names, and returns the
+/// service, the session and its output channel.
+fn open_marked_shell(
+    shell: &str,
+    variable: &str,
+    home: &std::path::Path,
+) -> (PtyService, String, tokio::sync::mpsc::Receiver<DaemonEvent>) {
+    let service =
+        PtyService::new(events_test::TestEvents::new().handle()).with_environment(vec![(
+            variable.to_string(),
+            Some(home.to_path_buf().into_os_string()),
+        )]);
+    let (tx, rx) = soksak_sidecar_vt_core::pty::output_channel();
+    let session = service
+        .open_shell(
+            ShellOwner {
+                owner: "",
+                surface: "",
+            },
+            shell,
+            None,
+            80,
+            24,
+            tx,
+        )
+        .expect("open a shell session");
+    (service, session, rx)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zsh_marks_each_line_of_its_prompts_and_keeps_the_user_prompts_for_commands() {
+    let _lock = native_pty_test_lock();
+    let home = startup_directory(
+        "soksak-zsh-prompt-marks-test",
+        &[(".zshrc", "PS1='T> '\nPS2='C> '\n")],
+    );
+    let (service, session, mut rx) = open_marked_shell("/bin/zsh", "ZDOTDIR", &home);
+    let mut output = String::new();
+    // core docs/spec/terminal-state.md#prompt-region: A from precmd, then PS1 between P;k=i and B.
+    let first = [
+        "\x1b]133;A\x07",
+        "\x1b]133;P;k=i\x07",
+        "T> ",
+        "\x1b]133;B\x07",
+    ];
+    let prompted = collect_until(&mut rx, &mut output, |text| in_order(text, &first)).await;
+    assert!(
+        prompted,
+        "zsh did not mark its prompt {first:?}: {output:?}"
+    );
+    output.clear();
+    service
+        .write(
+            &session,
+            soksak_sidecar_vt_core::pty::WriteOrigin::Person,
+            &b"\nfor word in a\n"[..],
+        )
+        .unwrap();
+    let continued = ["\x1b]133;P;k=s\x07", "C> ", "\x1b]133;B\x07"];
+    let marked = collect_until(&mut rx, &mut output, |text| in_order(text, &continued)).await;
+    assert!(
+        marked,
+        "zsh did not mark its continuation prompt {continued:?}: {output:?}"
+    );
+    // An empty line runs precmd without preexec, and its prompt carries one mark.
+    assert_eq!(
+        output.matches("\x1b]133;P;k=i\x07").count(),
+        1,
+        "the prompt after the empty line must carry one mark: {output:?}"
+    );
+    output.clear();
+    service
+        .write(
+            &session,
+            soksak_sidecar_vt_core::pty::WriteOrigin::Person,
+            &b"do print -r -- \"PROMPTS=[$PS1][$PS2]\"; done\n"[..],
+        )
+        .unwrap();
+    // A command sees the prompts of the startup files, and the next prompt is marked once.
+    let expected = [
+        "\x1b]133;C\x07",
+        "PROMPTS=[T> ][C> ]\r\n",
+        "\x1b]133;D;0\x07",
+        "\x1b]133;A\x07",
+        "\x1b]133;P;k=i\x07",
+        "T> ",
+        "\x1b]133;B\x07",
+    ];
+    let reported = collect_until(&mut rx, &mut output, |text| in_order(text, &expected)).await;
+    let _ = service.close(&session);
+    let _ = std::fs::remove_dir_all(&home);
+    assert!(
+        reported,
+        "zsh did not report {expected:?} in order: {output:?}"
+    );
+    assert_eq!(
+        output.matches("\x1b]133;P;k=i\x07").count(),
+        1,
+        "the prompt after the command must carry one mark: {output:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bash_marks_each_line_break_of_its_prompt_and_keeps_the_user_prompt_for_commands() {
+    let _lock = native_pty_test_lock();
+    let home = startup_directory(
+        "soksak-bash-prompt-marks-test",
+        &[(
+            ".bash_profile",
+            "export BASH_SILENCE_DEPRECATION_WARNING=1\nPS1='L1\\nT> '\n",
+        )],
+    );
+    let (service, session, mut rx) = open_marked_shell("/bin/bash", "HOME", &home);
+    let mut output = String::new();
+    // core docs/spec/terminal-state.md#prompt-region: A;redraw=last, then P;k=s after the line
+    // break of PS1.
+    let first = [
+        "\x1b]133;A;redraw=last\x07",
+        "L1",
+        "\x1b]133;P;k=s\x07",
+        "T> ",
+    ];
+    let prompted = collect_until(&mut rx, &mut output, |text| in_order(text, &first)).await;
+    assert!(
+        prompted,
+        "bash did not mark its prompt {first:?}: {output:?}"
+    );
+    output.clear();
+    // An empty line runs the prompt commands without a command; the prompt stays marked once.
+    service
+        .write(
+            &session,
+            soksak_sidecar_vt_core::pty::WriteOrigin::Person,
+            &b"\nprintf 'PROMPT=[%s]\\n' \"$PS1\"\n"[..],
+        )
+        .unwrap();
+    let expected = [
+        "\x1b]133;C\x07",
+        "PROMPT=[L1\\nT> ]\r\n",
+        "\x1b]133;D;0\x07",
+        "\x1b]133;A;redraw=last\x07",
+        "L1",
+        "\x1b]133;P;k=s\x07",
+        "T> ",
+    ];
+    let reported = collect_until(&mut rx, &mut output, |text| in_order(text, &expected)).await;
+    let _ = service.close(&session);
+    let _ = std::fs::remove_dir_all(&home);
+    assert!(
+        reported,
+        "bash did not report {expected:?} in order: {output:?}"
+    );
+    assert_eq!(
+        output.matches("\x1b]133;P;k=s\x07").count(),
+        2,
+        "the prompt after the empty line and the prompt after the command must carry one mark each: {output:?}"
+    );
+}
+
 #[test]
 fn a_start_directory_must_be_an_existing_absolute_directory() {
     assert_eq!(resolve_directory("/tmp").unwrap(), "/tmp");

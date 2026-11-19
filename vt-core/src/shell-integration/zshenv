@@ -29,8 +29,24 @@ fi
             done
             'builtin' 'print' -n "\e]7;file://${HOST}${encoded}\a"
         }
-        # Before the prompt: the exit status of the previous command when there was one (D), the working directory, and
-        # the prompt start (A).
+        # The marks of the prompt lines (core docs/spec/terminal-state.md#prompt-region): P;k=i at the start and B at the
+        # end of PS1, P;k=s at the start and B at the end of PS2. zsh prints them each time it draws a prompt again, also
+        # after SIGWINCH, so each drawn prompt records its row.
+        _soksak_ps1_start=$'%{\e]133;P;k=i\a%}'
+        _soksak_ps2_start=$'%{\e]133;P;k=s\a%}'
+        _soksak_prompt_end=$'%{\e]133;B\a%}'
+        # Removes the marks that _soksak_mark added, so that a command and the hooks before the next prompt see the
+        # prompts of the startup files.
+        _soksak_unmark() {
+            (( ${+_soksak_marked} )) || 'builtin' 'return' 0
+            PS1=${${PS1#"$_soksak_ps1_start"}%"$_soksak_prompt_end"}
+            PS2=${${PS2#"$_soksak_ps2_start"}%"$_soksak_prompt_end"}
+            'builtin' 'unset' '_soksak_marked'
+        }
+        # Before the prompt: the exit status of the previous command when there was one (D), the working directory, the
+        # prompt start (A) on a fresh line, and the marks of the prompt lines. A precmd hook that runs later can set the
+        # prompts again, so the hook moves itself to the end of precmd_functions for the next prompt. Without
+        # prompt_percent a prompt cannot hold the marks, and A alone starts the region.
         _soksak_precmd() {
             'builtin' 'local' ret=$?
             if (( ${+_soksak_running} )); then
@@ -39,9 +55,19 @@ fi
             fi
             _soksak_directory
             'builtin' 'print' -n '\e]133;A\a'
+            _soksak_unmark
+            if [[ ${precmd_functions[-1]} != _soksak_precmd ]]; then
+                precmd_functions=(${precmd_functions:#_soksak_precmd} _soksak_precmd)
+            fi
+            if [[ -o prompt_percent ]]; then
+                PS1=$_soksak_ps1_start$PS1$_soksak_prompt_end
+                PS2=$_soksak_ps2_start$PS2$_soksak_prompt_end
+                _soksak_marked=1
+            fi
         }
-        # Before a command runs: the command start (C).
+        # Before a command runs: the prompts of the startup files and the command start (C).
         _soksak_preexec() {
+            _soksak_unmark
             _soksak_running=1
             'builtin' 'print' -n '\e]133;C\a'
         }

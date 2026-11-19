@@ -4,7 +4,7 @@ use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::{Cell as GridCell, Flags};
 use alacritty_terminal::term::{Config, Osc52, Term, TermMode};
-use alacritty_terminal::vte::ansi::{Color, CursorShape, Handler, NamedColor, Processor, Rgb};
+use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb};
 use alacritty_terminal::vte::{Params, Parser, Perform};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -14,7 +14,7 @@ use soksak_sidecar_vt_core::{
     InlineAnchor, Modes, Screen, ShellMarker, TerminalTheme, ThemeMode, default_terminal_color,
     inline_image::MAX_ENCODED_BYTES, inline_image::parse as parse_inline_image,
 };
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::time::Instant;
 
@@ -319,9 +319,14 @@ fn parse_vendor_osc(selector: &[u8], payload: &[u8]) -> Result<Option<EngineEven
                 if let Some(value) = parameter.strip_prefix("redraw=") {
                     parse_redraw(value)?;
                 }
+                if let Some(value) = parameter.strip_prefix("k=") {
+                    parse_prompt_kind(value)?;
+                }
             }
             let marker = match marker {
-                "A" => ShellMarker::PromptStart,
+                // P, the explicit start of one line of a prompt, is the prompt start that A also
+                // gives after its fresh line (core docs/spec/terminal-state.md#marks).
+                "A" | "P" => ShellMarker::PromptStart,
                 "B" => ShellMarker::PromptEnd,
                 "C" => ShellMarker::CommandStart,
                 "D" => ShellMarker::CommandFinished,
@@ -354,6 +359,16 @@ fn parse_redraw(value: &str) -> Result<Redraw, String> {
         "1" => Ok(Redraw::Prompt),
         "last" => Ok(Redraw::LastLine),
         value => Err(format!("OSC 133 redraw value is unsupported: {value}")),
+    }
+}
+
+/// OSC 133 `k` parameter: the kind of a prompt line. `i` is the first line of a prompt, `c` and
+/// `s` a continuation line, and `r` a right prompt, which starts no line of the prompt region.
+fn parse_prompt_kind(value: &str) -> Result<bool, String> {
+    match value {
+        "i" | "c" | "s" => Ok(true),
+        "r" => Ok(false),
+        value => Err(format!("OSC 133 prompt kind is unsupported: {value}")),
     }
 }
 
@@ -392,7 +407,28 @@ enum Erase {
 /// Position where an OSC 133 mark ends within an input chunk, and the mark.
 struct ShellMark {
     marker: ShellMarker,
+    row: Option<PromptRow>,
     redraw: Option<Redraw>,
+}
+
+/// The row fact that an OSC 133 mark records at the cursor row
+/// (core docs/spec/terminal-state.md#prompt-region).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PromptRow {
+    /// `A`: a new command, whose prompt starts on a fresh line. It removes the rows recorded
+    /// before it.
+    Command,
+    /// `P` of kind `i`, `c` or `s`: a line of the prompt starts at the cursor row.
+    Line,
+}
+
+/// The prompt rows of a resize: the copies of the rows from the first row of the region through
+/// the bottom of the screen, the number of region rows above the cursor, and the recorded rows of
+/// the region as offsets from its first row.
+struct HeldPrompt {
+    copies: Vec<Vec<GridCell>>,
+    offset: i32,
+    rows: Vec<i32>,
 }
 
 /// A sequence over this size is rejected: the largest encoded image and its header. `vte` with `std`
@@ -801,9 +837,9 @@ pub struct AlacrittyEngine {
     /// the boundary so that both this cell and the pointer cell are included.
     selection_anchor: Option<(Point, Side)>,
     shell: ShellState,
-    /// Absolute row number of the first prompt row (dropped + history row count + screen row).
-    /// Present only in the prompt state.
-    prompt_start: Option<i64>,
+    /// Absolute row numbers (dropped + history row count + screen row) that the OSC 133 marks of
+    /// the current prompt recorded (core docs/spec/terminal-state.md#prompt-region).
+    prompt_rows: BTreeSet<i64>,
     /// Number of rows dropped past the history limit, and history rows erased by ED 3.
     dropped: i64,
     /// Limit on the number of history rows.
@@ -871,7 +907,7 @@ impl AlacrittyEngine {
             discarding: false,
             selection_anchor: None,
             shell: ShellState::Output,
-            prompt_start: None,
+            prompt_rows: BTreeSet::new(),
             dropped: 0,
             history_limit,
             highlight_background: None,
@@ -923,8 +959,8 @@ impl AlacrittyEngine {
                 grid.reset_region(..);
                 // After the screen is cleared, the shell redraws the prompt on the top row without
                 // OSC 133;A.
-                if self.prompt_start.is_some() {
-                    self.prompt_start = Some(self.dropped + grid.history_size() as i64);
+                if !self.prompt_rows.is_empty() {
+                    self.prompt_rows = BTreeSet::from([self.dropped + grid.history_size() as i64]);
                 }
             }
             Erase::History => {
@@ -978,8 +1014,21 @@ impl AlacrittyEngine {
                 .iter()
                 .find_map(|parameter| parameter.strip_prefix("redraw="))
                 .map(|value| parse_redraw(value).expect("redraw was validated by the parser"));
+            let row = match payload.first() {
+                Some(b'A') => Some(PromptRow::Command),
+                Some(b'P') => params
+                    .iter()
+                    .find_map(|parameter| parameter.strip_prefix("k="))
+                    // default: a P without k has the kind i (core docs/spec/terminal-state.md#marks).
+                    .is_none_or(|kind| {
+                        parse_prompt_kind(kind).expect("the kind was validated by the parser")
+                    })
+                    .then_some(PromptRow::Line),
+                _ => None,
+            };
             Some(ShellMark {
                 marker: *marker,
+                row,
                 redraw,
             })
         } else {
@@ -1193,27 +1242,41 @@ impl AlacrittyEngine {
         })
     }
 
-    fn apply_shell_mark(&mut self, marker: ShellMarker, redraw: Option<Redraw>) {
+    /// Applies an accepted OSC 133 mark after the output before it
+    /// (core docs/spec/terminal-state.md#prompt-region).
+    fn apply_shell_mark(&mut self, mark: ShellMark) {
+        let ShellMark {
+            marker,
+            row,
+            redraw,
+        } = mark;
         self.shell = match marker {
-            ShellMarker::PromptStart => {
-                // A prompt starts on a new row. If the previous output ended without a line break,
-                // the cursor moves to the next row.
-                let cursor = &self.term.grid().cursor;
-                if cursor.point.column.0 != 0 || cursor.input_needs_wrap {
-                    self.processor.advance(&mut self.term, b"\r\n");
+            ShellMarker::PromptStart | ShellMarker::PromptEnd => {
+                if row == Some(PromptRow::Command) {
+                    // A prompt starts on a new row. If the previous output ended without a line
+                    // break, the cursor moves to the next row.
+                    let cursor = &self.term.grid().cursor;
+                    if cursor.point.column.0 != 0 || cursor.input_needs_wrap {
+                        self.processor.advance(&mut self.term, b"\r\n");
+                    }
+                    self.prompt_rows.clear();
                 }
-                self.prompt_start = Some(self.absolute(self.term.grid().cursor.point.line.0));
-                // default: an A mark without a redraw parameter has redraw=1
-                // (docs/spec/terminal-runtime.md).
-                ShellState::Prompt(redraw.unwrap_or(Redraw::Prompt))
+                if row.is_some() {
+                    let line = self.term.grid().cursor.point.line.0;
+                    self.prompt_rows.insert(self.absolute(line));
+                }
+                match (self.shell, redraw, row) {
+                    (_, Some(redraw), _) => ShellState::Prompt(redraw),
+                    // default: an A mark without a redraw parameter has redraw=1, so each A ends
+                    // a redraw=0 (core docs/spec/terminal-state.md#prompt-region).
+                    (_, None, Some(PromptRow::Command)) => ShellState::Prompt(Redraw::Prompt),
+                    (ShellState::Prompt(current), None, _) => ShellState::Prompt(current),
+                    // default: a P or B mark after output starts a prompt with redraw=1.
+                    (ShellState::Output, None, _) => ShellState::Prompt(Redraw::Prompt),
+                }
             }
-            ShellMarker::PromptEnd => match (self.shell, redraw) {
-                (_, Some(redraw)) => ShellState::Prompt(redraw),
-                (ShellState::Prompt(current), None) => ShellState::Prompt(current),
-                (ShellState::Output, None) => ShellState::Prompt(Redraw::Prompt),
-            },
             ShellMarker::CommandStart | ShellMarker::CommandFinished => {
-                self.prompt_start = None;
+                self.prompt_rows.clear();
                 ShellState::Output
             }
         };
@@ -1236,46 +1299,81 @@ impl AlacrittyEngine {
         start
     }
 
-    /// Copies of the cells of the rows from `start` through the bottom of the screen.
-    fn rows_from(&self, start: i32) -> Vec<Vec<GridCell>> {
+    /// Screen row of the first row of the prompt region, or None without a region: in the output
+    /// state, with redraw=0, without a recorded row and on the alternate screen. A nearest
+    /// recorded row above the screen or no recorded row at or above the cursor is an error
+    /// (core docs/spec/terminal-state.md#prompt-region).
+    fn prompt_region_start(&self) -> Result<Option<i32>, String> {
+        let redraw = match self.shell {
+            ShellState::Prompt(Redraw::Never) | ShellState::Output => return Ok(None),
+            ShellState::Prompt(redraw) => redraw,
+        };
+        if !self.primary_screen() || self.prompt_rows.is_empty() {
+            return Ok(None);
+        }
+        let cursor = self.term.grid().cursor.point.line.0;
+        let Some(nearest) = self.prompt_rows.range(..=self.absolute(cursor)).next_back() else {
+            return Err("no prompt row is recorded at or above the cursor row".to_string());
+        };
+        let row = nearest - self.absolute(0);
+        if row < 0 {
+            return Err(format!("the prompt start row {row} lies above the screen"));
+        }
+        let row = row as i32;
+        Ok(Some(match redraw {
+            Redraw::LastLine => row.max(self.cursor_logical_line_start()),
+            Redraw::Prompt | Redraw::Never => row,
+        }))
+    }
+
+    /// Takes the prompt region from `start` out of the reflow: copies its rows, clears them, so
+    /// that each cleared row through the cursor row stays one row that continues no row and the
+    /// rows below the cursor stay empty, and moves the cursor to column 0.
+    fn hold_prompt(&mut self, start: i32) -> HeldPrompt {
         let grid = self.term.grid();
         let bottom = grid.screen_lines() as i32 - 1;
-        (start..=bottom)
+        let cursor = grid.cursor.point.line.0;
+        let copies = (start..=bottom)
             .map(|line| {
                 (0..grid.columns())
                     .map(|column| grid[Line(line)][Column(column)].clone())
                     .collect()
             })
-            .collect()
-    }
-
-    /// Before the shell redraws after a size change, erases from the first row (start) of the area
-    /// that the shell redraws through the end of the screen, and moves the cursor to column 0 of
-    /// the row that is `offset` rows below that first row. The shell moves up by the number of
-    /// cursor rows at the previous width (offset) and writes again. When that row goes past the
-    /// bottom of the screen, the screen is scrolled up by the amount that it goes past. The rows
-    /// `shown` of the previous width then stand without reflow from the first screen row of the
-    /// area, where the shell starts to write, cut at the new width, so that a screen presented
-    /// before the shell redraws shows the prompt instead of empty rows.
-    fn clear_prompt_for_redraw(&mut self, mut start: i32, offset: i32, shown: &[Vec<GridCell>]) {
-        let bottom = self.term.grid().screen_lines() as i32 - 1;
+            .collect();
+        let first = self.absolute(start);
+        let last = self.absolute(bottom);
+        let rows = self
+            .prompt_rows
+            .range(first..=last)
+            .map(|row| (row - first) as i32)
+            .collect();
         let template = GridCell::default();
         let grid = self.term.grid_mut();
         for line in start..=bottom {
             grid[Line(line)].reset(&template);
         }
-        let overflow = start + offset - bottom;
-        if overflow > 0 {
-            self.term.goto(bottom, 0);
-            for _ in 0..overflow {
-                self.term.linefeed();
-            }
-            start -= overflow;
+        grid.cursor.point.column = Column(0);
+        grid.cursor.input_needs_wrap = false;
+        HeldPrompt {
+            copies,
+            offset: cursor - start,
+            rows,
         }
-        self.term.goto((start + offset).clamp(0, bottom), 0);
+    }
+
+    /// Puts the held prompt rows back after the reflow, from the row `offset` rows above the
+    /// cursor, cut at the new width, with their recorded rows. When that row lies above the
+    /// screen, the rows stand from the top row, where the shell starts to draw, and this is an
+    /// error.
+    fn put_back_prompt(&mut self, held: HeldPrompt) -> Result<(), String> {
+        let cursor = self.term.grid().cursor.point.line.0;
+        let bottom = self.term.grid().screen_lines() as i32 - 1;
+        let start = cursor - held.offset;
+        let first = start.max(0);
         let columns = self.term.grid().columns();
+        let template = GridCell::default();
         let grid = self.term.grid_mut();
-        for (line, cells) in (start.max(0)..=bottom).zip(shown) {
+        for (line, cells) in (first..=bottom).zip(&held.copies) {
             for (column, cell) in cells.iter().take(columns).enumerate() {
                 let mut cell = cell.clone();
                 // A row that stands without reflow continues no row, and a wide character that
@@ -1288,6 +1386,27 @@ impl AlacrittyEngine {
                 grid[Line(line)][Column(column)] = cell;
             }
         }
+        let base = self.absolute(0);
+        self.prompt_rows = held
+            .rows
+            .iter()
+            .map(|row| first + row)
+            .filter(|row| *row <= bottom)
+            .map(|row| base + i64::from(row))
+            .collect();
+        if start < 0 {
+            return Err(format!(
+                "the prompt region starts at the screen row {start} after the reflow, above the screen"
+            ));
+        }
+        Ok(())
+    }
+
+    fn report_resize_error(&self, error: &str) {
+        self.events
+            .push(QueuedEvent::Neutral(EngineEvent::Error(format!(
+                "terminal resize: {error}"
+            ))));
     }
 
     /// Absolute number of a screen row (history rows are negative).
@@ -1386,59 +1505,6 @@ impl AlacrittyEngine {
             .saturating_sub(self.history_limit);
         self.term.grid_mut().update_history(self.history_limit);
         self.dropped += excess as i64;
-    }
-
-    /// Screen row of the first prompt row. If it was dropped past the history or lies below the
-    /// cursor, the area that the shell redraws is unknown, so this is an error.
-    fn prompt_row(&self) -> Result<i32, String> {
-        let start = self.prompt_start.ok_or("no prompt start is recorded")?;
-        let grid = self.term.grid();
-        let row = start - self.dropped - grid.history_size() as i64;
-        let top = -(grid.history_size() as i64);
-        let cursor = i64::from(grid.cursor.point.line.0);
-        if row < top || row > cursor {
-            return Err(format!(
-                "the prompt start row {row} lies outside the history and cursor rows {top}..={cursor}"
-            ));
-        }
-        Ok(row as i32)
-    }
-
-    /// Number of logical lines that end from `row` up to, but not including, the logical line that
-    /// holds the cursor.
-    fn logical_lines_before_cursor(&self, row: i32) -> usize {
-        let grid = self.term.grid();
-        let last_column = Column(grid.columns() - 1);
-        (row..self.cursor_logical_line_start())
-            .filter(|line| {
-                !grid[Line(*line)][last_column]
-                    .flags
-                    .contains(Flags::WRAPLINE)
-            })
-            .count()
-    }
-
-    /// First row of the logical line that is `count` logical lines above the logical line that
-    /// holds the cursor.
-    fn logical_line_start_above_cursor(&self, count: usize) -> i32 {
-        let grid = self.term.grid();
-        let last_column = Column(grid.columns() - 1);
-        let top = -(grid.history_size() as i32);
-        let mut start = self.cursor_logical_line_start();
-        for _ in 0..count {
-            if start <= top {
-                break;
-            }
-            start -= 1;
-            while start > top
-                && grid[Line(start - 1)][last_column]
-                    .flags
-                    .contains(Flags::WRAPLINE)
-            {
-                start -= 1;
-            }
-        }
-        start
     }
 
     /// The rejection of a CSI, or None for one that the library executes.
@@ -1572,7 +1638,7 @@ impl AlacrittyEngine {
                 match self.handle_osc(&body, bell) {
                     Some(mark) => {
                         self.advance(&input[from..end]);
-                        self.apply_shell_mark(mark.marker, mark.redraw);
+                        self.apply_shell_mark(mark);
                         end
                     }
                     None => from,
@@ -2203,59 +2269,21 @@ impl Engine for AlacrittyEngine {
             return;
         }
         let primary = self.primary_screen();
-        let cursor = self.term.grid().cursor.point.line.0;
-        // The first prompt row is the first row of a logical line. Reflow keeps logical lines
-        // intact, so the position after reflow is found again by the number of logical lines above
-        // the cursor's logical line.
-        let prompt = match self.prompt_row() {
-            Ok(row) => Some((row, self.logical_lines_before_cursor(row))),
+        // The prompt leaves the reflow and returns after it, in the order of kitty
+        // (core docs/spec/terminal-state.md#prompt-region).
+        let held = match self.prompt_region_start() {
+            Ok(start) => start.map(|start| self.hold_prompt(start)),
             Err(error) => {
-                if self.prompt_start.is_some() {
-                    self.events
-                        .push(QueuedEvent::Neutral(EngineEvent::Error(format!(
-                            "terminal resize: {error}"
-                        ))));
-                }
+                self.report_resize_error(&error);
                 None
             }
         };
-        // Number of rows the shell moves up: the rows that were below the first row of the area the
-        // shell redraws at the previous width.
-        let region = match self.shell {
-            ShellState::Prompt(Redraw::Prompt) if primary => {
-                prompt.map(|(row, lines)| (cursor - row, lines))
-            }
-            ShellState::Prompt(Redraw::LastLine) if primary => {
-                Some((cursor - self.cursor_logical_line_start(), 0))
-            }
-            _ => None,
-        };
-        // The rows of the redraw region at the previous width, which stand again after the erase
-        // so that the screen presented before the shell redraws shows the prompt.
-        let shown = region.map(|(offset, _)| self.rows_from(cursor - offset));
-        if primary && self.prompt_start.is_some() {
-            let rows_now = self.term.grid().screen_lines();
-            self.term
-                .grid_mut()
-                .update_history(self.history_limit + rows_now.max(rows as usize));
-        }
+        // The reflow changes the rows above the region, so a recorded row stays only with the
+        // region rows that return.
+        self.prompt_rows.clear();
         self.resize_grid(primary, cols as usize, rows as usize);
-        if self.prompt_start.is_some() {
-            self.limit_history();
-        }
-        if let Some((_, lines)) = prompt {
-            let start = self.logical_line_start_above_cursor(lines);
-            self.prompt_start = Some(self.absolute(start));
-        }
-        if let (Some((offset, lines)), Some(shown)) = (region, shown) {
-            let start = self.logical_line_start_above_cursor(lines);
-            self.clear_prompt_for_redraw(start, offset, &shown);
-            if self.prompt_start.is_some() {
-                // The shell redraws from the first row of the erased area.
-                let row = self.term.grid().cursor.point.line.0 - offset;
-                self.prompt_start =
-                    Some(self.absolute(row.max(-(self.term.grid().history_size() as i32))));
-            }
+        if let Some(Err(error)) = held.map(|held| self.put_back_prompt(held)) {
+            self.report_resize_error(&error);
         }
     }
 

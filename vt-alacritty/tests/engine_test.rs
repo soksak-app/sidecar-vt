@@ -1584,38 +1584,6 @@ fn all_text(engine: &mut AlacrittyEngine) -> String {
 }
 
 #[test]
-fn a_resize_in_the_prompt_state_keeps_the_prompt_rows_of_the_previous_width_until_the_shell_redraws()
- {
-    // The screen of a resize is presented before the shell redraws, so it must show the prompt and
-    // not empty rows: the rows of the previous width stand from the first row of the redraw region
-    // without reflow, cut at the new width, and the shell writes over them. At width 10, three
-    // output rows and four prompt rows make seven rows. Only o1, which does not fit in the six
-    // screen rows, moves to history.
-    let mut engine = wrapped_prompt(b"\x1b]133;A\x07");
-    engine.resize(10, 6);
-    let screen = engine.screen();
-    let rows: Vec<String> = (0..6).map(|row| row_text(&screen, row)).collect();
-    assert_eq!(
-        rows,
-        ["o2", "o3", "P>abcdefgh", "stuvwxyz01", "", ""],
-        "the output above the prompt must remain and the prompt rows of width 20 must stand cut at width 10"
-    );
-    let cursor = engine.cursor();
-    assert_eq!(
-        (cursor.row, cursor.col),
-        (3, 0),
-        "the cursor must lie one row below the first prompt row, as at the previous width"
-    );
-    assert!(
-        engine
-            .drain_events()
-            .iter()
-            .all(|event| !matches!(event, EngineEvent::Error(_)))
-    );
-    assert_eq!(all_text(&mut engine), "o1o2o3P>abcdefghstuvwxyz01");
-}
-
-#[test]
 fn a_prompt_row_cut_inside_a_wide_character_keeps_no_half_of_it() {
     // At width 20, the wide character starts at column 9. Cut at width 10, its second cell does
     // not fit, so its first cell stands empty.
@@ -1629,23 +1597,6 @@ fn a_prompt_row_cut_inside_a_wide_character_keeps_no_half_of_it() {
         "P>abcdefg",
         "the cut wide character must not stand"
     );
-}
-
-#[test]
-fn redraw_last_places_the_cursor_as_redraw_1_does() {
-    // At width 20, the cursor was one row below (row 4) the first row of the logical line (row 3).
-    // readline also moves up one row to redraw.
-    let mut engine = wrapped_prompt(b"\x1b]133;A;redraw=last;cl=line\x07");
-    engine.resize(10, 6);
-    let screen = engine.screen();
-    let rows: Vec<String> = (0..6).map(|row| row_text(&screen, row)).collect();
-    assert_eq!(
-        rows,
-        ["o2", "o3", "P>abcdefgh", "stuvwxyz01", "", ""],
-        "the prompt rows of width 20 must stand cut at width 10"
-    );
-    let cursor = engine.cursor();
-    assert_eq!((cursor.row, cursor.col), (3, 0));
 }
 
 #[test]
@@ -1673,34 +1624,6 @@ fn redraw_last_scrolls_the_screen_when_the_offset_row_is_below_the_bottom() {
         all_text(&mut engine),
         "o1o2P>abcdefghijklmnopqrstuvwxyz0123",
         "the output above the prompt must remain"
-    );
-}
-
-#[test]
-fn prompt_rows_that_the_reflow_moved_into_the_scrollback_are_cleared() {
-    let mut engine = AlacrittyEngine::new();
-    engine.resize(20, 3);
-    engine.feed(b"o1\r\n\x1b]133;A;redraw=last\x07P>abcdefghijklmnopqrstuvwxyz0123");
-    // At width 10, the prompt row is four rows, and the reflow that keeps the cursor row moves the
-    // earlier rows into history.
-    engine.resize(10, 3);
-    let screen = engine.screen();
-    let rows: Vec<String> = (0..3).map(|row| row_text(&screen, row)).collect();
-    assert_eq!(
-        rows,
-        ["P>abcdefgh", "stuvwxyz01", ""],
-        "the prompt rows of width 20 must stand from the top row, where the shell redraws"
-    );
-    assert_eq!(
-        all_text(&mut engine),
-        "o1P>abcdefghstuvwxyz01",
-        "the history must keep no prompt row"
-    );
-    let cursor = engine.cursor();
-    assert_eq!(
-        (cursor.row, cursor.col),
-        (0, 0),
-        "the cursor must move to the top row"
     );
 }
 

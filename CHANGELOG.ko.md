@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S204: 프롬프트에서의 크기 변경은 core `docs/spec/terminal-state.md#prompt-region`이 정한 대로 프롬프트를 재배치에서 뺀다: 엔진은 `A`와 `P`(종류 `i`, `c`, `s`)의 행을 절대 행으로 기록하고, 재배치 전에 가장 가까운 기록 행부터의 영역을 복사하고 지우며, 재배치 뒤 이전과 같은 만큼 커서 위에 새 너비에서 잘라 되돌려 놓는다. 화면 위의 프롬프트 시작이나 영역은 `terminal resize:` 오류다. 엔진은 종류를 가진 `P`를 `prompt.start`로 받아들인다. zsh 통합은 `PS1`에 `P;k=i`와 `B`를, `PS2`에 `P;k=s`와 `B`를 더하고, bash 통합은 `PS1`의 각 줄바꿈 뒤에 `P;k=s`를 더한다. 둘 다 명령에는 시작 파일의 프롬프트를 되돌린다. core의 공유 case는 `vt-alacritty/tests/prompt_region_test.rs`에서 실행된다.
 - S202: panic으로 끝난 persistent service의 surface task는 direct service가 쓰는 감시 함수를 통해 그 surface의 error event `surface task ended: <message>`와 error record로 보고된다.
 - S203: `sok-check events`가 다시 통과한다. messaging의 folder claim이 poison된 lock을 복구한다.
 - S200-1: event writer의 각 file은 존재하는 순간부터 `log.open` 줄을 담는다. writer가 그 줄을 새 file에 쓰고 path에 link하므로, reader는 다음 flush 전에 빈 debug file, 회전된 file, 주 file을 더 이상 찾지 않는다.

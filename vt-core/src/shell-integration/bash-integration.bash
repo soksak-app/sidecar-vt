@@ -51,9 +51,28 @@ _soksak_install=
 builtin unset _soksak_debug_trap
 if [[ -n $_soksak_install ]]; then
     builtin unset _soksak_install
+    # The marks of the prompt lines (core docs/spec/terminal-state.md#prompt-region): P;k=s after each line break of PS1,
+    # both the prompt escape \n and a newline character. After a resize readline draws the last line of the prompt again
+    # with its mark, so the line that it draws records its row. A command and the PROMPT_COMMAND entries before the next
+    # prompt see the PS1 of the startup files.
+    _soksak_mark() {
+        builtin local mark='\[\e]133;P;k=s\a\]' newline=$'\n'
+        _soksak_user_ps1=$PS1
+        PS1=${PS1//\\n/\\n$mark}
+        PS1=${PS1//$newline/$newline$mark}
+        _soksak_marked=1
+    }
+    _soksak_unmark() {
+        [[ -n $_soksak_marked ]] || return 0
+        PS1=$_soksak_user_ps1
+        _soksak_marked=
+    }
+
     # PROMPT_COMMAND 의 첫 항목: 사용자 명령의 종료 상태를 보관하고 되돌려 준다.
+    # The entry also restores the PS1 of the startup files, because an empty input line reaches it without a command.
     _soksak_prompt_begin() {
         _soksak_status=$?
+        _soksak_unmark
         return $_soksak_status
     }
 
@@ -81,6 +100,7 @@ if [[ -n $_soksak_install ]]; then
         fi
         _soksak_directory
         builtin printf '\e]133;A;redraw=last\a'
+        _soksak_mark
         _soksak_at_prompt=1
     }
 
@@ -99,6 +119,7 @@ if [[ -n $_soksak_install ]]; then
         _soksak_install_rest=
         _soksak_at_prompt=
         _soksak_running=1
+        _soksak_unmark
         builtin printf '\e]133;C\a'
     }
 
