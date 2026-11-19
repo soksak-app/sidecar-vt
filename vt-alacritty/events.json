@@ -932,7 +932,7 @@
           "reason"
         ]
       },
-      "description": "A buffer of a session refused or removed data. buffer is output ring (the oldest chunk left the ring that serves a client that attaches later) or broadcast (an attachment whose receiver was closed was removed)."
+      "description": "A buffer of a session refused or removed data. buffer is output ring (the oldest chunk left the ring that serves a client that attaches later), broadcast (an attachment whose receiver was closed was removed) or alternate rows (the oldest kept rows of the alternate screen left at the history limit; count is the rows and bytes the bytes of their text)."
     },
     "sidecar.vt.resize": {
       "layer": "sidecar",

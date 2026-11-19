@@ -45,7 +45,12 @@ impl FakeEngine {
 }
 
 impl Engine for FakeEngine {
-    fn screen_rows(&self, _from: u64, _count: u32) -> Result<Vec<Vec<Cell>>, String> {
+    fn screen_rows(
+        &self,
+        _screen: crate::protocol::RowScreen,
+        _from: u64,
+        _count: u32,
+    ) -> Result<Vec<Vec<Cell>>, String> {
         Err("screen.read rows are not served by this test engine".to_string())
     }
 

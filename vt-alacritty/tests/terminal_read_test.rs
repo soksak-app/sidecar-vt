@@ -29,7 +29,11 @@ fn number(value: &Value, what: &str) -> u64 {
 }
 
 /// Runs the reads of one step and compares the alternate member and the dropped rows that the engine reported.
-fn check_step(engine: &mut AlacrittyEngine, step: &Value, dropped_before: u64) -> Result<u64, String> {
+fn check_step(
+    engine: &mut AlacrittyEngine,
+    step: &Value,
+    dropped_before: u64,
+) -> Result<u64, String> {
     let reported: u64 = engine
         .drain_events()
         .into_iter()
@@ -57,19 +61,27 @@ fn check_step(engine: &mut AlacrittyEngine, step: &Value, dropped_before: u64) -
             .map(|row| row.as_str().expect("a row is a string").to_string())
             .collect();
         if found != expected {
-            return Err(format!("the read from {from} count {count} is {found:?}, expected {expected:?}"));
+            return Err(format!(
+                "the read from {from} count {count} is {found:?}, expected {expected:?}"
+            ));
         }
     }
     let alternate = engine.alternate_rows();
     let expected = &step["alternate"];
-    let found = (alternate.active, alternate.history as u64, alternate.dropped);
+    let found = (
+        alternate.active,
+        alternate.history as u64,
+        alternate.dropped,
+    );
     let wanted = (
         expected["active"].as_bool().expect("active is a boolean"),
         number(&expected["history"], "history"),
         number(&expected["dropped"], "dropped"),
     );
     if found != wanted {
-        return Err(format!("the alternate member is {found:?}, expected {wanted:?}"));
+        return Err(format!(
+            "the alternate member is {found:?}, expected {wanted:?}"
+        ));
     }
     if dropped_before + reported != alternate.dropped {
         return Err(format!(
@@ -81,16 +93,27 @@ fn check_step(engine: &mut AlacrittyEngine, step: &Value, dropped_before: u64) -
 }
 
 fn run_case(case: &Value) -> Result<(), String> {
-    let limit = usize::try_from(number(&case["historyLimit"], "historyLimit")).expect("a limit fits");
+    let limit =
+        usize::try_from(number(&case["historyLimit"], "historyLimit")).expect("a limit fits");
     let mut engine = AlacrittyEngine::with_history_limit(limit);
     let cols = u16::try_from(number(&case["cols"], "cols")).expect("cols fit");
     let rows = u16::try_from(number(&case["rows"], "rows")).expect("rows fit");
     engine.resize(cols, rows);
     engine.drain_events();
-    engine.feed(case["output"].as_str().expect("an output is a string").as_bytes());
+    engine.feed(
+        case["output"]
+            .as_str()
+            .expect("an output is a string")
+            .as_bytes(),
+    );
     let dropped = check_step(&mut engine, case, 0)?;
     if let Some(then) = case.get("then") {
-        engine.feed(then["output"].as_str().expect("an output is a string").as_bytes());
+        engine.feed(
+            then["output"]
+                .as_str()
+                .expect("an output is a string")
+                .as_bytes(),
+        );
         check_step(&mut engine, then, dropped).map_err(|error| format!("then: {error}"))?;
     }
     Ok(())
@@ -105,10 +128,16 @@ fn each_shared_case_reads_the_kept_rows_of_the_alternate_screen() {
         .iter()
         .filter_map(|case| {
             let name = case["name"].as_str().expect("a case has a name");
-            run_case(case).err().map(|failure| format!("{name}: {failure}"))
+            run_case(case)
+                .err()
+                .map(|failure| format!("{name}: {failure}"))
         })
         .collect();
-    assert!(failures.is_empty(), "failed cases:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "failed cases:\n{}",
+        failures.join("\n")
+    );
 }
 
 #[test]

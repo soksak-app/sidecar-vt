@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S208: engine 이 scroll 로 alternate screen 의 위를 떠나는 행을 보존하고 core `docs/spec/terminal-read.md` 가 정하는 대로 `screen.read {screen: "alternate", from, count}` 로 읽는다. history 한도만큼까지 보존하고, 버릴 때마다 `buffer: "alternate rows"` 의 `sidecar.vt.buffer_dropped` 기록을 쓰며, program 이 screen 을 떠난 뒤에도 남기고 다음 진입에서 지운다. 범위 읽기에서 `screen` 은 필수이고, alternate screen 이 활성이면 `primary` 는 거절된다. Red: `terminal_read_test` 가 바뀌지 않은 engine 에서 compile 되지 않았다. Green: 공유 case 여섯 개가 실제 engine 으로 통과한다.
 - S207: catalog test가 catalog가 `sidecar.vt.file.changed`의 `seq`에 쓰는 JSON Schema type `integer`를 받아들인다. 전에는 맞는 catalog에서 실패했다.
 - S206: 주석 언어 check가 `.bash`와 `.zsh` 파일을 bash grammar로 읽고, `vt-core/src/shell-integration/bash-integration.bash`의 주석은 영어다.
 - S204: 프롬프트에서의 크기 변경은 core `docs/spec/terminal-state.md#prompt-region`이 정한 대로 프롬프트를 재배치에서 뺀다: 엔진은 `A`와 `P`(종류 `i`, `c`, `s`)의 행을 절대 행으로 기록하고, 재배치 전에 가장 가까운 기록 행부터의 영역을 복사하고 지우며, 재배치 뒤 이전과 같은 만큼 커서 위에 새 너비에서 잘라 되돌려 놓는다. 화면 위의 프롬프트 시작이나 영역은 `terminal resize:` 오류다. 엔진은 종류를 가진 `P`를 `prompt.start`로 받아들인다. zsh 통합은 `PS1`에 `P;k=i`와 `B`를, `PS2`에 `P;k=s`와 `B`를 더하고, bash 통합은 `PS1`의 각 줄바꿈 뒤에 `P;k=s`를 더한다. 둘 다 명령에는 시작 파일의 프롬프트를 되돌린다. core의 공유 case는 `vt-alacritty/tests/prompt_region_test.rs`에서 실행된다.

@@ -27,7 +27,7 @@ pub use palette::{
     default_terminal_color, parse_hex,
 };
 pub use protocol::{
-    Cell, ClipboardSelection, Cursor, CursorShape, DaemonEvent, Engine, EngineEvent, InlineAnchor,
-    LocalSessionPort, Modes, Preedit, Rgb, Screen, Scrollback, SessionPort, ShellMarker,
-    ShellRequest, make_default_session_port_factory, serve,
+    AlternateRows, Cell, ClipboardSelection, Cursor, CursorShape, DaemonEvent, Engine, EngineEvent,
+    InlineAnchor, LocalSessionPort, Modes, Preedit, Rgb, RowScreen, Screen, Scrollback,
+    SessionPort, ShellMarker, ShellRequest, make_default_session_port_factory, serve,
 };

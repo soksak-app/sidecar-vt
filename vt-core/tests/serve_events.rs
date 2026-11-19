@@ -51,7 +51,12 @@ fn contains(bytes: &[u8], needle: &[u8]) -> bool {
 
 #[async_trait::async_trait]
 impl Engine for TraceEngine {
-    fn screen_rows(&self, _from: u64, _count: u32) -> Result<Vec<Vec<Cell>>, String> {
+    fn screen_rows(
+        &self,
+        _screen: soksak_sidecar_vt_core::RowScreen,
+        _from: u64,
+        _count: u32,
+    ) -> Result<Vec<Vec<Cell>>, String> {
         Err("screen.read rows are not served by this test engine".to_string())
     }
 
@@ -510,7 +515,12 @@ struct InlineImageEngine {
 
 #[async_trait::async_trait]
 impl Engine for InlineImageEngine {
-    fn screen_rows(&self, _from: u64, _count: u32) -> Result<Vec<Vec<Cell>>, String> {
+    fn screen_rows(
+        &self,
+        _screen: soksak_sidecar_vt_core::RowScreen,
+        _from: u64,
+        _count: u32,
+    ) -> Result<Vec<Vec<Cell>>, String> {
         Err("screen.read rows are not served by this test engine".to_string())
     }
 

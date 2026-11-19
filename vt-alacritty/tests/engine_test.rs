@@ -3,7 +3,7 @@ mod engine;
 
 use engine::{AlacrittyEngine, CSI_SELECTOR_INVENTORY, OSC_SELECTOR_INVENTORY, OscOutcome};
 use soksak_sidecar_vt_core::{
-    CursorShape, DEFAULT_PALETTE, Engine, EngineEvent, ShellMarker, TerminalTheme,
+    CursorShape, DEFAULT_PALETTE, Engine, EngineEvent, RowScreen, ShellMarker, TerminalTheme,
     default_terminal_color, inline_image::Dimension, inline_image::InlineImageCommand,
 };
 
@@ -880,11 +880,15 @@ fn screen_read_returns_rows_above_the_viewport() {
     assert_eq!(line_text(&engine.screen(), 0), "L07");
 
     // Absolute numbers start at the oldest kept history row, which is 0 here.
-    let above = engine.screen_rows(0, 3).expect("rows 0 to 2 are retained");
+    let above = engine
+        .screen_rows(RowScreen::Primary, 0, 3)
+        .expect("rows 0 to 2 are retained");
     assert_eq!(row_texts(&above), ["L00", "L01", "L02"]);
 
     // A read that spans the history and the screen returns the rows in order.
-    let across = engine.screen_rows(5, 4).expect("rows 5 to 8 are retained");
+    let across = engine
+        .screen_rows(RowScreen::Primary, 5, 4)
+        .expect("rows 5 to 8 are retained");
     assert_eq!(row_texts(&across), ["L05", "L06", "L07", "L08"]);
 
     // The viewport read is unchanged.
@@ -892,7 +896,7 @@ fn screen_read_returns_rows_above_the_viewport() {
 
     // A row past the retained rows fails with the retained range and returns no rows.
     let error = engine
-        .screen_rows(0, 12)
+        .screen_rows(RowScreen::Primary, 0, 12)
         .expect_err("row 11 is not retained");
     assert_eq!(
         error,
@@ -1329,7 +1333,7 @@ fn alternate_screen_is_separate_from_primary_scrollback() {
     // The primary history returns unchanged.
     assert_eq!(engine.scrollback(), history);
     let rows: Vec<String> = engine
-        .screen_rows(0, 3)
+        .screen_rows(RowScreen::Primary, 0, 3)
         .expect("the primary history rows")
         .iter()
         .map(|row| row.iter().filter_map(|cell| cell.ch.as_deref()).collect())
