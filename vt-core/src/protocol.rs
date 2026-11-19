@@ -2334,20 +2334,21 @@ async fn present_screen(
         }
     });
     // The raster shows the screen, so the page receives no screen for it. The page places the
-    // input method caret and the scrollbar from the cursor and the scrollback of the frame, which
-    // the `view` event sends after the raster when either differs from the last `view` event. The
-    // state events of the inline images that this raster drew are sent after them.
+    // input method caret and the scrollbar from the cursor and the scrollback of the frame, and
+    // paints the scrollbar track and the padding with its default background; the `view` event
+    // sends them after the raster when any of them differs from the last `view` event. The state
+    // events of the inline images that this raster drew are sent after them.
     match output_tx.send_carried(image_envelope.to_string()).await {
         Ok(carrier) => state.carrier = carrier,
         Err(()) => return false,
     }
     let mut cursor = json!(screen.cursor);
     cursor["caret"] = json!({"row": layout.screen.cursor.row, "col": layout.screen.cursor.col});
-    let view = json!({"rows": screen.rows, "cols": screen.cols, "cursor": cursor, "scrollback": screen.scrollback});
+    let view = json!({"rows": screen.rows, "cols": screen.cols, "cursor": cursor, "scrollback": screen.scrollback, "background": screen.background});
     if state.view_sent.as_ref() != Some(&view) {
         let event = json!({
             "surface": surface_id,
-            "body": {"event": "view", "frame": frame, "rows": view["rows"], "cols": view["cols"], "cursor": view["cursor"], "scrollback": view["scrollback"]}
+            "body": {"event": "view", "frame": frame, "rows": view["rows"], "cols": view["cols"], "cursor": view["cursor"], "scrollback": view["scrollback"], "background": view["background"]}
         });
         if output_tx.send(event.to_string()).await.is_err() {
             return false;
