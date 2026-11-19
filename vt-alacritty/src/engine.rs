@@ -1233,12 +1233,28 @@ impl AlacrittyEngine {
         start
     }
 
+    /// Copies of the cells of the rows from `start` through the bottom of the screen.
+    fn rows_from(&self, start: i32) -> Vec<Vec<GridCell>> {
+        let grid = self.term.grid();
+        let bottom = grid.screen_lines() as i32 - 1;
+        (start..=bottom)
+            .map(|line| {
+                (0..grid.columns())
+                    .map(|column| grid[Line(line)][Column(column)].clone())
+                    .collect()
+            })
+            .collect()
+    }
+
     /// Before the shell redraws after a size change, erases from the first row (start) of the area
     /// that the shell redraws through the end of the screen, and moves the cursor to column 0 of
     /// the row that is `offset` rows below that first row. The shell moves up by the number of
     /// cursor rows at the previous width (offset) and writes again. When that row goes past the
-    /// bottom of the screen, the screen is scrolled up by the amount that it goes past.
-    fn clear_prompt_for_redraw(&mut self, mut start: i32, offset: i32) {
+    /// bottom of the screen, the screen is scrolled up by the amount that it goes past. The rows
+    /// `shown` of the previous width then stand without reflow from the first screen row of the
+    /// area, where the shell starts to write, cut at the new width, so that a screen presented
+    /// before the shell redraws shows the prompt instead of empty rows.
+    fn clear_prompt_for_redraw(&mut self, mut start: i32, offset: i32, shown: &[Vec<GridCell>]) {
         let bottom = self.term.grid().screen_lines() as i32 - 1;
         let template = GridCell::default();
         let grid = self.term.grid_mut();
@@ -1254,6 +1270,21 @@ impl AlacrittyEngine {
             start -= overflow;
         }
         self.term.goto((start + offset).clamp(0, bottom), 0);
+        let columns = self.term.grid().columns();
+        let grid = self.term.grid_mut();
+        for (line, cells) in (start.max(0)..=bottom).zip(shown) {
+            for (column, cell) in cells.iter().take(columns).enumerate() {
+                let mut cell = cell.clone();
+                // A row that stands without reflow continues no row, and a wide character that
+                // the cut splits, or the spacer of one that wrapped, has no second cell.
+                cell.flags.remove(Flags::WRAPLINE);
+                let split = column + 1 == columns && cell.flags.contains(Flags::WIDE_CHAR);
+                if split || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER) {
+                    cell = template.clone();
+                }
+                grid[Line(line)][Column(column)] = cell;
+            }
+        }
     }
 
     /// Absolute number of a screen row (history rows are negative).
@@ -2196,6 +2227,9 @@ impl Engine for AlacrittyEngine {
             }
             _ => None,
         };
+        // The rows of the redraw region at the previous width, which stand again after the erase
+        // so that the screen presented before the shell redraws shows the prompt.
+        let shown = region.map(|(offset, _)| self.rows_from(cursor - offset));
         if primary && self.prompt_start.is_some() {
             let rows_now = self.term.grid().screen_lines();
             self.term
@@ -2210,9 +2244,9 @@ impl Engine for AlacrittyEngine {
             let start = self.logical_line_start_above_cursor(lines);
             self.prompt_start = Some(self.absolute(start));
         }
-        if let Some((offset, lines)) = region {
+        if let (Some((offset, lines)), Some(shown)) = (region, shown) {
             let start = self.logical_line_start_above_cursor(lines);
-            self.clear_prompt_for_redraw(start, offset);
+            self.clear_prompt_for_redraw(start, offset, &shown);
             if self.prompt_start.is_some() {
                 // The shell redraws from the first row of the erased area.
                 let row = self.term.grid().cursor.point.line.0 - offset;
