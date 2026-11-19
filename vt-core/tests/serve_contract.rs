@@ -9111,3 +9111,61 @@ async fn removing_the_registered_folder_sends_registration_closed_with_folder_re
     assert_eq!(event["body"]["registration"], moved_registration, "{event}");
     assert_eq!(event["body"]["reason"], "folder-removed", "{event}");
 }
+
+/// Covers core docs/spec/sidecars.md#failure: a surface task of the persistent service that ends by a panic is
+/// reported as an error event of its surface, as the task of a direct service is. The second surface takes the events
+/// of a session port that the first surface already took, which ends its task by a panic of the session port.
+#[tokio::test]
+async fn a_persistent_surface_task_that_panics_is_reported_as_an_error_event() {
+    let (to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let mut to_serve = to_serve;
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let port: Arc<dyn SessionPort> = Arc::new(
+        soksak_sidecar_vt_core::LocalSessionPort::new_with_owner(
+            Arc::new(soksak_sidecar_vt_core::pty::PtyService::new(
+                events_test::TestEvents::new().handle(),
+            )),
+            String::new(),
+        ),
+    );
+    let factory = Arc::new(move || port.clone());
+    let owner = PersistentOwner {
+        close: Arc::new(|| Ok(())),
+        registry: PersistentRegistry::new(),
+        owner: "panic-owner".to_string(),
+        log: events_test::TestEvents::new().handle(),
+    };
+    let _task = tokio::spawn(serve_with_registry(
+        engine_factory,
+        serve_in,
+        serve_out,
+        factory,
+        owner,
+    ));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+    send_messaging_request(
+        &mut to_serve,
+        "s1",
+        "first",
+        serde_json::json!({"operation": "messages.read", "after": 0}),
+    )
+    .await;
+    messaging_reply(&mut lines, "first").await;
+    send_messaging_request(
+        &mut to_serve,
+        "s2",
+        "second",
+        serde_json::json!({"operation": "messages.read", "after": 0}),
+    )
+    .await;
+    let event = next_line_where(&mut lines, |value| {
+        value["surface"] == "s2" && value["body"]["event"] == "error"
+    })
+    .await;
+    assert_eq!(
+        event["body"]["reason"],
+        "surface task ended: one surface task consumes the events of a session port",
+        "{event}"
+    );
+}
