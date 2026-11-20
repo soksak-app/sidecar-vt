@@ -1,0 +1,32 @@
+{
+  "contract": "docs/spec/terminal-read.md",
+  "description": "Each case writes output to a session of rows and cols with the history limit historyLimit, then runs each read; text is the plain text of each row without its trailing blanks, and alternate is the alternate member of the state of the session after the output.",
+  "cases": [
+    {
+      "name": "the primary rows stay readable while the alternate screen is active",
+      "rows": 5,
+      "cols": 10,
+      "historyLimit": 1000,
+      "output": "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n\u001b[?1049h\u001b[Hfull",
+      "reads": [
+        {
+          "screen": "primary",
+          "from": 0,
+          "count": 5,
+          "text": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5"
+          ]
+        }
+      ],
+      "alternate": {
+        "active": true,
+        "history": 0,
+        "dropped": 0
+      }
+    }
+  ]
+}

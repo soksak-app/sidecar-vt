@@ -1,8 +1,8 @@
-// The kept rows of the alternate screen of core docs/spec/terminal-read.md through the real engine. Each case of the shared
-// cases (`tests/fixtures/terminal-read-alternate-rows.json`, the copy of core
-// `docs/spec/cases/terminal-read/alternate-rows.json`) gives the size of the screen, the history limit and an output, then
-// the reads of the alternate rows and the alternate member of the state after it; a case with `then` writes a second output
-// and checks its reads.
+// The range reads of core docs/spec/terminal-read.md through the real engine. Each case of the shared cases
+// (`tests/fixtures/terminal-read-alternate-rows.json` and `tests/fixtures/terminal-read-primary-rows.json`, the copies of
+// core `docs/spec/cases/terminal-read/alternate-rows.json` and `primary-rows.json`) gives the size of the screen, the
+// history limit and an output, then the reads of the rows and the alternate member of the state after it; a case with
+// `then` writes a second output and checks its reads.
 #[path = "../src/engine.rs"]
 #[allow(dead_code)]
 mod engine;
@@ -11,7 +11,8 @@ use engine::AlacrittyEngine;
 use serde_json::Value;
 use soksak_sidecar_vt_core::{Cell, Engine, EngineEvent, RowScreen};
 
-const CASES: &str = include_str!("fixtures/terminal-read-alternate-rows.json");
+const ALTERNATE_CASES: &str = include_str!("fixtures/terminal-read-alternate-rows.json");
+const PRIMARY_CASES: &str = include_str!("fixtures/terminal-read-primary-rows.json");
 
 /// The text of a row without its trailing blanks; a cell without a character is a blank.
 fn row_text(row: &[Cell]) -> String {
@@ -119,9 +120,9 @@ fn run_case(case: &Value) -> Result<(), String> {
     Ok(())
 }
 
-#[test]
-fn each_shared_case_reads_the_kept_rows_of_the_alternate_screen() {
-    let cases: Value = serde_json::from_str(CASES).expect("the shared cases are JSON");
+/// Runs each case of a shared case file and fails with the name and the failure of each failing case.
+fn run_cases(cases: &str) {
+    let cases: Value = serde_json::from_str(cases).expect("the shared cases are JSON");
     let failures: Vec<String> = cases["cases"]
         .as_array()
         .expect("the cases are a list")
@@ -138,6 +139,16 @@ fn each_shared_case_reads_the_kept_rows_of_the_alternate_screen() {
         "failed cases:\n{}",
         failures.join("\n")
     );
+}
+
+#[test]
+fn each_shared_case_reads_the_kept_rows_of_the_alternate_screen() {
+    run_cases(ALTERNATE_CASES);
+}
+
+#[test]
+fn each_shared_case_reads_the_primary_rows_while_the_alternate_screen_is_active() {
+    run_cases(PRIMARY_CASES);
 }
 
 #[test]
