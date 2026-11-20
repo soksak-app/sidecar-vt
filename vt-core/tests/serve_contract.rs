@@ -9629,3 +9629,220 @@ async fn a_process_list_without_a_session_is_refused_with_session_not_open() {
         "{reply}"
     );
 }
+
+/// Sends `messages.notice` with `body` for the receiving `surface` and returns its reply.
+async fn send_notice(
+    to_serve: &mut tokio::io::DuplexStream,
+    lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
+    surface: &str,
+    cid: &str,
+    mut body: serde_json::Value,
+) -> serde_json::Value {
+    body["operation"] = serde_json::json!("messages.notice");
+    send_messaging_request(to_serve, surface, cid, body).await;
+    messaging_reply(lines, cid).await
+}
+
+/// The names of the entries of `folder`, sorted.
+fn folder_entries(folder: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(folder)
+        .expect("folder lists")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// Covers core docs/spec/messaging.md#completion-notice: `messages.notice` writes the notice of the receiving surface into the
+/// folder of the sender as `<surface>.notice-<answers>.txt`, with the text of the notice and no temporary file, and replies with
+/// the file name.
+#[tokio::test]
+async fn messages_notice_writes_the_notice_into_the_sender_folder() {
+    let root = tempfile::tempdir().expect("temporary directory must be created");
+    let receiver = root.path().join(".soksak").join("messages").join("s1");
+    let sender = root.path().join(".soksak").join("messages").join("s2");
+    std::fs::create_dir_all(&receiver).expect("receiver folder");
+    std::fs::create_dir_all(&sender).expect("sender folder");
+    let (mut to_serve, mut lines, _task) = start_messaging_service();
+    let registered =
+        register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", &receiver).await;
+    assert!(registered["body"].get("error").is_none(), "{registered}");
+    let reply = send_notice(
+        &mut to_serve,
+        &mut lines,
+        "s1",
+        "notice",
+        serde_json::json!({"title": "Build", "answers": "tok1", "from": "s2", "state": "done", "reported": false}),
+    )
+    .await;
+    assert_eq!(reply["body"]["path"], "s1.notice-tok1.txt", "{reply}");
+    let text = std::fs::read_to_string(sender.join("s1.notice-tok1.txt")).expect("notice file");
+    assert_eq!(
+        text,
+        "[soksak notice] Tab Build (s1) ended its work in state done. Message tok1: report not received. The notice carries no report of its work."
+    );
+    assert_eq!(
+        folder_entries(&sender),
+        vec!["s1.notice-tok1.txt".to_string()],
+        "the sender folder must hold only the notice after the write"
+    );
+}
+
+/// Covers core docs/spec/messaging.md#completion-notice: a notice with `reported` true names the report as received.
+#[tokio::test]
+async fn messages_notice_states_a_received_report() {
+    let root = tempfile::tempdir().expect("temporary directory must be created");
+    let receiver = root.path().join(".soksak").join("messages").join("s1");
+    let sender = root.path().join(".soksak").join("messages").join("s2");
+    std::fs::create_dir_all(&receiver).expect("receiver folder");
+    std::fs::create_dir_all(&sender).expect("sender folder");
+    let (mut to_serve, mut lines, _task) = start_messaging_service();
+    register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", &receiver).await;
+    let reply = send_notice(
+        &mut to_serve,
+        &mut lines,
+        "s1",
+        "notice",
+        serde_json::json!({"title": "Build", "answers": "tok1", "from": "s2", "state": "idle", "reported": true}),
+    )
+    .await;
+    assert_eq!(reply["body"]["path"], "s1.notice-tok1.txt", "{reply}");
+    let text = std::fs::read_to_string(sender.join("s1.notice-tok1.txt")).expect("notice file");
+    assert!(
+        text.contains("ended its work in state idle. Message tok1: report received."),
+        "the notice must state the received report: {text}"
+    );
+}
+
+/// Covers core docs/spec/messaging.md#completion-notice: a sender folder that does not exist fails with `folder-missing`, which
+/// names the path, and writes no file and creates no folder.
+#[tokio::test]
+async fn messages_notice_refuses_a_missing_sender_folder_with_no_file() {
+    let root = tempfile::tempdir().expect("temporary directory must be created");
+    let receiver = root.path().join(".soksak").join("messages").join("s1");
+    std::fs::create_dir_all(&receiver).expect("receiver folder");
+    let sender = root.path().join(".soksak").join("messages").join("s2");
+    let (mut to_serve, mut lines, _task) = start_messaging_service();
+    register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", &receiver).await;
+    let reply = send_notice(
+        &mut to_serve,
+        &mut lines,
+        "s1",
+        "notice",
+        serde_json::json!({"title": "Build", "answers": "tok1", "from": "s2", "state": "done", "reported": false}),
+    )
+    .await;
+    assert_eq!(reply["body"]["error"], "folder-missing", "{reply}");
+    assert!(
+        reply["body"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("s2")),
+        "the refusal must name the sender folder: {reply}"
+    );
+    assert!(!sender.exists(), "the sender folder must not be created");
+    assert!(
+        folder_entries(&receiver).is_empty(),
+        "no file may be written"
+    );
+}
+
+/// Covers core docs/spec/messaging.md#completion-notice: each invalid parameter is refused with its code and writes no file.
+#[tokio::test]
+async fn messages_notice_refuses_invalid_parameters_with_no_file() {
+    let root = tempfile::tempdir().expect("temporary directory must be created");
+    let receiver = root.path().join(".soksak").join("messages").join("s1");
+    let sender = root.path().join(".soksak").join("messages").join("s2");
+    std::fs::create_dir_all(&receiver).expect("receiver folder");
+    std::fs::create_dir_all(&sender).expect("sender folder");
+    let (mut to_serve, mut lines, _task) = start_messaging_service();
+    register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", &receiver).await;
+    let cases = [
+        (
+            serde_json::json!({"title": "Build", "answers": "a.b", "from": "s2", "state": "done", "reported": false}),
+            "invalid-token",
+        ),
+        (
+            serde_json::json!({"title": "Build", "answers": "tok1", "from": "a.b", "state": "done", "reported": false}),
+            "invalid-sender",
+        ),
+        (
+            serde_json::json!({"title": "Build", "answers": "tok1", "from": "s2", "state": "running", "reported": false}),
+            "invalidParams",
+        ),
+        (
+            serde_json::json!({"title": "Build", "answers": "tok1", "from": "s2", "state": "done", "reported": "yes"}),
+            "invalidParams",
+        ),
+        (
+            serde_json::json!({"answers": "tok1", "from": "s2", "state": "done", "reported": false}),
+            "invalidParams",
+        ),
+    ];
+    for (index, (body, code)) in cases.into_iter().enumerate() {
+        let reply = send_notice(
+            &mut to_serve,
+            &mut lines,
+            "s1",
+            &format!("bad{index}"),
+            body,
+        )
+        .await;
+        assert_eq!(reply["body"]["error"], code, "case {index}: {reply}");
+    }
+    assert!(
+        folder_entries(&sender).is_empty(),
+        "a refused notice writes no file"
+    );
+}
+
+/// Covers core docs/spec/messaging.md#completion-notice: a surface without a registration refuses `messages.notice` with
+/// `unknown-terminal`.
+#[tokio::test]
+async fn messages_notice_without_a_registration_is_unknown_terminal() {
+    let (mut to_serve, mut lines, _task) = start_messaging_service();
+    let reply = send_notice(
+        &mut to_serve,
+        &mut lines,
+        "s9",
+        "unregistered",
+        serde_json::json!({"title": "Build", "answers": "tok1", "from": "s2", "state": "done", "reported": false}),
+    )
+    .await;
+    assert_eq!(reply["body"]["error"], "unknown-terminal", "{reply}");
+}
+
+/// Covers core docs/spec/messaging.md#report-request and #completion-notice: a receipt `<surface>.receipt-<token>.txt` in the
+/// folder of the receiving surface is read as an ordinary message of that surface, so the event of the receipt is the event of
+/// any message and needs no change of the sidecar.
+#[tokio::test]
+async fn a_receipt_is_read_as_a_message_of_the_receiving_folder() {
+    let root = tempfile::tempdir().expect("temporary directory must be created");
+    let receiver = root.path().join(".soksak").join("messages").join("s1");
+    std::fs::create_dir_all(&receiver).expect("receiver folder");
+    let (mut to_serve, mut lines, _task) = start_messaging_service();
+    let registered =
+        register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", &receiver).await;
+    let name = write_message(&receiver, "s1", "receipt-tok1", b"");
+    assert_eq!(name, "s1.receipt-tok1.txt");
+    send_messaging_request(
+        &mut to_serve,
+        "s1",
+        "wait",
+        serde_json::json!({"operation": "messages.wait", "after": 0, "registration": registered["body"]["registration"]}),
+    )
+    .await;
+    let reply = messaging_reply(&mut lines, "wait").await;
+    let messages = reply["body"]["messages"].as_array().expect("messages");
+    assert!(
+        messages.iter().any(|message| message["path"] == name
+            && message["from"] == "s1"
+            && message["text"] == ""),
+        "the receipt must be read as a message of s1 with empty text: {reply}"
+    );
+}

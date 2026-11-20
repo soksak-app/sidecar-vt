@@ -444,3 +444,151 @@ impl Registration {
         })
     }
 }
+
+/// The states of the end of a working period that a notice may state (core docs/spec/messaging.md#completion-notice).
+const NOTICE_STATES: [&str; 4] = ["done", "error", "blocked", "idle"];
+
+/// A `messages.notice` request: the notice that the receiving surface sends to the sender `from` of the message `answers`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notice {
+    pub title: String,
+    pub answers: String,
+    pub from: String,
+    pub state: String,
+    pub reported: bool,
+}
+
+impl Notice {
+    /// Reads the parameters of `messages.notice` and refuses each invalid one with its code, before any file is written
+    /// (core docs/spec/messaging.md#completion-notice).
+    pub fn from_body(body: &Value) -> Result<Self, Refusal> {
+        let text = |key: &str| {
+            body.get(key)
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    Refusal::new(
+                        "invalidParams",
+                        format!("messages.notice requires {key}, a string"),
+                    )
+                })
+        };
+        let title = text("title")?;
+        let answers = text("answers")?;
+        let from = text("from")?;
+        let state = text("state")?;
+        let reported = body
+            .get("reported")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| {
+                Refusal::new(
+                    "invalidParams",
+                    "messages.notice requires reported, a boolean",
+                )
+            })?;
+        if !NOTICE_STATES.contains(&state.as_str()) {
+            return Err(Refusal::new(
+                "invalidParams",
+                format!("messages.notice state {state} is not done, error, blocked or idle"),
+            ));
+        }
+        if answers.is_empty() || answers.contains(['.', '/', '\\', '\0']) {
+            return Err(Refusal::new(
+                "invalid-token",
+                format!(
+                    "messages.notice answers {answers} is not a token: it must be non-empty and hold no dot or path separator"
+                ),
+            ));
+        }
+        if from.is_empty()
+            || from.contains(['.', '/', '\\', '\0'])
+            || from.chars().any(char::is_control)
+        {
+            return Err(Refusal::new(
+                "invalid-sender",
+                format!("messages.notice from {from} is not a surface identifier"),
+            ));
+        }
+        Ok(Self {
+            title,
+            answers,
+            from,
+            state,
+            reported,
+        })
+    }
+}
+
+impl Registration {
+    /// Writes the notice of `surface` into the folder of its sender, `<root>/.soksak/messages/<from>`, where the registered folder
+    /// is `<root>/.soksak/messages/<surface>`, as `<surface>.notice-<answers>.txt`, by the write rule of a message: the text goes to a
+    /// temporary name and is renamed. Returns the file name (core docs/spec/messaging.md#completion-notice).
+    pub fn notice(&self, surface: &str, notice: &Notice) -> Result<String, Refusal> {
+        let messages = self.folder.parent().filter(|messages| {
+            self.folder.file_name().is_some_and(|name| name == surface)
+                && messages.file_name().is_some_and(|name| name == "messages")
+                && messages
+                    .parent()
+                    .and_then(Path::file_name)
+                    .is_some_and(|name| name == ".soksak")
+        });
+        let Some(messages) = messages else {
+            return Err(Refusal::new(
+                "invalidParams",
+                format!(
+                    "the registered folder {} is not <root>/.soksak/messages/{surface}",
+                    self.folder.display()
+                ),
+            ));
+        };
+        let sender = messages.join(&notice.from);
+        if !sender.is_dir() {
+            return Err(Refusal::new(
+                "folder-missing",
+                format!(
+                    "the folder {} of the sender does not exist",
+                    sender.display()
+                ),
+            ));
+        }
+        let received = if notice.reported {
+            "received"
+        } else {
+            "not received"
+        };
+        let text = format!(
+            "[soksak notice] Tab {} ({surface}) ended its work in state {}. Message {}: report {received}. The notice carries no report of its work.",
+            notice.title, notice.state, notice.answers
+        );
+        let name = format!("{surface}.notice-{}.txt", notice.answers);
+        let temporary = sender.join(format!(".tmp-{}", uuid::Uuid::new_v4()));
+        let written = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .and_then(|mut file| {
+                std::io::Write::write_all(&mut file, text.as_bytes())?;
+                drop(file);
+                std::fs::rename(&temporary, sender.join(&name))
+            });
+        match written {
+            Ok(()) => Ok(name),
+            Err(error) => {
+                // The temporary file was created by this call and holds no message, so a failure removes it.
+                let removal = std::fs::remove_file(&temporary);
+                let removal = match removal {
+                    Ok(()) => String::new(),
+                    Err(removal) if removal.kind() == std::io::ErrorKind::NotFound => String::new(),
+                    Err(removal) => format!("; the temporary file was not removed: {removal}"),
+                };
+                Err(Refusal::new(
+                    "notice-write-failed",
+                    format!(
+                        "the notice of {} was not written: {error}{removal}",
+                        sender.display()
+                    ),
+                ))
+            }
+        }
+    }
+}

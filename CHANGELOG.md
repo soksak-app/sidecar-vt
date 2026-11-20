@@ -1,5 +1,6 @@
 # Changelog
 
+- S238: `messages.notice` writes the completion notice of a receiving surface into the folder of its sender as `<surface>.notice-<answers>.txt`, with the text of core docs/spec/messaging.md#completion-notice, by the write rule of a message; invalid parameters, a missing sender folder and an unregistered surface are refused with no file. A receipt file of the receiving folder is read as an ordinary message, so the sidecar needs no change for it. Verification: Red then Green of the `messages_notice_*` contract tests in `vt-core/tests/serve_contract.rs`.
 - S237: The version is 0.0.30, and the kit pin is the kit release 0.0.16, so the release run publishes the commits after the tag v0.0.29 as v0.0.30.
 - S236: `make check-push`, which the pre-push hook runs, runs `cargo fmt --all --check`, so a push of an unformatted Rust source is refused before it reaches main. Verification: Red of the `make check-push` test of `tests/make-targets.test.mjs` and a passing `make check-push` on a commit with an unformatted line, then Green of the test, a failing `make check-push` on that commit and a passing one after its revert.
 - S235: The lib test target of `soksak-sidecar-vt-core` builds: the lifecycle test session names `surface_process: None`, because its child belongs to no surface.

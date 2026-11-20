@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S238: `messages.notice`가 받는 surface의 완료 notice를 보낸 쪽 folder에 `<surface>.notice-<answers>.txt`로 쓴다. Text는 core docs/spec/messaging.md#completion-notice의 것이며, message의 쓰기 규칙을 따른다. 잘못된 parameter, 보낸 쪽 folder가 없는 경우, 등록되지 않은 surface는 파일 없이 거부한다. 영수증 file은 받는 folder의 일반 message로 읽히므로 sidecar 변경이 필요 없다. 검증: `vt-core/tests/serve_contract.rs`의 `messages_notice_*` 계약 test에서 Red 뒤 Green.
 - S237: version은 0.0.30이고 kit pin은 kit release 0.0.16이므로, tag v0.0.29 이후의 commit을 release run이 v0.0.30으로 게시한다.
 - S236: pre-push hook이 돌리는 `make check-push`가 `cargo fmt --all --check`를 돌리므로, format되지 않은 Rust source의 push는 main에 닿기 전에 거부된다. 검증: `tests/make-targets.test.mjs`의 `make check-push` test의 Red와 format되지 않은 줄을 둔 commit에서 통과한 `make check-push`, 그 뒤 test의 Green, 그 commit에서 실패한 `make check-push`, 되돌린 뒤 통과한 `make check-push`.
 - S235: `soksak-sidecar-vt-core`의 lib test target이 빌드된다. lifecycle test session이 `surface_process: None`을 명시한다. 이 child는 어떤 surface에도 속하지 않기 때문이다.
