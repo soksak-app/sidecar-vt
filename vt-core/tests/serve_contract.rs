@@ -8125,13 +8125,13 @@ async fn a_region_that_draws_again_gets_one_raster_and_no_screen() {
 #[tokio::test]
 async fn a_drawing_message_of_an_earlier_generation_is_ignored() {
     // The region of generation 2 draws its configure, keeps drawing after a late state of
-    // generation 1, and draws the viewport change after the host consumed the first raster.
+    // generation 1, and draws the theme change after the host consumed the first raster.
     let output = serve_requests(&format!(
         "{}\n{}\n{}\n{}\n",
         DRAWING_CONFIGURE.replace(r#""generation":1"#, r#""generation":2"#),
         r#"{"surface":"s1","body":{"image":{"drawing":{"name":"view","generation":1,"drawing":false}}}}"#,
         r#"{"surface":"s1","body":{"image":{"consumed":{"name":"view","generation":2,"raster":1,"sequence":1}}}}"#,
-        r#"{"surface":"s1","body":{"operation":"viewport","offset":1}}"#,
+        r##"{"surface":"s1","body":{"operation":"theme","mode":"light","background":"#f7f7f5","foreground":"#242424","cursor":"#242424","selection":"#c8ccd8"}}"##,
     ))
     .await;
     assert_eq!(
