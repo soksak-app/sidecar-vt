@@ -4621,9 +4621,11 @@ async fn surface_task(
                             continue;
                         }
                         state.drawing = next;
-                        if !next {
-                            state.frame_wanted = false;
-                        }
+                        // A drawing state ends the frame request: the host sends no tick for a
+                        // request of a region that does not draw, also when it accepted the request
+                        // while the region drew, so the next change after this state requests its
+                        // frame again (core docs/spec/native-surfaces.md#copy-path-frames).
+                        state.frame_wanted = false;
                         // The region draws again: the screen that changed while it did not is drawn
                         // and sent once. A frame in flight draws it after its answer.
                         if next && state.dirty && !state.pending_draw && session_id.is_some() {
