@@ -1448,8 +1448,10 @@ impl AlacrittyEngine {
     /// the active screen, so it changes the limit only while the primary screen is active. A slice
     /// that leaves the primary screen leaves its limit raised until the next count on it.
     /// On the alternate screen the grid keeps the rows that a slice pushes up, and the engine moves
-    /// them to its kept rows after the slice (core docs/spec/terminal-read.md). A sequence that
-    /// enters or leaves the alternate screen ends a slice, so each slice runs on one screen.
+    /// them to its kept rows after the slice (core docs/spec/terminal-read.md). The alternate grid
+    /// has a history limit only during a slice, so a resize treats it as the library treats a grid
+    /// without history. A sequence that enters or leaves the alternate screen ends a slice, so each
+    /// slice runs on one screen.
     fn advance(&mut self, bytes: &[u8]) {
         for slice in bytes.chunks(ADVANCE_SLICE_BYTES) {
             if self.primary_screen() {
@@ -1474,9 +1476,6 @@ impl AlacrittyEngine {
             return;
         }
         let history = self.term.grid().history_size();
-        if history == 0 {
-            return;
-        }
         if history >= COUNTED_ROWS {
             self.events.push(QueuedEvent::Neutral(EngineEvent::Error(format!(
                 "one input pushed {COUNTED_ROWS} or more rows above the alternate screen, so kept rows may be missing"
@@ -1486,7 +1485,14 @@ impl AlacrittyEngine {
             .rev()
             .map(|above| self.grid_row(Line(-above)))
             .collect();
+        // The limit returns to zero also after a slice that pushed no row: a resize of an alternate
+        // grid with a history limit moves the rows that a smaller height cuts off into its history
+        // and a larger height moves them back onto the screen, which a terminal without alternate
+        // history does not do (S215).
         self.term.grid_mut().update_history(0);
+        if history == 0 {
+            return;
+        }
         self.alternate_kept.extend(rows);
         let excess = self.alternate_kept.len().saturating_sub(self.history_limit);
         if excess > 0 {
@@ -1535,10 +1541,16 @@ impl AlacrittyEngine {
             .expect("a sequence starts at an escape byte that the terminal has not received");
         self.advance(&input[from..from + start]);
         let primary = self.primary_screen();
-        if !primary {
+        if primary {
+            self.advance(&input[from + start..at]);
+        } else {
             self.alternate_left = self.alternate_screen_rows();
+            // The sequence that leaves the alternate screen scrolls no row, so the alternate grid
+            // receives it without a history limit and keeps none while it is hidden: a resize of
+            // the hidden grid cuts its rows off as the library does without the limit (S215).
+            self.processor
+                .advance(&mut self.term, &input[from + start..at]);
         }
-        self.advance(&input[from + start..at]);
         if primary && !self.primary_screen() {
             self.alternate_kept.clear();
             self.alternate_dropped = 0;
