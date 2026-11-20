@@ -1341,8 +1341,12 @@ pub enum DaemonEvent {
 /// directory of a request that opens a session.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ShellRequest {
-    /// The value of the terminal setting shell. It is `login` or the absolute path of a shell.
+    /// The value of the terminal setting shell. It is `login` or the absolute path of a shell, and empty when `program` is set.
     pub shell: String,
+    /// The program that the session starts instead of the shell, named by its path or by its name in PATH, with `args` as its
+    /// arguments (docs/spec/agent-roles.md#launch-parameters). None starts the shell.
+    pub program: Option<String>,
+    pub args: Vec<String>,
     /// The absolute path of the directory the shell starts in. Without it, the home directory of
     /// the account is used.
     pub directory: Option<String>,
@@ -6122,6 +6126,48 @@ fn process_query_answer(port: &dyn SessionPort, value: &Value, log: &Events) -> 
     }
 }
 
+/// What a session of an `open` request starts: the shell, or the resolved program with its arguments.
+enum Launch {
+    Shell(String),
+    Program(std::path::PathBuf, Vec<String>),
+}
+
+/// The launch of an `open` request (docs/spec/agent-roles.md#launch-parameters): the shell, or the program with its arguments
+/// when `program` is present. Each invalid value is refused with its reason, and no launch is chosen from it.
+fn open_launch(body: &Value) -> Result<(String, Option<String>, Vec<String>), String> {
+    let program = match body.get("program") {
+        None => None,
+        Some(Value::String(program)) if !program.is_empty() => Some(program.clone()),
+        Some(_) => return Err("open program must be a non-empty text".to_string()),
+    };
+    let args = match body.get("args") {
+        None => Vec::new(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| item.as_str().map(str::to_string))
+            .collect::<Option<Vec<String>>>()
+            .ok_or_else(|| "open args must be an array of texts".to_string())?,
+        Some(_) => return Err("open args must be an array of texts".to_string()),
+    };
+    match program {
+        Some(program) => {
+            if body.get("shell").is_some() {
+                return Err("open program and shell are both set".to_string());
+            }
+            Ok((String::new(), Some(program), args))
+        }
+        None => {
+            if body.get("args").is_some() {
+                return Err("open args require program".to_string());
+            }
+            match body.get("shell").and_then(Value::as_str).filter(|shell| !shell.is_empty()) {
+                Some(shell) => Ok((shell.to_string(), None, Vec::new())),
+                None => Err("open requires a shell".to_string()),
+            }
+        }
+    }
+}
+
 async fn run_input_loop<R>(
     mut lines: FramedRead<PolledReader<R>, LinesCodec>,
     output_tx: OutputSink,
@@ -6581,16 +6627,15 @@ where
                                     .get("image")
                                     .and_then(|v| v.as_str())
                                     .map(str::to_string);
-                                let Some(shell) = body
-                                    .get("shell")
-                                    .and_then(|v| v.as_str())
-                                    .filter(|shell| !shell.is_empty())
-                                else {
-                                    let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "open requires a shell"}});
-                                    if reply_tx.reply(response).await.is_err() {
-                                        break;
+                                let (shell, program, args) = match open_launch(&body) {
+                                    Ok(launch) => launch,
+                                    Err(reason) => {
+                                        let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": reason}});
+                                        if reply_tx.reply(response).await.is_err() {
+                                            break;
+                                        }
+                                        continue;
                                     }
-                                    continue;
                                 };
                                 let directory = match body.get("directory") {
                                     None => None,
@@ -6608,7 +6653,9 @@ where
                                     }
                                 };
                                 let request = ShellRequest {
-                                    shell: shell.to_string(),
+                                    shell,
+                                    program,
+                                    args,
                                     directory,
                                     surface: surface_id.clone(),
                                 };
@@ -7678,7 +7725,10 @@ impl SessionPort for LocalSessionPort {
         let service = Arc::clone(&self.service);
         let owner = self.owner.clone();
         let surface = request.surface.clone();
-        let shell = crate::pty::resolve_shell(&request.shell)?;
+        let launch = match &request.program {
+            Some(program) => Launch::Program(crate::pty::resolve_program(program)?, request.args.clone()),
+            None => Launch::Shell(crate::pty::resolve_shell(&request.shell)?),
+        };
         let directory = request
             .directory
             .as_deref()
@@ -7686,17 +7736,29 @@ impl SessionPort for LocalSessionPort {
             .transpose()?;
         let events = self.events_tx.clone();
         tokio::task::spawn_blocking(move || {
-            service.open_shell(
-                crate::pty::ShellOwner {
-                    owner: &owner,
-                    surface: &surface,
-                },
-                &shell,
-                directory.as_deref(),
-                cols,
-                rows,
-                events,
-            )
+            let owner = crate::pty::ShellOwner {
+                owner: &owner,
+                surface: &surface,
+            };
+            match launch {
+                Launch::Shell(shell) => service.open_shell(
+                    owner,
+                    &shell,
+                    directory.as_deref(),
+                    cols,
+                    rows,
+                    events,
+                ),
+                Launch::Program(program, args) => service.open_program(
+                    owner,
+                    &program,
+                    &args,
+                    directory.as_deref(),
+                    cols,
+                    rows,
+                    events,
+                ),
+            }
         })
         .await
         .map_err(|error| format!("open PTY task failed: {error}"))?

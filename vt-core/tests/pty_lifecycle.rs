@@ -597,6 +597,8 @@ async fn a_write_waiting_for_the_child_does_not_block_the_runtime() {
         .open(
             &ShellRequest {
                 shell,
+                program: None,
+                args: Vec::new(),
                 directory: None,
                 surface: String::new(),
             },
@@ -680,6 +682,8 @@ async fn a_close_ends_a_write_that_waits_for_the_child() {
         .open(
             &ShellRequest {
                 shell,
+                program: None,
+                args: Vec::new(),
                 directory: None,
                 surface: String::new(),
             },

@@ -958,6 +958,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "uuid",
+ "which",
 ]
 
 [[package]]
@@ -1217,6 +1218,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81941cd78d0c92026c33e5e01312845a4cb1e9af3407f9134b100dd03144103e"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "which"
+version = "8.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bae2f2b2b816647a1cab1acc91f5bd20812d53cb344382635ec2181940c8034f"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

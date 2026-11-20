@@ -42,6 +42,15 @@ pub fn resolve_shell(request: &str) -> Result<String, String> {
     Ok(shell)
 }
 
+/// The executable that `program` names (docs/spec/agent-roles.md#launch-parameters): a path that contains a separator, or a
+/// name that the PATH of the environment of the service finds. A program that is not found is an error that names it.
+pub fn resolve_program(program: &str) -> Result<std::path::PathBuf, String> {
+    which::which(program).map_err(|error| match error {
+        which::Error::CannotFindBinaryPath => format!("program not found: {program}"),
+        other => format!("program {program} cannot be resolved: {other}"),
+    })
+}
+
 /// The directory the shell starts in. It must be the absolute path of an existing directory, and an
 /// error is returned instead of substituting another directory.
 pub fn resolve_directory(request: &str) -> Result<String, String> {
@@ -354,6 +363,26 @@ impl PtyService {
         apply_surface_environment(&mut command, owner.owner, owner.surface);
         command.env("SHELL", shell);
         crate::shell_integration::apply(shell, &mut command, &self.log)?;
+        self.spawn_owned(owner.owner, owner.surface, command, cwd, cols, rows, events)
+    }
+
+    /// Starts `program` with `args` as its argument vector and without a shell: the process of the session is the program
+    /// (docs/spec/agent-roles.md#launch-parameters).
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_program(
+        &self,
+        owner: ShellOwner<'_>,
+        program: &std::path::Path,
+        args: &[String],
+        cwd: Option<&str>,
+        cols: u16,
+        rows: u16,
+        events: mpsc::Sender<DaemonEvent>,
+    ) -> Result<String, String> {
+        let mut command = CommandBuilder::new(program);
+        self.apply_environment(&mut command);
+        apply_surface_environment(&mut command, owner.owner, owner.surface);
+        command.args(args);
         self.spawn_owned(owner.owner, owner.surface, command, cwd, cols, rows, events)
     }
 
