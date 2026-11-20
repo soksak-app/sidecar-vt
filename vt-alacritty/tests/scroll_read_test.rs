@@ -204,12 +204,34 @@ impl Sidecar {
     }
 
     async fn scroll_read(&mut self, by: i64) -> Value {
-        self.send(json!({"operation": "screen.scroll.read", "by": by, "quiet": 6}))
+        self.send_read(by).await;
+        self.read_reply().await
+    }
+
+    /// Sends a scroll read by `by` with the correlation identifier `scroll-read`.
+    async fn send_read(&mut self, by: i64) {
+        let line = json!({"surface": "s1", "cids": ["scroll-read"],
+            "body": {"operation": "screen.scroll.read", "by": by, "quiet": 6}})
+        .to_string();
+        self.to_serve
+            .write_all(format!("{line}\n").as_bytes())
+            .await
+            .expect("the request line was not written");
+    }
+
+    /// The reply of the scroll read, which answers its request: it carries the correlation identifier of the request.
+    async fn read_reply(&mut self) -> Value {
+        let reply = self
+            .until(|value| {
+                value["body"]["event"] == "screen.scroll" || value["body"]["error"].is_string()
+            })
             .await;
-        self.until(|value| {
-            value["body"]["event"] == "screen.scroll" || value["body"]["error"].is_string()
-        })
-        .await
+        assert_eq!(
+            reply["cids"],
+            json!(["scroll-read"]),
+            "the reply answers the scroll read: {reply}"
+        );
+        reply
     }
 }
 
@@ -285,23 +307,16 @@ async fn input_of_the_person_during_a_scroll_read_refuses_the_read() {
         .screen_until(|rows| rows.first().is_some_and(|row| row == "line 0001"))
         .await;
     sidecar.answer_frames = false;
-    sidecar
-        .send(json!({"operation": "screen.scroll.read", "by": -50, "quiet": 6}))
-        .await;
+    sidecar.send_read(-50).await;
     sidecar.type_text("q").await;
-    let refused = sidecar
-        .until(|value| {
-            value["body"]["event"] == "screen.scroll" || value["body"]["error"].is_string()
-        })
-        .await;
+    let refused = sidecar.read_reply().await;
     assert_eq!(
         refused["body"]["error"], "scrollReadInterrupted",
         "{refused}"
     );
-    assert!(
-        refused["body"]["reason"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("input")),
+    assert_eq!(
+        refused["body"]["reason"],
+        "the input request of the person reached the session during the scroll read",
         "{refused}"
     );
     sidecar.release_frames().await;
@@ -360,9 +375,7 @@ async fn a_scroll_read_of_a_program_with_synchronized_output_settles_by_sync() {
     // The ticks wait until the program has drawn each step, because the program starts processes for each byte and a tick of
     // this test comes at once, not at a display frame.
     sidecar.answer_frames = false;
-    sidecar
-        .send(json!({"operation": "screen.scroll.read", "by": 1, "quiet": 6}))
-        .await;
+    sidecar.send_read(1).await;
     sidecar
         .screen_until(|rows| rows.first().is_some_and(|row| row == "key 41"))
         .await;
@@ -371,11 +384,7 @@ async fn a_scroll_read_of_a_program_with_synchronized_output_settles_by_sync() {
         .screen_until(|rows| rows.first().is_some_and(|row| row == "key 42"))
         .await;
     sidecar.release_frames().await;
-    let read = sidecar
-        .until(|value| {
-            value["body"]["event"] == "screen.scroll" || value["body"]["error"].is_string()
-        })
-        .await;
+    let read = sidecar.read_reply().await;
     let body = &read["body"];
     assert_eq!(body["route"], "alternate_scroll", "{read}");
     assert_eq!(body["settledBy"]["scroll"], "sync", "{read}");
