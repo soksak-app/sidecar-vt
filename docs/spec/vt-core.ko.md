@@ -60,6 +60,10 @@ Service는 공통 event-log contract를 따른다. 100 ms batch interval은 이�
 
 hook은 프롬프트 앞마다 `133;A`를 보고하고(bash는 readline이 프롬프트의 마지막 줄만 다시 그리므로 `133;A;redraw=last`를 보고한다), 명령이 실행되기 전 `133;C`를, 다음 프롬프트 앞 `133;D;<status>`를 보고한다. zsh는 각 프롬프트 앞 `precmd` hook에서 `PS1`의 시작에 `133;P;k=i`, 끝에 `133;B`를, `PS2`의 시작에 `133;P;k=s`, 끝에 `133;B`를 더한다. 이 hook은 뒤의 hook이 자기 뒤에 프롬프트를 다시 정하지 않도록 자기를 `precmd_functions`의 끝으로 옮기며, 명령이 시작 파일의 프롬프트를 보도록 `preexec`와 다음 `precmd`에서 표시를 다시 지운다. `prompt_percent`가 없으면 zsh는 `A`만 보고한다. bash는 `A` 뒤에 `PS1`의 각 줄바꿈(프롬프트 escape `\n`과 줄바꿈 문자) 뒤에 `133;P;k=s`를 더하고, 명령이 시작할 때와 첫 `PROMPT_COMMAND` 항목에서 시작 파일의 `PS1`을 되돌린다. fish 4는 자기 표시를 보내므로 통합이 필요 없다. 프롬프트 앞마다 작업 디렉터리도 `7;file://<호스트 이름><경로>`로 보고하며, 경로는 비예약 문자와 `/`를 뺀 나머지를 퍼센트 인코딩한다. zsh는 `preexec` hook에서 `C`를 보고한다. bash 3.2에는 그런 hook이 없으므로 `DEBUG` trap이 프롬프트 뒤 첫 명령에서 `C`를 보고한다. 첫 `PROMPT_COMMAND` 항목이 그 대기를 취소한다. 빈 입력 줄은 명령 없이 `PROMPT_COMMAND`를 실행하기 때문이다. 스크립트가 자기를 설치하는 프롬프트에서는 자기 실행 뒤의 항목이 trap이 생긴 뒤에 실행되므로, 텍스트가 그 항목 중 하나와 같은 명령은 그 프롬프트에서 보고되지 않는다. trap은 마지막 인자로 `$_`를 넘기므로 다음 명령을 위해 `$_`가 유지된다. 시작 파일이 `DEBUG` trap을 설정했으면 스크립트는 그것을 바꾸지 않고 표시를 보고하지 않는다. `C` 없는 `A`는 크기 조정 때 명령 출력을 지우기 때문이다.
 
+### 프로세스 질의
+
+surface가 여는 세션은 그 surface를 위해 shell을 시작하며, 서비스는 shell을 시작할 때 그 surface와 시작 시각을 process table에서 기록한다. host는 서비스의 자식인 process에 대해 `{process, request}`를 보내고, 서비스는 그 process를 surface의 세션이 시작했고 아직 reap하지 않았으면 `{process, request, surface, started}`로, 아니면 `{process, request, surface: null}`로 같은 연결의 요청 순서대로 답한다. `started`는 Unix epoch 이후의 밀리초다. process id가 없거나 request 번호가 양의 정수가 아닌 질의는 `invalidParams` 오류로 거부하고 기록한다. 계약은 [process identity](https://github.com/soksak-app/core/blob/main/docs/spec/sidecars.md#process-identity)이다. sidecar는 `sidecar.json`에 `processes`를 선언한다([sidecars](https://github.com/soksak-app/core/blob/main/docs/spec/sidecars.md#declaration-and-startup)).
+
 ### 터미널 서비스 구현
 
 영속 터미널 서비스 하나가 애플리케이션 설정 디렉터리 하나의 PTY, VT 상태, 스크롤백, 렌더링을 소유한다. PTY 관리, 에뮬레이션, 렌더링, 클라이언트 전송은 그 프로세스 안의 별도 모듈이며 별도 실행 파일이 아니다. 독립된 세션은 각자의 PTY 장치와 셸 프로세스를 소유한다. PTY 장치는 프로세스가 아니다. 독립된 터미널 셋에는 애플리케이션 호스트 외에 서비스 하나와 셸 셋이 필요하다. WebKit 프로세스와 셸이 실행한 프로그램은 따로 센다.

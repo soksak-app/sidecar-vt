@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S232: sidecar가 core `docs/spec/sidecars.md#process-identity`의 process query에 답한다. 서비스는 각 세션 shell의 surface와 시작 시각을 기록하고, `{process, request, surface, started}`나 surface `null`로 답하며, `sidecar.json`은 `processes`를 선언한다(`docs/spec/vt-core.md#process-queries`). 검증: 바뀌지 않은 sidecar에서 `process_query_test`의 Red(세션 process의 query에 답 없음), 그 뒤 `process_query_test`와 `pty_lifecycle`의 Green.
 - S231: process의 argument 개수와 OSC 7501 record의 progress를 error를 버리지 않고 읽으므로 `sok-check events`가 통과한다. S227 항목은 그 변경 밖의 finding 하나를 적었지만, check는 S227이 더한 `vt-core/src/program_status.rs:275`에서 두 번째 finding을 보고했다. 검증: 두 finding이 있는 `sok-check events`의 Red, 그 뒤 check, `program_status_test`, `process_list_test`, `serve_contract`의 process list test, clippy의 Green.
 - S229: 기다리는 `messages.wait`는 요청 단계 `event`에 있으며, 진행 중인 요청의 watch는 그 단계를 기록하지 않으므로, 10초보다 긴 wait는 `request_waiting`을 쓰지 않는다(`docs/spec/vt-core.md`).
 - S230: `exited` 뒤의 `idle` 상태가 다음 `running`까지 그 command의 exit code를 지닌다(core `docs/spec/terminal-state.md#change-event`). 그래서 `shell.state.read`는 실패한 command 뒤에 attach하는 page에 그 실패를 준다. core의 공유 case를 다시 복사했다. 검증: 바뀌지 않은 tracker에서 `shell_state_test`의 Red(`D;0` 뒤 `idle`의 exit code `null`), 그 뒤 `shell_state_test`, `program_status_test`, `engine_test`의 Green.
