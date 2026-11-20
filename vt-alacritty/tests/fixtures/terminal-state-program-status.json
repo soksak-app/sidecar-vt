@@ -1,0 +1,1765 @@
+{
+  "contract": "docs/spec/terminal-state.md",
+  "cases": [
+    {
+      "name": "a program works, waits for an approval and works again",
+      "steps": [
+        {
+          "output": "\u001b]133;C\u0007\u001b]7501;state=working:app=agent\u001b\\"
+        },
+        {
+          "output": "\u001b]7501;state=blocked:kind=permission:app=agent:msg=UnVuIHRoZSB0ZXN0cz8=\u001b\\"
+        },
+        {
+          "output": "\u001b]7501;state=working:app=agent:progress=40\u001b\\"
+        }
+      ],
+      "events": [
+        {
+          "event": "shell.state",
+          "from": null,
+          "to": "running",
+          "source": "osc133",
+          "sequence": 1,
+          "exit": null
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": "agent",
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "blocked",
+              "kind": "permission",
+              "progress": null,
+              "app": "agent",
+              "title": null,
+              "msg": "Run the tests?"
+            }
+          ],
+          "notice": false,
+          "sequence": 2
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": 40,
+              "app": "agent",
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 3
+        }
+      ],
+      "read": {
+        "records": [
+          {
+            "id": null,
+            "state": "working",
+            "kind": null,
+            "progress": 40,
+            "app": "agent",
+            "title": null,
+            "msg": null
+          }
+        ],
+        "notice": false,
+        "sequence": 3
+      },
+      "activity": "running",
+      "rejected": 0
+    },
+    {
+      "name": "a program that finished its turn rests at its prompt",
+      "steps": [
+        {
+          "output": "\u001b]133;C\u0007\u001b]7501;state=working\u0007\u001b]7501;state=done\u0007"
+        }
+      ],
+      "events": [
+        {
+          "event": "shell.state",
+          "from": null,
+          "to": "running",
+          "source": "osc133",
+          "sequence": 1,
+          "exit": null
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "done",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 2
+        }
+      ],
+      "read": {
+        "records": [
+          {
+            "id": null,
+            "state": "done",
+            "kind": null,
+            "progress": null,
+            "app": null,
+            "title": null,
+            "msg": null
+          }
+        ],
+        "notice": false,
+        "sequence": 2
+      },
+      "activity": "idle",
+      "rejected": 0
+    },
+    {
+      "name": "an error report fails",
+      "steps": [
+        {
+          "output": "\u001b]133;C\u0007\u001b]7501;state=error:app=build:msg=TGlua2VyIGZhaWxlZA==\u001b\\"
+        }
+      ],
+      "events": [
+        {
+          "event": "shell.state",
+          "from": null,
+          "to": "running",
+          "source": "osc133",
+          "sequence": 1,
+          "exit": null
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "error",
+              "kind": null,
+              "progress": null,
+              "app": "build",
+              "title": null,
+              "msg": "Linker failed"
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        }
+      ],
+      "read": {
+        "records": [
+          {
+            "id": null,
+            "state": "error",
+            "kind": null,
+            "progress": null,
+            "app": "build",
+            "title": null,
+            "msg": "Linker failed"
+          }
+        ],
+        "notice": false,
+        "sequence": 1
+      },
+      "activity": "failed",
+      "rejected": 0
+    },
+    {
+      "name": "the highest level of the records decides",
+      "steps": [
+        {
+          "output": "\u001b]7501;state=working:app=ci\u001b\\\u001b]7501;state=blocked:id=deploy:kind=question\u001b\\\u001b]7501;state=idle:id=lint\u001b\\"
+        }
+      ],
+      "events": [
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": "ci",
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": "ci",
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "deploy",
+              "state": "blocked",
+              "kind": "question",
+              "progress": null,
+              "app": "ci",
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 2
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": "ci",
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "deploy",
+              "state": "blocked",
+              "kind": "question",
+              "progress": null,
+              "app": "ci",
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "lint",
+              "state": "idle",
+              "kind": null,
+              "progress": null,
+              "app": "ci",
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 3
+        }
+      ],
+      "read": {
+        "records": [
+          {
+            "id": null,
+            "state": "working",
+            "kind": null,
+            "progress": null,
+            "app": "ci",
+            "title": null,
+            "msg": null
+          },
+          {
+            "id": "deploy",
+            "state": "blocked",
+            "kind": "question",
+            "progress": null,
+            "app": "ci",
+            "title": null,
+            "msg": null
+          },
+          {
+            "id": "lint",
+            "state": "idle",
+            "kind": null,
+            "progress": null,
+            "app": "ci",
+            "title": null,
+            "msg": null
+          }
+        ],
+        "notice": false,
+        "sequence": 3
+      },
+      "activity": "attention",
+      "rejected": 0
+    },
+    {
+      "name": "a command finished mark ends the working, blocked and idle records and keeps done and error",
+      "steps": [
+        {
+          "output": "\u001b]133;C\u0007\u001b]7501;state=working\u001b\\\u001b]7501;state=blocked:id=a\u001b\\\u001b]7501;state=idle:id=b\u001b\\\u001b]7501;state=done:id=c\u001b\\\u001b]7501;state=error:id=d\u001b\\"
+        },
+        {
+          "output": "\u001b]133;D;0\u0007\u001b]133;A\u0007"
+        }
+      ],
+      "events": [
+        {
+          "event": "shell.state",
+          "from": null,
+          "to": "running",
+          "source": "osc133",
+          "sequence": 1,
+          "exit": null
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "a",
+              "state": "blocked",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 2
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "a",
+              "state": "blocked",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "b",
+              "state": "idle",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 3
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "a",
+              "state": "blocked",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "b",
+              "state": "idle",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "c",
+              "state": "done",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 4
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "a",
+              "state": "blocked",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "b",
+              "state": "idle",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "c",
+              "state": "done",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "d",
+              "state": "error",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 5
+        },
+        {
+          "event": "shell.state",
+          "from": "running",
+          "to": "exited",
+          "source": "osc133",
+          "sequence": 2,
+          "exit": 0
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": "c",
+              "state": "done",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "d",
+              "state": "error",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 6
+        },
+        {
+          "event": "shell.state",
+          "from": "exited",
+          "to": "idle",
+          "source": "osc133",
+          "sequence": 3,
+          "exit": null
+        }
+      ],
+      "read": {
+        "records": [
+          {
+            "id": "c",
+            "state": "done",
+            "kind": null,
+            "progress": null,
+            "app": null,
+            "title": null,
+            "msg": null
+          },
+          {
+            "id": "d",
+            "state": "error",
+            "kind": null,
+            "progress": null,
+            "app": null,
+            "title": null,
+            "msg": null
+          }
+        ],
+        "notice": false,
+        "sequence": 6
+      },
+      "activity": "failed",
+      "rejected": 0
+    },
+    {
+      "name": "the next command start ends the done and error records",
+      "steps": [
+        {
+          "output": "\u001b]133;C\u0007\u001b]7501;state=error\u001b\\\u001b]133;D;1\u0007\u001b]133;A\u0007"
+        },
+        {
+          "output": "\u001b]133;C\u0007"
+        }
+      ],
+      "events": [
+        {
+          "event": "shell.state",
+          "from": null,
+          "to": "running",
+          "source": "osc133",
+          "sequence": 1,
+          "exit": null
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "error",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        },
+        {
+          "event": "shell.state",
+          "from": "running",
+          "to": "exited",
+          "source": "osc133",
+          "sequence": 2,
+          "exit": 1
+        },
+        {
+          "event": "shell.state",
+          "from": "exited",
+          "to": "idle",
+          "source": "osc133",
+          "sequence": 3,
+          "exit": null
+        },
+        {
+          "event": "shell.state",
+          "from": "idle",
+          "to": "running",
+          "source": "osc133",
+          "sequence": 4,
+          "exit": null
+        },
+        {
+          "event": "program.status",
+          "records": [],
+          "notice": false,
+          "sequence": 2
+        }
+      ],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 2
+      },
+      "activity": "running",
+      "rejected": 0
+    },
+    {
+      "name": "clear removes the record and the records below it",
+      "steps": [
+        {
+          "output": "\u001b]7501;state=working:id=build:app=ci\u001b\\\u001b]7501;state=working:id=build/test\u001b\\\u001b]7501;state=idle:id=other\u001b\\\u001b]7501;state=clear:id=build\u001b\\"
+        }
+      ],
+      "events": [
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": "build",
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": "ci",
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": "build",
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": "ci",
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "build/test",
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": "ci",
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 2
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": "build",
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": "ci",
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "build/test",
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": "ci",
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "other",
+              "state": "idle",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 3
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": "other",
+              "state": "idle",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 4
+        }
+      ],
+      "read": {
+        "records": [
+          {
+            "id": "other",
+            "state": "idle",
+            "kind": null,
+            "progress": null,
+            "app": null,
+            "title": null,
+            "msg": null
+          }
+        ],
+        "notice": false,
+        "sequence": 4
+      },
+      "activity": "idle",
+      "rejected": 0
+    },
+    {
+      "name": "clear without an id removes every record",
+      "steps": [
+        {
+          "output": "\u001b]7501;state=working\u001b\\\u001b]7501;state=idle:id=x\u001b\\\u001b]7501;state=clear\u001b\\"
+        }
+      ],
+      "events": [
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            },
+            {
+              "id": "x",
+              "state": "idle",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 2
+        },
+        {
+          "event": "program.status",
+          "records": [],
+          "notice": false,
+          "sequence": 3
+        }
+      ],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 3
+      },
+      "activity": null,
+      "rejected": 0
+    },
+    {
+      "name": "a report replaces its record whole and a repeated report changes nothing",
+      "steps": [
+        {
+          "output": "\u001b]7501;state=blocked:kind=auth:app=tool:title=U2lnbiBpbg==\u001b\\\u001b]7501;state=blocked:kind=auth:app=tool:title=U2lnbiBpbg==\u001b\\\u001b]7501;state=working\u001b\\"
+        }
+      ],
+      "events": [
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "blocked",
+              "kind": "auth",
+              "progress": null,
+              "app": "tool",
+              "title": "Sign in",
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 2
+        }
+      ],
+      "read": {
+        "records": [
+          {
+            "id": null,
+            "state": "working",
+            "kind": null,
+            "progress": null,
+            "app": null,
+            "title": null,
+            "msg": null
+          }
+        ],
+        "notice": false,
+        "sequence": 2
+      },
+      "activity": "running",
+      "rejected": 0
+    },
+    {
+      "name": "the query is answered with its terminator and changes no record",
+      "steps": [
+        {
+          "output": "\u001b]7501;?\u001b\\\u001b]7501;?\u0007"
+        }
+      ],
+      "events": [],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 0
+      },
+      "activity": null,
+      "rejected": 0,
+      "written": [
+        "\u001b]7501;?\u001b\\",
+        "\u001b]7501;?\u0007"
+      ]
+    },
+    {
+      "name": "a full reset removes every record",
+      "steps": [
+        {
+          "output": "\u001b]7501;state=blocked\u001b\\\u001bc"
+        }
+      ],
+      "events": [
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "blocked",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        },
+        {
+          "event": "program.status",
+          "records": [],
+          "notice": false,
+          "sequence": 2
+        }
+      ],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 2
+      },
+      "activity": null,
+      "rejected": 0
+    },
+    {
+      "name": "unknown keys are ignored, whitespace is removed and a repeated key keeps its last value",
+      "steps": [
+        {
+          "output": "\u001b]7501; state = idle :future=1:state=working\u001b\\"
+        }
+      ],
+      "events": [
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        }
+      ],
+      "read": {
+        "records": [
+          {
+            "id": null,
+            "state": "working",
+            "kind": null,
+            "progress": null,
+            "app": null,
+            "title": null,
+            "msg": null
+          }
+        ],
+        "notice": false,
+        "sequence": 1
+      },
+      "activity": "running",
+      "rejected": 0
+    },
+    {
+      "name": "a malformed pair is rejected and the rest of the report applies",
+      "steps": [
+        {
+          "output": "\u001b]7501;state=working:app=a;b:id=x:Bad=1\u001b\\"
+        }
+      ],
+      "events": [
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": "x",
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        }
+      ],
+      "read": {
+        "records": [
+          {
+            "id": "x",
+            "state": "working",
+            "kind": null,
+            "progress": null,
+            "app": null,
+            "title": null,
+            "msg": null
+          }
+        ],
+        "notice": false,
+        "sequence": 1
+      },
+      "activity": "running",
+      "rejected": 2
+    },
+    {
+      "name": "an invalid kind, progress or app is rejected and treated as absent",
+      "steps": [
+        {
+          "output": "\u001b]7501;state=blocked:kind=money:progress=101:app=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u001b\\"
+        }
+      ],
+      "events": [
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "blocked",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        }
+      ],
+      "read": {
+        "records": [
+          {
+            "id": null,
+            "state": "blocked",
+            "kind": null,
+            "progress": null,
+            "app": null,
+            "title": null,
+            "msg": null
+          }
+        ],
+        "notice": false,
+        "sequence": 1
+      },
+      "activity": "attention",
+      "rejected": 3
+    },
+    {
+      "name": "a kind or a progress with a state that does not take it is rejected",
+      "steps": [
+        {
+          "output": "\u001b]7501;state=done:kind=question:progress=5\u001b\\"
+        }
+      ],
+      "events": [
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "done",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        }
+      ],
+      "read": {
+        "records": [
+          {
+            "id": null,
+            "state": "done",
+            "kind": null,
+            "progress": null,
+            "app": null,
+            "title": null,
+            "msg": null
+          }
+        ],
+        "notice": false,
+        "sequence": 1
+      },
+      "activity": "idle",
+      "rejected": 2
+    },
+    {
+      "name": "a report without a state or with an unknown state is rejected whole",
+      "steps": [
+        {
+          "output": "\u001b]7501;app=x\u001b\\\u001b]7501;state=sleeping\u001b\\"
+        }
+      ],
+      "events": [],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 0
+      },
+      "activity": null,
+      "rejected": 2
+    },
+    {
+      "name": "a report whose text does not decode or holds a control character is rejected whole",
+      "steps": [
+        {
+          "output": "\u001b]7501;state=working:msg=@@@\u001b\\\u001b]7501;state=working:msg=YQpi\u001b\\\u001b]7501;state=working:title=dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dA==\u001b\\"
+        }
+      ],
+      "events": [],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 0
+      },
+      "activity": null,
+      "rejected": 3
+    },
+    {
+      "name": "a report with an invalid id is rejected whole",
+      "steps": [
+        {
+          "output": "\u001b]7501;state=working:id=a//b\u001b\\\u001b]7501;state=working:id=s/s/s/s/s/s/s/s/s\u001b\\\u001b]7501;state=working:id=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u001b\\"
+        }
+      ],
+      "events": [],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 0
+      },
+      "activity": null,
+      "rejected": 3
+    },
+    {
+      "name": "a report longer than 4096 bytes is rejected whole",
+      "steps": [
+        {
+          "output": "\u001b]7501;state=working:future=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u001b\\"
+        }
+      ],
+      "events": [],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 0
+      },
+      "activity": null,
+      "rejected": 1
+    },
+    {
+      "name": "a bell while the terminal has no focus gives a notice and typing ends it",
+      "steps": [
+        {
+          "output": "\u001b]133;C\u0007\u0007"
+        },
+        {
+          "input": "y"
+        }
+      ],
+      "events": [
+        {
+          "event": "shell.state",
+          "from": null,
+          "to": "running",
+          "source": "osc133",
+          "sequence": 1,
+          "exit": null
+        },
+        {
+          "event": "program.status",
+          "records": [],
+          "notice": true,
+          "sequence": 1
+        },
+        {
+          "event": "program.status",
+          "records": [],
+          "notice": false,
+          "sequence": 2
+        }
+      ],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 2
+      },
+      "activity": "running",
+      "rejected": 0
+    },
+    {
+      "name": "a notification gives a notice that the focus ends",
+      "steps": [
+        {
+          "output": "\u001b]9;Approval requested\u0007"
+        },
+        {
+          "focus": true
+        }
+      ],
+      "events": [
+        {
+          "event": "program.status",
+          "records": [],
+          "notice": true,
+          "sequence": 1
+        },
+        {
+          "event": "program.status",
+          "records": [],
+          "notice": false,
+          "sequence": 2
+        }
+      ],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 2
+      },
+      "activity": null,
+      "rejected": 0
+    },
+    {
+      "name": "a notice beside a record leaves the level to the record",
+      "steps": [
+        {
+          "output": "\u001b]7501;state=working\u001b\\\u001b]777;notify;Agent;Turn complete\u001b\\"
+        }
+      ],
+      "events": [
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": true,
+          "sequence": 2
+        }
+      ],
+      "read": {
+        "records": [
+          {
+            "id": null,
+            "state": "working",
+            "kind": null,
+            "progress": null,
+            "app": null,
+            "title": null,
+            "msg": null
+          }
+        ],
+        "notice": true,
+        "sequence": 2
+      },
+      "activity": "running",
+      "rejected": 0
+    },
+    {
+      "name": "a bell while the terminal has the focus gives no notice",
+      "steps": [
+        {
+          "focus": true
+        },
+        {
+          "output": "\u0007\u001b]9;done\u0007"
+        }
+      ],
+      "events": [],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 0
+      },
+      "activity": null,
+      "rejected": 0
+    },
+    {
+      "name": "a progress report is no notification",
+      "steps": [
+        {
+          "output": "\u001b]9;4;3;\u0007\u001b]9;4;1;50\u0007\u001b]9;4;0\u0007"
+        }
+      ],
+      "events": [],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 0
+      },
+      "activity": null,
+      "rejected": 0
+    },
+    {
+      "name": "an OSC 777 command other than notify is rejected",
+      "steps": [
+        {
+          "output": "\u001b]777;precmd\u0007"
+        }
+      ],
+      "events": [],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 0
+      },
+      "activity": null,
+      "rejected": 1
+    },
+    {
+      "name": "a prompt start ends the records of a running program without a finished mark",
+      "steps": [
+        {
+          "output": "\u001b]7501;state=blocked:kind=question\u001b\\\u001b]133;A\u0007"
+        }
+      ],
+      "events": [
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "blocked",
+              "kind": "question",
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        },
+        {
+          "event": "shell.state",
+          "from": null,
+          "to": "idle",
+          "source": "osc133",
+          "sequence": 1,
+          "exit": null
+        },
+        {
+          "event": "program.status",
+          "records": [],
+          "notice": false,
+          "sequence": 2
+        }
+      ],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 2
+      },
+      "activity": "idle",
+      "rejected": 0
+    },
+    {
+      "name": "a continuation prompt line ends no record",
+      "steps": [
+        {
+          "output": "\u001b]7501;state=working\u001b\\\u001b]133;P;k=s\u0007"
+        }
+      ],
+      "events": [
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        },
+        {
+          "event": "shell.state",
+          "from": null,
+          "to": "idle",
+          "source": "osc133",
+          "sequence": 1,
+          "exit": null
+        }
+      ],
+      "read": {
+        "records": [
+          {
+            "id": null,
+            "state": "working",
+            "kind": null,
+            "progress": null,
+            "app": null,
+            "title": null,
+            "msg": null
+          }
+        ],
+        "notice": false,
+        "sequence": 1
+      },
+      "activity": "running",
+      "rejected": 0
+    },
+    {
+      "name": "a record decides over an earlier notice",
+      "steps": [
+        {
+          "output": "\u0007"
+        },
+        {
+          "output": "\u001b]7501;state=idle\u001b\\"
+        }
+      ],
+      "events": [
+        {
+          "event": "program.status",
+          "records": [],
+          "notice": true,
+          "sequence": 1
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "idle",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": true,
+          "sequence": 2
+        }
+      ],
+      "read": {
+        "records": [
+          {
+            "id": null,
+            "state": "idle",
+            "kind": null,
+            "progress": null,
+            "app": null,
+            "title": null,
+            "msg": null
+          }
+        ],
+        "notice": true,
+        "sequence": 2
+      },
+      "activity": "idle",
+      "rejected": 0
+    },
+    {
+      "name": "the end of the command that called ends its notice",
+      "steps": [
+        {
+          "output": "\u001b]133;C\u0007\u0007"
+        },
+        {
+          "output": "\u001b]133;D;0\u0007\u001b]133;A\u0007"
+        }
+      ],
+      "events": [
+        {
+          "event": "shell.state",
+          "from": null,
+          "to": "running",
+          "source": "osc133",
+          "sequence": 1,
+          "exit": null
+        },
+        {
+          "event": "program.status",
+          "records": [],
+          "notice": true,
+          "sequence": 1
+        },
+        {
+          "event": "shell.state",
+          "from": "running",
+          "to": "exited",
+          "source": "osc133",
+          "sequence": 2,
+          "exit": 0
+        },
+        {
+          "event": "program.status",
+          "records": [],
+          "notice": false,
+          "sequence": 2
+        },
+        {
+          "event": "shell.state",
+          "from": "exited",
+          "to": "idle",
+          "source": "osc133",
+          "sequence": 3,
+          "exit": null
+        }
+      ],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 2
+      },
+      "activity": "idle",
+      "rejected": 0
+    },
+    {
+      "name": "a clear with another key reports the key and clears",
+      "steps": [
+        {
+          "output": "\u001b]7501;state=working:app=x\u001b\\\u001b]7501;state=clear:app=x\u001b\\"
+        }
+      ],
+      "events": [
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": "x",
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": false,
+          "sequence": 1
+        },
+        {
+          "event": "program.status",
+          "records": [],
+          "notice": false,
+          "sequence": 2
+        }
+      ],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 2
+      },
+      "activity": null,
+      "rejected": 1
+    },
+    {
+      "name": "a notice gives attention again when the records are cleared",
+      "steps": [
+        {
+          "output": "\u0007\u001b]7501;state=working\u001b\\"
+        },
+        {
+          "output": "\u001b]7501;state=clear\u001b\\"
+        }
+      ],
+      "events": [
+        {
+          "event": "program.status",
+          "records": [],
+          "notice": true,
+          "sequence": 1
+        },
+        {
+          "event": "program.status",
+          "records": [
+            {
+              "id": null,
+              "state": "working",
+              "kind": null,
+              "progress": null,
+              "app": null,
+              "title": null,
+              "msg": null
+            }
+          ],
+          "notice": true,
+          "sequence": 2
+        },
+        {
+          "event": "program.status",
+          "records": [],
+          "notice": true,
+          "sequence": 3
+        }
+      ],
+      "read": {
+        "records": [],
+        "notice": true,
+        "sequence": 3
+      },
+      "activity": "attention",
+      "rejected": 0
+    },
+    {
+      "name": "a failed command stays failed at the next prompt",
+      "steps": [
+        {
+          "output": "\u001b]133;C\u0007\u001b]133;D;1\u0007\u001b]133;A\u0007"
+        }
+      ],
+      "events": [
+        {
+          "event": "shell.state",
+          "from": null,
+          "to": "running",
+          "source": "osc133",
+          "sequence": 1,
+          "exit": null
+        },
+        {
+          "event": "shell.state",
+          "from": "running",
+          "to": "exited",
+          "source": "osc133",
+          "sequence": 2,
+          "exit": 1
+        },
+        {
+          "event": "shell.state",
+          "from": "exited",
+          "to": "idle",
+          "source": "osc133",
+          "sequence": 3,
+          "exit": null
+        }
+      ],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 0
+      },
+      "activity": "failed",
+      "rejected": 0
+    },
+    {
+      "name": "the next command ends the failure of the last command",
+      "steps": [
+        {
+          "output": "\u001b]133;C\u0007\u001b]133;D;1\u0007\u001b]133;A\u0007\u001b]133;C\u0007"
+        }
+      ],
+      "events": [
+        {
+          "event": "shell.state",
+          "from": null,
+          "to": "running",
+          "source": "osc133",
+          "sequence": 1,
+          "exit": null
+        },
+        {
+          "event": "shell.state",
+          "from": "running",
+          "to": "exited",
+          "source": "osc133",
+          "sequence": 2,
+          "exit": 1
+        },
+        {
+          "event": "shell.state",
+          "from": "exited",
+          "to": "idle",
+          "source": "osc133",
+          "sequence": 3,
+          "exit": null
+        },
+        {
+          "event": "shell.state",
+          "from": "idle",
+          "to": "running",
+          "source": "osc133",
+          "sequence": 4,
+          "exit": null
+        }
+      ],
+      "read": {
+        "records": [],
+        "notice": false,
+        "sequence": 0
+      },
+      "activity": "running",
+      "rejected": 0
+    }
+  ]
+}

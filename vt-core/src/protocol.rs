@@ -881,6 +881,15 @@ pub enum EngineEvent {
     Notification {
         message: String,
     },
+    /// An accepted OSC 7501 report of the Program Status Protocol (program_status.rs).
+    ProgramStatus(crate::program_status::Action),
+    /// An OSC 9;4 progress report: `state` 0 to 4 and `progress` 0 to 100 or None.
+    Progress {
+        state: u8,
+        progress: Option<u8>,
+    },
+    /// A full reset (RIS).
+    FullReset,
     ShellState {
         marker: ShellMarker,
         params: Vec<String>,
@@ -1375,6 +1384,7 @@ struct Envelope {
 enum SurfaceCommand {
     /// Reads the terminal state of the session (core docs/spec/terminal-state.md#state-read).
     ShellStateRead,
+    ProgramStatusRead,
     /// Reads the process list of the session (core docs/spec/process-list.md#request).
     ProcessList,
     Open {
@@ -3457,6 +3467,48 @@ impl ReplayInputs {
     }
 }
 
+/// Writes a change of the program status of a session to the event log and sends it as the surface event
+/// `program.status` (core docs/spec/terminal-state.md#program-status-event). The log omits `title` and `msg`. Returns
+/// false when the output channel has closed.
+async fn send_program_status(
+    surface_id: &str,
+    session: &str,
+    output_tx: &OutputSink,
+    log: &Events,
+    emit_surface_events: bool,
+    change: crate::program_status::Change,
+) -> bool {
+    for id in &change.evicted {
+        log.emit_for(
+            Level::Warn,
+            "sidecar.vt.program.status.evicted",
+            Subject::session(session, &[]),
+            &json!({"id": id, "records": crate::program_status::MAX_RECORDS}),
+        );
+    }
+    log.emit_for(
+        Level::Info,
+        "sidecar.vt.program.status",
+        Subject::session(session, &[]),
+        &change.current.to_log_json(),
+    );
+    if !emit_surface_events {
+        return true;
+    }
+    let mut body = change.current.to_json();
+    body["event"] = Value::from("program.status");
+    let response = json!({"surface": surface_id, "body": body});
+    output_tx.send(response.to_string()).await.is_ok()
+}
+
+/// The state trackers of the session of one surface: the terminal state from the OSC 133 marks (shell_state.rs) and
+/// the program status from OSC 7501, the notifications and the focus (program_status.rs).
+#[derive(Default)]
+struct SessionStatus {
+    shell: crate::shell_state::ShellStateTracker,
+    program: crate::program_status::ProgramStatusTracker,
+}
+
 /// The result of a write whose sender ended without an answer: the session ended before it.
 const WRITE_RESULT_LOST: &str = "the session ended before the write completed";
 
@@ -3467,8 +3519,12 @@ async fn send_engine_events(
     emit_surface_events: bool,
     image_state: &mut Option<ImageState>,
     multipart: &mut Option<MultipartAssembly>,
-    shell_state: &mut crate::shell_state::ShellStateTracker,
+    status: &mut SessionStatus,
 ) -> bool {
+    let SessionStatus {
+        shell: shell_state,
+        program: program_status,
+    } = status;
     let SurfacePorts {
         surface_id,
         session_port,
@@ -3477,6 +3533,23 @@ async fn send_engine_events(
         inputs,
     } = ports;
     for event in engine.drain_events() {
+        // The tracker follows every output also while the surface does not draw; a mark changes the program status
+        // after its `shell.state` event, so it is applied in the arm of the mark.
+        if !matches!(event, EngineEvent::ShellState { .. })
+            && let Some(session) = session_id
+            && let Some(change) = program_status.apply(session, &event)
+            && !send_program_status(
+                surface_id,
+                session,
+                output_tx,
+                log,
+                emit_surface_events,
+                change,
+            )
+            .await
+        {
+            return false;
+        }
         match event {
             EngineEvent::InlineImage { command, anchor } => {
                 let command_for_event = command.clone();
@@ -3675,6 +3748,19 @@ async fn send_engine_events(
                         // engine, which is reported and changes no state.
                         Err(reason) => log.record_error("shell state", reason),
                     }
+                    if let Some(change) = program_status.mark(session, marker, &params)
+                        && !send_program_status(
+                            surface_id,
+                            session,
+                            output_tx,
+                            log,
+                            emit_surface_events,
+                            change,
+                        )
+                        .await
+                    {
+                        return false;
+                    }
                 }
                 if !emit_surface_events {
                     continue;
@@ -3734,6 +3820,16 @@ async fn send_engine_events(
                     continue;
                 }
                 let response = json!({"surface": surface_id, "body": {"event": "bell"}});
+                if output_tx.send(response.to_string()).await.is_err() {
+                    return false;
+                }
+            }
+            EngineEvent::ProgramStatus(_) | EngineEvent::FullReset => {}
+            EngineEvent::Progress { state, progress } => {
+                if !emit_surface_events {
+                    continue;
+                }
+                let response = json!({"surface": surface_id, "body": {"event": "progress", "state": state, "progress": progress}});
                 if output_tx.send(response.to_string()).await.is_err() {
                     return false;
                 }
@@ -4152,8 +4248,8 @@ async fn surface_task(
     };
     let mut daemon_events_rx = session_port.get_events().await;
     let mut image_state: Option<ImageState> = None;
-    // The terminal state of the session of this surface, from the OSC 133 marks (shell_state.rs).
-    let mut shell_state = crate::shell_state::ShellStateTracker::default();
+    // The terminal state and the program status of the session of this surface.
+    let mut status = SessionStatus::default();
     // The message folder of this surface, the reports of its watch and the waits that no message has answered yet
     // (messaging.rs).
     let mut messages: Option<messaging::Registration> = None;
@@ -4266,7 +4362,7 @@ async fn surface_task(
                 // output of a feed: its events are sent, and a frame draws it.
                 engine.stop_sync();
                 sync_deadline = engine.sync_deadline();
-                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut shell_state).await { return; }
+                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut status).await { return; }
                 record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
                 if headless || hold_while_presenting(&mut image_state) { continue; }
                 if let Some(img_state) = image_state.as_mut() {
@@ -4847,6 +4943,21 @@ async fn surface_task(
                             || next_focused != focused
                             || preedit_changes_render(&preedit, &next_preedit);
                         let write_session = session_id.clone().filter(|_| !bytes.is_empty());
+                        // The focus actions and the typing of the person end a notice (core
+                        // docs/spec/terminal-state.md#notice); each focus action reports the focus again.
+                        if let Some(session) = session_id.as_deref() {
+                            for action in &actions {
+                                let change = match action {
+                                    InputAction::Focus(next) => status.program.focus(session, *next),
+                                    InputAction::Insert { .. } | InputAction::Key(_) | InputAction::Command(_) => status.program.typed(session),
+                                };
+                                if let Some(change) = change
+                                    && !send_program_status(&surface_id, session, &output_tx, &log, !headless, change).await
+                                {
+                                    return;
+                                }
+                            }
+                        }
                         focused = next_focused;
                         preedit = Some(next_preedit);
 
@@ -5056,7 +5167,7 @@ async fn surface_task(
                     SurfaceCommand::ShellStateRead => {
                         let response = match session_id.as_deref() {
                             Some(session) => {
-                                let current = shell_state.current(session);
+                                let current = status.shell.current(session);
                                 json!({"surface": surface_id, "body": {
                                     "event": "shell.state.current",
                                     "state": current.state.map(|state| state.name()),
@@ -5066,6 +5177,17 @@ async fn surface_task(
                                 }})
                             }
                             None => json!({"surface": surface_id, "body": {"error": "Session not open", "request": {"operation": "shell.state.read"}}}),
+                        };
+                        if output_tx.reply(response).await.is_err() { return; }
+                    }
+                    SurfaceCommand::ProgramStatusRead => {
+                        let response = match session_id.as_deref() {
+                            Some(session) => {
+                                let mut body = status.program.current(session).to_json();
+                                body["event"] = Value::from("program.status.current");
+                                json!({"surface": surface_id, "body": body})
+                            }
+                            None => json!({"surface": surface_id, "body": {"error": "Session not open", "request": {"operation": "program.status.read"}}}),
                         };
                         if output_tx.reply(response).await.is_err() { return; }
                     }
@@ -5209,7 +5331,7 @@ async fn surface_task(
                         // The engine answers a theme change with the color scheme report of a
                         // program that set mode 2031, which reaches the program after the theme
                         // input (docs/spec/terminal-protocols.md#vendor-contracts).
-                        if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut shell_state).await { return; }
+                        if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut status).await { return; }
                         if let Some(state) = image_state.as_mut() {
                             state.theme = theme;
                             if state.pending_draw {
@@ -5340,7 +5462,7 @@ async fn surface_task(
                         if let Err(error) = engine.resolve_clipboard(request_id, &text) {
                             let response = json!({"surface": surface_id, "body": {"error": error}});
                             if output_tx.reply(response).await.is_err() { return; }
-                        } else if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, true, &mut image_state, &mut multipart, &mut shell_state).await {
+                        } else if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, true, &mut image_state, &mut multipart, &mut status).await {
                             return;
                         }
                     }
@@ -5722,7 +5844,7 @@ async fn surface_task(
                                 }
                                 sync_deadline = engine.sync_deadline();
                                 record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
-                                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut shell_state).await { return; }
+                                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut status).await { return; }
                                 if !send_processes(&surface_id, session_port.as_ref(), sid, &mut processes_sent, &mut process_watch, &output_tx, &log).await { return; }
                                 if headless || hold_while_presenting(&mut image_state) { continue; }
                                 if let Some(ref mut img_state) = image_state {
@@ -5754,6 +5876,12 @@ async fn surface_task(
                                     if read.reply.reply(response).await.is_err() { return; }
                                 }
                                 if !inputs.finish_all_writes().await { return; }
+                                // The end of the session ends the records and the notice before its exit event.
+                                if let Some(change) = status.program.end(sid)
+                                    && !send_program_status(&surface_id, sid, &output_tx, &log, !headless, change).await
+                                {
+                                    return;
+                                }
                                 session_ended = true;
                                 if let Some(state) = image_state.as_mut()
                                     && state.dirty && !state.pending_draw && state.drawing {
@@ -6755,6 +6883,11 @@ where
                             }
                             "shell.state.read" => {
                                 if tx.send(SurfaceCommand::ShellStateRead).await.is_err() {
+                                    break;
+                                }
+                            }
+                            "program.status.read" => {
+                                if tx.send(SurfaceCommand::ProgramStatusRead).await.is_err() {
                                     break;
                                 }
                             }

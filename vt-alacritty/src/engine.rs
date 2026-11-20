@@ -51,7 +51,7 @@ fn osc_outcome(selector: &[u8]) -> OscOutcome {
         | 110..=112
         | 117
         | 119 => OscOutcome::Implemented,
-        7 | 8 | 9 | 133 | 1337 => OscOutcome::Vendor,
+        7 | 8 | 9 | 133 | 777 | 1337 | 7501 => OscOutcome::Vendor,
         _ => OscOutcome::Unsupported,
     }
 }
@@ -150,6 +150,11 @@ pub const OSC_SELECTOR_INVENTORY: &[OscSelectorEvidence] = &[
         selector: "1337",
         outcome: OscOutcome::Vendor,
         test: "osc1337_inline_image_is_typed_and_survives_input_chunk_boundaries",
+    },
+    OscSelectorEvidence {
+        selector: "777,7501",
+        outcome: OscOutcome::Vendor,
+        test: "osc777_and_osc7501_are_typed_vendor_reports",
     },
 ];
 
@@ -263,6 +268,37 @@ fn pointer_shape(name: &str) -> Option<&'static str> {
     })
 }
 
+/// Parses `4;<state>[;<progress>]` of OSC 9: `state` one digit from 0 to 4, `progress` empty or one to three digits of a
+/// value from 0 to 100.
+fn parse_progress(payload: &str) -> Result<EngineEvent, String> {
+    let mut fields = payload.split(';').skip(1);
+    let state = match fields.next().map(str::as_bytes) {
+        Some([digit @ b'0'..=b'4']) => digit - b'0',
+        _ => return Err(format!("OSC 9;4 progress state is not 0 to 4: {payload}")),
+    };
+    let progress = match fields.next() {
+        None | Some("") => None,
+        Some(value) => Some(
+            percent(value).ok_or_else(|| format!("OSC 9;4 progress is not 0 to 100: {payload}"))?,
+        ),
+    };
+    if fields.next().is_some() {
+        return Err(format!("OSC 9;4 progress has more fields: {payload}"));
+    }
+    Ok(EngineEvent::Progress { state, progress })
+}
+
+/// One to three ASCII digits of a value from 0 to 100.
+fn percent(value: &str) -> Option<u8> {
+    if value.is_empty() || value.len() > 3 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let number = value
+        .bytes()
+        .fold(0u16, |number, byte| number * 10 + u16::from(byte - b'0'));
+    u8::try_from(number).map_or(None, |number| (number <= 100).then_some(number))
+}
+
 fn parse_vendor_osc(selector: &[u8], payload: &[u8]) -> Result<Option<EngineEvent>, String> {
     let selector = std::str::from_utf8(selector)
         .map_err(|_| "vendor OSC selector is not UTF-8".to_string())?;
@@ -305,12 +341,30 @@ fn parse_vendor_osc(selector: &[u8], payload: &[u8]) -> Result<Option<EngineEven
                 uri: (!uri.is_empty()).then_some(uri.to_string()),
             }))
         }
+        // The first field 4 is the progress report of ConEmu, which is no notification
+        // (core docs/spec/terminal-state.md#notice).
+        "9" if payload == "4" || payload.starts_with("4;") => parse_progress(payload).map(Some),
         "9" => {
             if payload.is_empty() {
                 return Err("OSC 9 notification is empty".to_string());
             }
             Ok(Some(EngineEvent::Notification {
                 message: payload.to_string(),
+            }))
+        }
+        "777" => {
+            let mut fields = payload.splitn(3, ';');
+            if fields.next() != Some("notify") {
+                return Err(format!("OSC 777 command is unsupported: {payload}"));
+            }
+            let (Some(_title), Some(body)) = (fields.next(), fields.next()) else {
+                return Err("OSC 777 notify has no title and body".to_string());
+            };
+            if body.is_empty() {
+                return Err("OSC 777 notification is empty".to_string());
+            }
+            Ok(Some(EngineEvent::Notification {
+                message: body.to_string(),
             }))
         }
         "133" => {
@@ -1127,6 +1181,20 @@ impl AlacrittyEngine {
         let payload = String::from_utf8_lossy(payload);
         let terminator = if bel { "\x07" } else { "\x1b\\" };
         Some(match selector {
+            // The query of the Program Status Protocol, answered with the only bytes that the protocol lets a terminal
+            // write back (core docs/spec/terminal-state.md#records).
+            "7501" if payload == "?" => Some(EngineEvent::PtyWrite(
+                format!("\x1b]7501;?{terminator}").into_bytes(),
+            )),
+            "7501" => {
+                let length = 2 + selector.len() + 1 + payload.len() + terminator.len();
+                let parsed = soksak_sidecar_vt_core::program_status::parse_report(&payload, length);
+                for reason in parsed.rejections {
+                    self.events
+                        .push(QueuedEvent::Neutral(EngineEvent::Error(reason)));
+                }
+                parsed.action.map(EngineEvent::ProgramStatus)
+            }
             "17" | "19" if payload == "?" => {
                 // An unset highlight background is the theme's selection background. An unset
                 // highlight foreground is the default foreground color.
@@ -1809,6 +1877,8 @@ impl AlacrittyEngine {
                 // A full reset (RIS) resets mode 2031; the library resets its own state.
                 if byte == b'c' && intermediates.is_empty() {
                     self.color_scheme_reports = false;
+                    self.events
+                        .push(QueuedEvent::Neutral(EngineEvent::FullReset));
                 }
                 if !esc_executed(&intermediates, byte) {
                     let intermediates = String::from_utf8_lossy(&intermediates);

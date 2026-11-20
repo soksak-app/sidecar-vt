@@ -252,7 +252,7 @@ fn vendor_osc_contracts_are_separate() {
             .iter()
             .map(|entry| entry.selector)
             .collect::<Vec<_>>(),
-        ["7,8,9,133", "1337"]
+        ["7,8,9,133", "1337", "777,7501"]
     );
     assert!(vendor.iter().all(|entry| !entry.test.is_empty()));
 }
@@ -2780,4 +2780,38 @@ fn an_osc_event_of_the_engine_follows_the_events_of_the_output_before_it() {
         })
         .collect();
     assert_eq!(events, ["title first", "pointer text"]);
+}
+
+#[test]
+fn osc777_and_osc7501_are_typed_vendor_reports() {
+    use soksak_sidecar_vt_core::program_status::{Action, ProgramState};
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b]777;notify;Agent;Turn complete\x1b\\\x1b]777;precmd\x07");
+    engine.feed(b"\x1b]7501;state=working:app=agent\x07\x1b]7501;?\x1b\\\x1b]9;4;1;50\x07");
+    let events = engine.drain_events();
+    assert!(
+        matches!(&events[0], EngineEvent::Notification { message } if message == "Turn complete"),
+        "{events:?}"
+    );
+    assert!(
+        matches!(&events[1], EngineEvent::Error(reason) if reason == "OSC 777 command is unsupported: precmd"),
+        "{events:?}"
+    );
+    assert!(
+        matches!(&events[2], EngineEvent::ProgramStatus(Action::Set(record))
+            if record.state == ProgramState::Working && record.app.as_deref() == Some("agent")),
+        "{events:?}"
+    );
+    assert!(
+        matches!(&events[3], EngineEvent::PtyWrite(bytes) if bytes == b"\x1b]7501;?\x1b\\"),
+        "{events:?}"
+    );
+    assert_eq!(
+        events[4],
+        EngineEvent::Progress {
+            state: 1,
+            progress: Some(50)
+        }
+    );
+    assert_eq!(events.len(), 5, "{events:?}");
 }

@@ -236,6 +236,105 @@
       },
       "description": "Bytes written to the PTY of a session, all of them as hex, with the cids of the inputs that caused the write. A replay input: sequence counts the inputs of the session from 1 (core docs/spec/replay.md). error is present when the write failed."
     },
+    "sidecar.vt.program.status": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "idle",
+                    "working",
+                    "blocked",
+                    "done",
+                    "error"
+                  ]
+                },
+                "kind": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "permission",
+                    "question",
+                    "auth",
+                    null
+                  ]
+                },
+                "app": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "state",
+                "kind",
+                "app"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "notice": {
+            "type": "boolean"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "records",
+          "notice",
+          "sequence"
+        ]
+      },
+      "description": "The program status of a session changed (core docs/spec/terminal-state.md#program-status-event): records are the OSC 7501 records of the program, the root record first and then by id, each without its title and msg, because a program may write the command that it asks to approve; notice is whether the program called the person by a notification or a bell while the surface had no keyboard focus; sequence counts the changes of the session from 1."
+    },
+    "sidecar.vt.program.status.evicted": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "warn",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "records": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "records"
+        ]
+      },
+      "description": "A report added a record to a session that already kept the most records (core docs/spec/terminal-state.md#records), so the tracker removed the record updated least recently: id is the removed record, null for the root record, and records is the limit."
+    },
     "sidecar.vt.shell.state": {
       "layer": "sidecar",
       "class": "lifecycle",
