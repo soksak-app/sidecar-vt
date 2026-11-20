@@ -1,6 +1,6 @@
 # Test, build, and release of the terminal engine sidecar repository (docs/features.md).
 # The release is the npm pack file of vt-alacritty.
-.PHONY: install test build release check-cargo release-candidate repeat check-push install-hooks
+.PHONY: install test build release check-cargo release-candidate repeat check-push install-hooks measure-program-redraw
 
 # rustup installs cargo in $(CARGO_HOME)/bin, and in ~/.cargo/bin when CARGO_HOME is unset; a GitHub runner sets CARGO_HOME
 # elsewhere (S165). rustup adds that folder to the shell profile, which the shell of make does not read (S164).
@@ -43,7 +43,7 @@ endif
 
 check-cargo:
 	@test -n "$(CARGO)" || { echo "make: cargo is on neither PATH nor $(CARGO_HOME)/bin; rustup installs it there" >&2; exit 1; }
-build test repeat: check-cargo
+build test repeat measure-program-redraw: check-cargo
 
 # The installation stage (core docs/spec/plugins.md#repositories): it installs the locked dependencies; the tests, checks and packs consume them without installing.
 install:
@@ -114,6 +114,19 @@ repeat:
 	  if ! $(NEXTEST) -p $(PACKAGE) $(CARGO_FEATURE_ARGS) $(if $(TEST),-E 'test(=$(TEST))') > "$$output" 2>&1; then \
 	    cat "$$output"; echo "FAIL run $$run of $(COUNT) after $$(( $$(date +%s) - started )) s"; exit 1; fi; \
 	  echo "PASS run $$run of $(COUNT) in $$(( $$(date +%s) - started )) s"; run=$$((run + 1)); done
+
+# Measures the output of less, vim and htop after a scroll of BY cursor keys in a real PTY, REPEATS times without and with a load of one
+# yes process for each processor, for the quiet interval of the program scroll (core docs/spec/terminal-read.md#program-scroll, S211):
+# the largest time to the first output and the largest gap between the outputs of one redraw, in milliseconds and in display frames at
+# the refresh rate of each screen of the system, which the recipe reads from NSScreen. It judges no value and gates nothing
+# (vt-core/examples/measure_program_redraw.rs).
+measure-program-redraw:
+	@rates="$$(osascript -l JavaScript -e "ObjC.import('AppKit'); ObjC.unwrap(\$$.NSScreen.screens).map(s => s.maximumFramesPerSecond).join(',')")" && \
+	  test -n "$$rates" || { echo "measure-program-redraw read no refresh rate of a screen" >&2; exit 1; }; \
+	  for load in "" --load; do \
+	    $(PROCESS_IDENTITY_ENV) MACOSX_DEPLOYMENT_TARGET=$(MACOS_MINIMUM) CARGO_INCREMENTAL=0 $(CARGO) run --quiet --release -p soksak-sidecar-vt-core --example measure_program_redraw -- \
+	      --refresh-rates "$$rates" $(if $(PROGRAMS),--programs $(PROGRAMS)) --repeats $(or $(REPEATS),20) --by $(or $(BY),50) $$load || exit 1; \
+	  done
 
 # Sets this repository to use .githooks, which checks commit messages and records at commit time.
 install-hooks:
