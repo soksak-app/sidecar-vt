@@ -84,7 +84,9 @@ where
         if value["surface"] == json!(sentinel) && value["closed"] == json!(true) {
             return answer;
         }
-        if value.get("process") == Some(&json!(process)) && value.get("request") == Some(&json!(request)) {
+        if value.get("process") == Some(&json!(process))
+            && value.get("request") == Some(&json!(request))
+        {
             answer = Some(value);
         } else {
             skipped.push(value);
@@ -93,12 +95,16 @@ where
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_process_query_names_the_surface_and_start_time_of_a_session_process_and_null_after_its_exit() {
+async fn a_process_query_names_the_surface_and_start_time_of_a_session_process_and_null_after_its_exit()
+ {
     let directory = tempfile::tempdir().expect("create the folder of the test");
     // The session program announces its process id through the notice of OSC 9, then stays until its input ends.
     let program = directory.path().join("session-program");
-    std::fs::write(&program, "#!/bin/sh\nprintf '\\033]9;session-ready %s\\007' \"$$\"\nexec cat\n")
-        .expect("write the program");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\nprintf '\\033]9;session-ready %s\\007' \"$$\"\nexec cat\n",
+    )
+    .expect("write the program");
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
         .expect("make the program executable");
     let options = Options::service(directory.path().join("logs"), "process-query".to_string());
@@ -130,7 +136,9 @@ async fn a_process_query_names_the_surface_and_start_time_of_a_session_process_a
     })
     .await;
     let after = now_ms();
-    let message = ready["body"]["message"].as_str().expect("the notice is text");
+    let message = ready["body"]["message"]
+        .as_str()
+        .expect("the notice is text");
     let process: u32 = message["session-ready ".len()..]
         .parse()
         .unwrap_or_else(|error| panic!("the notice names no process id: {message}: {error}"));
@@ -138,8 +146,14 @@ async fn a_process_query_names_the_surface_and_start_time_of_a_session_process_a
     // A process of a session of tab-a answers with its surface and the start time of the process table, which is at most
     // 1 ms before the start of the opening, because the table holds microseconds.
     let answer = process_answer(&mut to_serve, &mut lines, process, 1).await;
-    let answer = answer.unwrap_or_else(|| panic!("the service gave no answer to the query of the session process"));
-    assert_eq!(answer["surface"], json!("tab-a"), "the answer names the surface of the session: {answer}");
+    let answer = answer.unwrap_or_else(|| {
+        panic!("the service gave no answer to the query of the session process")
+    });
+    assert_eq!(
+        answer["surface"],
+        json!("tab-a"),
+        "the answer names the surface of the session: {answer}"
+    );
     let started = answer["started"]
         .as_u64()
         .unwrap_or_else(|| panic!("the answer has no start time: {answer}"));
@@ -172,5 +186,6 @@ async fn a_process_query_names_the_surface_and_start_time_of_a_session_process_a
     );
 
     drop(to_serve);
-    task.await.expect("the service task ends after its input ends");
+    task.await
+        .expect("the service task ends after its input ends");
 }
