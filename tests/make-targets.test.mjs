@@ -24,12 +24,15 @@ function recipe(target, variables = []) {
 
 // A published commit is kept, so the push checks its message and the checklist history it records; CI runs the tests on
 // the pushed commits.
-test("make check-push runs the commit message check and the checklist history check of the pushed range (S154)", { timeout: 30000 }, () => {
-  const commands = recipe("check-push");
-  assert.deepEqual(commands.trim().split("\n"), [
+test("make check-push runs the commit message check and the checklist history check of the pushed range (S154) and the format check (S236)", { timeout: 30000 }, () => {
+  // The first line is the check-cargo prerequisite, which finds the cargo of the format check.
+  const commands = recipe("check-push").trim().split("\n").filter((line) => !line.startsWith("test -n "));
+  assert.deepEqual(commands.slice(0, 2), [
     'pnpm exec sok-check commits "origin/main..HEAD"',
     'pnpm exec sok-check docs --range "origin/main..HEAD"',
   ]);
+  assert.equal(commands.length, 3, `make check-push runs three commands: ${commands.join(" | ")}`);
+  assert.match(commands[2], /\bcargo fmt --all --check$/, "make check-push runs the format check of the Rust sources");
 });
 
 test("make build and release pass an explicit diagnostics feature to Cargo (S78)", { timeout: 30000 }, () => {

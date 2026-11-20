@@ -96,11 +96,13 @@ release-candidate:
 	  SOKSAK_DIAGNOSTIC_PACKAGE_RELEASE="$$release" node --test --test-concurrency=1 tests/versions.test.mjs tests/diagnostic_package.test.mjs
 
 # The checks that a push needs: the commit messages and the checklist history of the pushed range, because a published
-# commit is kept; CI runs the tests and the other checks on the pushed commits.
+# commit is kept, and the format of the Rust sources, so that an unformatted source does not reach main; CI runs the
+# tests and the other checks on the pushed commits. The format check reads the Rust sources of the working tree.
 # RANGE holds the commits of the pushed refs; the pre-push hook sets it, and it defaults to origin/main..HEAD.
-check-push:
+check-push: check-cargo
 	pnpm exec sok-check commits "$(or $(RANGE),origin/main..HEAD)"
 	pnpm exec sok-check docs --range "$(or $(RANGE),origin/main..HEAD)"
+	$(CARGO) fmt --all --check
 
 # Repeats the tests of PACKAGE, or only the test TEST, COUNT times and reports each run with its elapsed time; the
 # first failing run prints its output and fails. FEATURES selects the package features used by each run. Each run goes

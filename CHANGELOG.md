@@ -1,5 +1,6 @@
 # Changelog
 
+- S236: `make check-push`, which the pre-push hook runs, runs `cargo fmt --all --check`, so a push of an unformatted Rust source is refused before it reaches main. Verification: Red of the `make check-push` test of `tests/make-targets.test.mjs` and a passing `make check-push` on a commit with an unformatted line, then Green of the test, a failing `make check-push` on that commit and a passing one after its revert.
 - S235: The lib test target of `soksak-sidecar-vt-core` builds: the lifecycle test session names `surface_process: None`, because its child belongs to no surface.
 - S234: A persistent service with a live session exits after `shutdown` once its client has left: the connection no longer waits for the monitors of its sessions, and the sessions drop the sender of the connection that ended (core `docs/spec/persistent-services.md#service-transport`).
 - S233: `open_program_test` covers a relative program without a session directory: the service runs as a child process with its own `HOME`, and the program resolves from that home folder.
