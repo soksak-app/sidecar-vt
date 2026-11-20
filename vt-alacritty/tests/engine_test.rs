@@ -1656,8 +1656,8 @@ fn redraw_last_scrolls_the_screen_when_the_offset_row_is_below_the_bottom() {
     let last_output = rows.iter().rposition(|row| row == "o2").unwrap();
     assert_eq!(
         (usize::from(cursor.row), cursor.col),
-        (last_output + 1 + 3, 0),
-        "the cursor must lie three rows below the first prompt row: {rows:?}"
+        (last_output + 1 + 3, 2),
+        "the cursor must lie three rows below the first prompt row, at its column: {rows:?}"
     );
     assert_eq!(
         rows[last_output + 1..],
@@ -1683,8 +1683,8 @@ fn a_resize_counts_every_row_from_the_prompt_start_when_the_prompt_ends_its_own_
     let cursor = engine.cursor();
     assert_eq!(
         (cursor.row, cursor.col),
-        (7, 0),
-        "the cursor must lie five rows below the prompt start"
+        (7, 2),
+        "the cursor must lie five rows below the prompt start, at its column"
     );
     assert_eq!(
         all_text(&mut engine),
@@ -1705,8 +1705,8 @@ fn a_widening_resize_counts_the_rows_of_a_prompt_that_ended_at_the_margin() {
     let cursor = engine.cursor();
     assert_eq!(
         (cursor.row, cursor.col),
-        (5, 0),
-        "the cursor must lie three rows below the prompt start"
+        (5, 5),
+        "the cursor must lie three rows below the prompt start, at its column"
     );
     assert_eq!(
         all_text(&mut engine),
@@ -1727,8 +1727,8 @@ fn a_prompt_redrawn_after_a_screen_clear_starts_at_the_top_row() {
     let cursor = engine.cursor();
     assert_eq!(
         (cursor.row, cursor.col),
-        (5, 0),
-        "the prompt starts at the top row"
+        (5, 2),
+        "the prompt starts at the top row, and the cursor stays at its column"
     );
     assert_eq!(
         all_text(&mut engine),
@@ -2193,6 +2193,8 @@ fn a_prompt_redrawn_after_a_narrowing_resize_has_no_empty_row_above_it_when_rows
     engine.feed(b"\x1b]133;A\x07");
     engine.feed(prompt);
     engine.resize(28, 6);
+    // zsh starts each redraw with a carriage return.
+    engine.feed(b"\r");
     engine.feed(prompt);
     // At width 28, the prompt was two rows, so zsh moves up one row to redraw it.
     engine.resize(28, 8);

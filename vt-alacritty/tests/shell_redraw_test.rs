@@ -120,6 +120,18 @@ impl Session {
         self.engine.resize(cols, self.rows);
         self.service.resize(&self.id, cols, self.rows).unwrap();
     }
+
+    /// The output of the session that arrived, one read of the PTY for each element, without
+    /// waiting for more.
+    fn arrived_reads(&mut self) -> Vec<Vec<u8>> {
+        let mut reads = Vec::new();
+        while let Ok(event) = self.rx.try_recv() {
+            if let DaemonEvent::Output { data, .. } = event {
+                reads.push(data);
+            }
+        }
+        reads
+    }
 }
 
 fn open(shell: &str, variable: &str, directory: &Path) -> Session {
@@ -332,6 +344,119 @@ async fn resize_two_line_prompt(mut session: Session) -> Result<(), String> {
     }
     let _ = session.service.close(&session.id);
     Ok(())
+}
+
+/// The prompt of the zsh drag test, a home folder path as zsh shows it, in the form of PS1.
+const PATH_PROMPT: &str = "~/ai/test %% ";
+/// The prompt as zsh draws it; the cursor stands after it.
+const PATH_PROMPT_TEXT: &str = "~/ai/test % ";
+
+/// The state that the service can present after a resize or after a read of the PTY: a
+/// description of the step, the text of the cursor row and the cursor. The cursor is off the
+/// prompt when the cursor row shows the prompt and the cursor does not stand on the cell after it.
+struct PresentedState {
+    step: String,
+    row: String,
+    cursor: (u16, u16),
+}
+
+impl PresentedState {
+    fn of(step: String, engine: &mut AlacrittyEngine) -> Self {
+        let screen = engine.screen();
+        let cursor = engine.cursor();
+        let row = screen.lines[usize::from(cursor.row)]
+            .iter()
+            .map(|cell| cell.ch.as_deref().unwrap_or(" "))
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        PresentedState {
+            step,
+            row,
+            cursor: (cursor.row, cursor.col),
+        }
+    }
+
+    fn cursor_off_the_prompt(&self) -> bool {
+        self.row == PATH_PROMPT_TEXT.trim_end()
+            && usize::from(self.cursor.1) != PATH_PROMPT_TEXT.chars().count()
+    }
+}
+
+/// Drags the divider of a zsh terminal at its prompt through widths wider than the prompt, as the
+/// service handles a drag: each resize is presented, and each read of the PTY that arrived is fed
+/// to the engine and presented, so every state between a resize and the redraw of zsh is a frame
+/// (core docs/spec/terminal-state.md#prompt-region). No presented state may show the prompt with
+/// the cursor off the cell after it, where zsh left it.
+async fn drag_at_path_prompt(mut session: Session) -> Result<(), String> {
+    let prompt = PATH_PROMPT_TEXT.to_string();
+    let width = PATH_PROMPT_TEXT.chars().count() as u16;
+    session
+        .until(|text, engine| {
+            text.starts_with(&prompt) && engine.cursor().col == width && engine.cursor().row == 0
+        })
+        .await
+        .map_err(|screen| format!("no prompt: {screen:?}"))?;
+    let mut widths: Vec<u16> = (14..60).rev().step_by(3).collect();
+    widths.extend((14..=60).step_by(3));
+    widths.extend([59, 60]);
+    let mut states = Vec::new();
+    for cols in widths {
+        session.resize(cols);
+        states.push(PresentedState::of(
+            format!("resize to {cols}"),
+            &mut session.engine,
+        ));
+        tokio::task::yield_now().await;
+        for read in session.arrived_reads() {
+            session.engine.feed(&read);
+            states.push(PresentedState::of(
+                format!("read {:?} at {cols}", String::from_utf8_lossy(&read)),
+                &mut session.engine,
+            ));
+        }
+    }
+    // The drag ends at the width of the start; the screen settles when zsh has drawn its prompt
+    // again with the cursor after it.
+    session
+        .until(|text, engine| {
+            text.starts_with(&prompt) && engine.cursor().col == width && engine.cursor().row == 0
+        })
+        .await
+        .map_err(|screen| format!("no prompt after the drag: {screen:?}"))?;
+    let off: Vec<String> = states
+        .iter()
+        .filter(|state| state.cursor_off_the_prompt())
+        .map(|state| {
+            format!(
+                "{}: row {:?}, cursor {:?}",
+                state.step, state.row, state.cursor
+            )
+        })
+        .collect();
+    let errors = std::mem::take(&mut session.errors);
+    let _ = session.service.close(&session.id);
+    if !off.is_empty() || !errors.is_empty() {
+        return Err(format!(
+            "{} of {} presented states show the cursor off the prompt:\n{}\nerrors {errors:?}",
+            off.len(),
+            states.len(),
+            off.join("\n")
+        ));
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_presented_state_of_a_drag_keeps_the_zsh_cursor_after_its_prompt() {
+    let _lock = native_pty_test_lock();
+    let directory = startup_directory(
+        "soksak-zsh-drag-test",
+        &[(".zshrc", &format!("PS1='{PATH_PROMPT}'\n"))],
+    );
+    let result = drag_at_path_prompt(open("/bin/zsh", "ZDOTDIR", &directory)).await;
+    let _ = std::fs::remove_dir_all(&directory);
+    result.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

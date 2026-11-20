@@ -430,6 +430,9 @@ struct HeldPrompt {
     copies: Vec<Vec<GridCell>>,
     offset: i32,
     rows: Vec<i32>,
+    /// The column after the last cell that the program wrote on the cursor row: the cursor column,
+    /// plus one when the next character wraps.
+    column: usize,
 }
 
 /// A sequence over this size is rejected: the largest encoded image and its header. `vte` with `std`
@@ -1353,11 +1356,12 @@ impl AlacrittyEngine {
 
     /// Takes the prompt region from `start` out of the reflow: copies its rows, clears them, so
     /// that each cleared row through the cursor row stays one row that continues no row and the
-    /// rows below the cursor stay empty, and moves the cursor to column 0.
+    /// rows below the cursor stay empty, and moves the cursor to column 0 for the reflow.
     fn hold_prompt(&mut self, start: i32) -> HeldPrompt {
         let grid = self.term.grid();
         let bottom = grid.screen_lines() as i32 - 1;
         let cursor = grid.cursor.point.line.0;
+        let column = grid.cursor.point.column.0 + usize::from(grid.cursor.input_needs_wrap);
         let copies = (start..=bottom)
             .map(|line| {
                 (0..grid.columns())
@@ -1383,13 +1387,14 @@ impl AlacrittyEngine {
             copies,
             offset: cursor - start,
             rows,
+            column,
         }
     }
 
     /// Puts the held prompt rows back after the reflow, from the row `offset` rows above the
-    /// cursor, cut at the new width, with their recorded rows. When that row lies above the
-    /// screen, the rows stand from the top row, where the shell starts to draw, and this is an
-    /// error.
+    /// cursor, cut at the new width, with their recorded rows, and the cursor at its column, at
+    /// most the last column. When that row lies above the screen, the rows stand from the top row,
+    /// where the shell starts to draw, and this is an error.
     fn put_back_prompt(&mut self, held: HeldPrompt) -> Result<(), String> {
         let cursor = self.term.grid().cursor.point.line.0;
         let bottom = self.term.grid().screen_lines() as i32 - 1;
@@ -1411,6 +1416,10 @@ impl AlacrittyEngine {
                 grid[Line(line)][Column(column)] = cell;
             }
         }
+        // The cursor stays where the program left it, as in kitty and Ghostty: a frame presented
+        // before the shell draws again shows it after the prompt and not on its first cell.
+        grid.cursor.point.column = Column(held.column.min(columns - 1));
+        grid.cursor.input_needs_wrap = held.column >= columns;
         let base = self.absolute(0);
         self.prompt_rows = held
             .rows
