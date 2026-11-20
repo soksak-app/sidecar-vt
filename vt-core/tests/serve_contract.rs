@@ -8532,6 +8532,17 @@ fn start_messaging_service() -> (
     tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
     tokio::task::JoinHandle<std::io::Result<()>>,
 ) {
+    start_messaging_service_with(events_test::TestEvents::new().handle())
+}
+
+/// Starts the messaging service as `start_messaging_service` does, with the events of the service in `log`.
+fn start_messaging_service_with(
+    log: soksak_sidecar_vt_core::events::Events,
+) -> (
+    tokio::io::DuplexStream,
+    tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
+    tokio::task::JoinHandle<std::io::Result<()>>,
+) {
     let (to_serve, serve_in) = tokio::io::duplex(1 << 20);
     let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
     let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
@@ -8548,7 +8559,7 @@ fn start_messaging_service() -> (
         close: Arc::new(|| Ok(())),
         registry: PersistentRegistry::new(),
         owner: "messaging-owner".to_string(),
-        log: events_test::TestEvents::new().handle(),
+        log,
     };
     let task = tokio::spawn(serve_with_registry(
         engine_factory,
@@ -9093,6 +9104,56 @@ async fn messages_wait_ends_on_arrival_with_the_read_shape() {
         reply["body"],
         serde_json::json!({"registration": registration, "messages": [{"seq": 1, "path": name, "text": "arrived", "from": "x"}], "last": 1}),
         "{reply}"
+    );
+}
+
+/// Covers core docs/spec/messaging.md#mcp-tools and docs/spec/vt-core.md (requests in progress): a `messages.wait` has no time
+/// limit, so a wait that no message answers for longer than the bound of a request in progress writes no
+/// `request_waiting`, and the wait still ends on arrival.
+#[tokio::test]
+async fn a_messages_wait_longer_than_the_request_bound_is_no_request_waiting() {
+    let dir = tempfile::tempdir().expect("temporary directory must be created");
+    let events = events_test::TestEvents::new();
+    let (mut to_serve, mut lines, _task) = start_messaging_service_with(events.handle());
+    let registered =
+        register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", dir.path()).await;
+    let registration = registered["body"]["registration"].clone();
+    send_messaging_request(
+        &mut to_serve,
+        "s1",
+        "wait",
+        serde_json::json!({"operation": "messages.wait", "after": 0, "registration": registration}),
+    )
+    .await;
+    // The read is answered after the wait was accepted, so the wait is pending while the time passes.
+    send_messaging_request(
+        &mut to_serve,
+        "s1",
+        "barrier",
+        serde_json::json!({"operation": "messages.read", "after": 0}),
+    )
+    .await;
+    let barrier = messaging_reply(&mut lines, "barrier").await;
+    assert!(barrier["body"].get("error").is_none(), "{barrier}");
+    // The clock of the runtime passes the bound of 10 seconds while the wait is pending; the watch of the requests
+    // wakes at the bound of the wait.
+    tokio::time::pause();
+    tokio::time::sleep(std::time::Duration::from_secs(11)).await;
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::resume();
+    let name = write_message(dir.path(), "x", "arrive", b"arrived");
+    let reply = messaging_reply(&mut lines, "wait").await;
+    assert_eq!(
+        reply["body"]["messages"][0]["path"],
+        serde_json::json!(name),
+        "{reply}"
+    );
+    let waiting = events.named("sidecar.vt.request_waiting");
+    assert!(
+        waiting.is_empty(),
+        "a pending messages.wait was recorded as a request in progress: {waiting:?}"
     );
 }
 
