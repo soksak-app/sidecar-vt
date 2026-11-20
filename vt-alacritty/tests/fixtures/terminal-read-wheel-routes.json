@@ -1,0 +1,223 @@
+{
+  "contract": "docs/spec/terminal-read.md#wheel-input",
+  "description": "Each case writes output to a session, compares the modes of the engine after the output with modes, and then sends each scroll {lines, col, row, shift}; route is the route of the wheel input, and write is the exact text that the session receives for the scroll, or null when the session receives nothing, because the route viewport moves the viewport of the engine. The three mouse reports 1000, 1002 and 1003 are one mode: each of them replaces the others, and 1003 reports presses, releases and every motion.",
+  "cases": [
+    {
+      "name": "a full-screen program that turns off the alternate scroll and turns on the mouse reports 1000, 1002 and 1003 with SGR receives SGR wheel buttons",
+      "output": "\u001b[?1049h\u001b[?1007l\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h",
+      "modes": {
+        "mouseClick": false,
+        "mouseDrag": false,
+        "mouseMotion": true,
+        "sgrMouse": true,
+        "alternateScroll": false,
+        "altScreen": true,
+        "appCursor": false
+      },
+      "scrolls": [
+        {
+          "lines": 2,
+          "col": 4,
+          "row": 6,
+          "shift": false,
+          "route": "program",
+          "write": "\u001b[<64;5;7M\u001b[<64;5;7M"
+        },
+        {
+          "lines": -1,
+          "col": 4,
+          "row": 6,
+          "shift": false,
+          "route": "program",
+          "write": "\u001b[<65;5;7M"
+        },
+        {
+          "lines": 2,
+          "col": 4,
+          "row": 6,
+          "shift": true,
+          "route": "viewport",
+          "write": null
+        }
+      ]
+    },
+    {
+      "name": "a full-screen program that turns the mouse reports off again and the alternate scroll on receives cursor keys",
+      "output": "\u001b[?1049h\u001b[?1007l\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h\u001b[?1006l\u001b[?1015l\u001b[?1003l\u001b[?1002l\u001b[?1000l\u001b[?1007h",
+      "modes": {
+        "mouseClick": false,
+        "mouseDrag": false,
+        "mouseMotion": false,
+        "sgrMouse": false,
+        "alternateScroll": true,
+        "altScreen": true,
+        "appCursor": false
+      },
+      "scrolls": [
+        {
+          "lines": 2,
+          "col": 4,
+          "row": 6,
+          "shift": false,
+          "route": "alternate_scroll",
+          "write": "\u001b[A\u001b[A"
+        },
+        {
+          "lines": -1,
+          "col": 4,
+          "row": 6,
+          "shift": false,
+          "route": "alternate_scroll",
+          "write": "\u001b[B"
+        },
+        {
+          "lines": 1,
+          "col": 4,
+          "row": 6,
+          "shift": true,
+          "route": "alternate_scroll",
+          "write": "\u001b[A"
+        }
+      ]
+    },
+    {
+      "name": "a full-screen program with application cursor keys and no mouse report receives the application cursor keys of the default alternate scroll",
+      "output": "\u001b[?1049h\u001b[?1h\u001b=",
+      "modes": {
+        "mouseClick": false,
+        "mouseDrag": false,
+        "mouseMotion": false,
+        "sgrMouse": false,
+        "alternateScroll": true,
+        "altScreen": true,
+        "appCursor": true
+      },
+      "scrolls": [
+        {
+          "lines": 2,
+          "col": 4,
+          "row": 6,
+          "shift": false,
+          "route": "alternate_scroll",
+          "write": "\u001bOA\u001bOA"
+        },
+        {
+          "lines": -1,
+          "col": 4,
+          "row": 6,
+          "shift": false,
+          "route": "alternate_scroll",
+          "write": "\u001bOB"
+        }
+      ]
+    },
+    {
+      "name": "a full-screen program that turns on the mouse reports 1006 and 1000 in one sequence and then 1002 receives SGR wheel buttons",
+      "output": "\u001b[?1049h\u001b[?1h\u001b[?1006;1000h\u001b[?1002h",
+      "modes": {
+        "mouseClick": false,
+        "mouseDrag": true,
+        "mouseMotion": false,
+        "sgrMouse": true,
+        "alternateScroll": true,
+        "altScreen": true,
+        "appCursor": true
+      },
+      "scrolls": [
+        {
+          "lines": 2,
+          "col": 4,
+          "row": 6,
+          "shift": false,
+          "route": "program",
+          "write": "\u001b[<64;5;7M\u001b[<64;5;7M"
+        },
+        {
+          "lines": -1,
+          "col": 4,
+          "row": 6,
+          "shift": false,
+          "route": "program",
+          "write": "\u001b[<65;5;7M"
+        }
+      ]
+    },
+    {
+      "name": "a full-screen program that turns on the mouse report 1000 without an encoding receives the default encoding of the wheel buttons",
+      "output": "\u001b[?1049h\u001b[?1000h",
+      "modes": {
+        "mouseClick": true,
+        "mouseDrag": false,
+        "mouseMotion": false,
+        "sgrMouse": false,
+        "alternateScroll": true,
+        "altScreen": true,
+        "appCursor": false
+      },
+      "scrolls": [
+        {
+          "lines": 2,
+          "col": 4,
+          "row": 6,
+          "shift": false,
+          "route": "program",
+          "write": "\u001b[M`%'\u001b[M`%'"
+        },
+        {
+          "lines": -1,
+          "col": 4,
+          "row": 6,
+          "shift": false,
+          "route": "program",
+          "write": "\u001b[Ma%'"
+        }
+      ]
+    },
+    {
+      "name": "a full-screen program that turns off the alternate scroll and turns on no mouse report receives nothing",
+      "output": "\u001b[?1049h\u001b[?1007l",
+      "modes": {
+        "mouseClick": false,
+        "mouseDrag": false,
+        "mouseMotion": false,
+        "sgrMouse": false,
+        "alternateScroll": false,
+        "altScreen": true,
+        "appCursor": false
+      },
+      "scrolls": [
+        {
+          "lines": 2,
+          "col": 4,
+          "row": 6,
+          "shift": false,
+          "route": "viewport",
+          "write": null
+        }
+      ]
+    },
+    {
+      "name": "a session on the primary screen without a mode receives nothing and the viewport moves",
+      "output": "",
+      "modes": {
+        "mouseClick": false,
+        "mouseDrag": false,
+        "mouseMotion": false,
+        "sgrMouse": false,
+        "alternateScroll": true,
+        "altScreen": false,
+        "appCursor": false
+      },
+      "scrolls": [
+        {
+          "lines": 2,
+          "col": 4,
+          "row": 6,
+          "shift": false,
+          "route": "viewport",
+          "write": null
+        }
+      ]
+    }
+  ]
+}
