@@ -8692,26 +8692,50 @@ async fn messages_register_replies_with_the_registration_and_the_folder() {
     assert_eq!(second["body"]["error"], "already-registered", "{second}");
 }
 
-/// Covers core docs/spec/messaging.md#registered-folder and #missing-folder: a folder that does not exist fails
-/// with `folder-missing`, a path that is a file fails with `not-a-directory`, and a relative path fails with
+/// Covers core docs/spec/messaging.md#registered-folder, #folder-of-a-terminal and #missing-folder: a folder that
+/// does not exist is created with its missing parents and registered, a folder under a file fails with
+/// `folder-create-failed`, a path that is a file fails with `not-a-directory`, and a relative path fails with
 /// `invalidParams`.
 #[tokio::test]
-async fn messages_register_refuses_a_missing_folder_and_a_file() {
+async fn messages_register_creates_a_missing_folder_and_refuses_a_file() {
     let dir = tempfile::tempdir().expect("temporary directory must be created");
-    let missing = dir.path().join("missing");
+    let missing = dir.path().join(".soksak").join("messages").join("s1");
     let file = dir.path().join("plain.txt");
     std::fs::write(&file, "not a folder").expect("file must be written");
+    let under_file = file.join("inbox");
     let (mut to_serve, mut lines, _task) = start_messaging_service();
 
-    let missing_reply =
+    let created =
         register_messaging_folder(&mut to_serve, &mut lines, "s1", "missing", &missing).await;
+    assert!(created["body"].get("error").is_none(), "{created}");
+    assert!(created["body"]["registration"].is_string(), "{created}");
+    assert!(
+        missing.is_dir(),
+        "the registration did not create {}",
+        missing.display()
+    );
+    let name = write_message(&missing, "s9", "created", b"into the created folder");
+    let event = file_event(&mut lines, &name, "created").await;
     assert_eq!(
-        missing_reply["body"]["error"], "folder-missing",
-        "{missing_reply}"
+        event["body"]["registration"], created["body"]["registration"],
+        "{event}"
+    );
+
+    let refused =
+        register_messaging_folder(&mut to_serve, &mut lines, "s2", "under-file", &under_file).await;
+    assert_eq!(
+        refused["body"]["error"], "folder-create-failed",
+        "{refused}"
+    );
+    assert!(
+        refused["body"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains(under_file.to_str().expect("path is UTF-8"))),
+        "{refused}"
     );
 
     let file_reply =
-        register_messaging_folder(&mut to_serve, &mut lines, "s1", "file", &file).await;
+        register_messaging_folder(&mut to_serve, &mut lines, "s3", "file", &file).await;
     assert_eq!(
         file_reply["body"]["error"], "not-a-directory",
         "{file_reply}"
@@ -8720,7 +8744,7 @@ async fn messages_register_refuses_a_missing_folder_and_a_file() {
     let relative = register_messaging_folder(
         &mut to_serve,
         &mut lines,
-        "s1",
+        "s4",
         "relative",
         std::path::Path::new("relative/folder"),
     )
