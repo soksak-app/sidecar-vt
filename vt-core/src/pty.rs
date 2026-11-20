@@ -538,14 +538,6 @@ impl PtyService {
         let members = process_group::terminal(device)?;
         let rule: Vec<_> = members.iter().map(|member| member.member).collect();
         let (foreground_entry, background) = entries(leader, foreground, &rule);
-        let process = |group: i32, pid: i32| {
-            let started = members
-                .iter()
-                .find(|member| member.member.pid == pid)
-                .map(|member| member.started)
-                .expect("the process of an entry is a member");
-            process_info::process(group, pid, started)
-        };
         let jobs = job_members(leader, foreground, &rule);
         // The parent of a member receives SIGCHLD after the member stopped, continued or ended, so it is watched with the
         // members; launchd (pid 1) is the parent of every orphan of the system.
@@ -558,11 +550,11 @@ impl PtyService {
         watched.sort_unstable();
         watched.dedup();
         Ok(Processes {
-            foreground: foreground_entry.map(|entry| process(entry.group, entry.pid)),
+            foreground: foreground_entry.map(|entry| process_info::process(entry.group, entry.pid)),
             background: background
                 .into_iter()
                 .map(|entry| Job {
-                    process: process(entry.group, entry.pid),
+                    process: process_info::process(entry.group, entry.pid),
                     state: entry.state,
                 })
                 .collect(),

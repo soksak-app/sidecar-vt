@@ -9493,6 +9493,61 @@ async fn the_processes_event_follows_the_stop_and_the_end_of_a_job_without_outpu
     assert!(ended["body"]["foreground"]["pid"].is_i64(), "{ended}");
 }
 
+/// Ends the process whose pid a shell of a test wrote to a file, when the test ends, also when it fails.
+struct EndsProcessOf(std::path::PathBuf);
+
+impl Drop for EndsProcessOf {
+    fn drop(&mut self) {
+        if let Ok(pid) = std::fs::read_to_string(&self.0)
+            && let Ok(pid) = pid.trim().parse::<i32>()
+        {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+    }
+}
+
+/// Covers core docs/spec/process-list.md#members: `/usr/bin/top` is setuid root, so the system refuses the full BSD
+/// information of its process to the user of the session; the group and the state of each member are read without a
+/// check of the user, so the list names the job with its group, pid and state, and the refused read of the process is
+/// the error of its entry, not of the list. A read during the `exec` of the job fails with another error, so the test
+/// waits for the refusal by the check of the user (`EPERM`).
+#[tokio::test]
+async fn the_process_list_names_a_setuid_job_whose_process_refuses_its_read() {
+    let folder = tempfile::tempdir().expect("a folder for the pid of the job");
+    let pid_file = folder.path().join("pid");
+    let _ends = EndsProcessOf(pid_file.clone());
+    let (mut to_serve, mut lines, _task) = start_messaging_service();
+    open_shell_session(&mut to_serve).await;
+    next_line_where(&mut lines, is_processes).await;
+    type_into_session(
+        &mut to_serve,
+        &format!(
+            "/usr/bin/top -l 0 -s 100 > /dev/null & echo $! > {}\r",
+            pid_file.display()
+        ),
+    )
+    .await;
+    let read = next_line_where(&mut lines, |value| {
+        is_processes(value)
+            && (value["body"]["error"].is_string()
+                || value["body"]["background"].as_array().is_some_and(|jobs| {
+                    jobs.iter().any(|job| {
+                        job["error"]
+                            .as_str()
+                            .is_some_and(|error| error.contains("(os error 1)"))
+                    })
+                }))
+    })
+    .await;
+    assert_eq!(read["body"]["error"], serde_json::Value::Null, "{read}");
+    let job = &read["body"]["background"][0];
+    assert_eq!(job["group"], job["pid"], "{read}");
+    assert_eq!(job["state"], "running", "{read}");
+    for member in ["command", "arguments", "cwd", "started"] {
+        assert_eq!(job[member], serde_json::Value::Null, "{member}: {read}");
+    }
+}
+
 /// Covers core docs/spec/process-list.md#failures: a process list of a surface without an open session is refused with
 /// `Session not open` and the request.
 #[tokio::test]

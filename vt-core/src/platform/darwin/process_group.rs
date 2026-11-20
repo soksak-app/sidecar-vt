@@ -33,6 +33,7 @@ pub fn members(group: i32) -> Result<Vec<Member>, String> {
         group as u32,
         &format!("process group {group}"),
         &format!("group {group}"),
+        info,
     )?
     .into_iter()
     .map(|(pid, info)| Member {
@@ -52,8 +53,6 @@ const PROC_TTY_ONLY: u32 = 3;
 pub struct TerminalMember {
     pub member: crate::process_list::Member,
     pub parent: i32,
-    /// The start time in milliseconds since the Unix epoch.
-    pub started: u64,
 }
 
 /// Reads the processes whose controlling terminal is the device `device`. A process reaped during
@@ -66,12 +65,13 @@ pub fn terminal(device: u32) -> Result<Vec<TerminalMember>, String> {
         device,
         &format!("the processes of terminal {device}"),
         &format!("terminal {device}"),
+        short_info,
     )?
     .into_iter()
     .map(|(pid, info)| {
-        let state = if info.pbi_status == libc::SZOMB || info.pbi_flags & PROC_FLAG_INEXIT != 0 {
+        let state = if info.pbsi_status == libc::SZOMB || info.pbsi_flags & PROC_FLAG_INEXIT != 0 {
             MemberState::Ended
-        } else if info.pbi_status == libc::SSTOP {
+        } else if info.pbsi_status == libc::SSTOP {
             MemberState::Stopped
         } else {
             MemberState::Running
@@ -79,18 +79,41 @@ pub fn terminal(device: u32) -> Result<Vec<TerminalMember>, String> {
         TerminalMember {
             member: Member {
                 pid,
-                group: info.pbi_pgid as i32,
+                group: info.pbsi_pgid as i32,
                 state,
             },
-            parent: info.pbi_ppid as i32,
-            started: info.pbi_start_tvsec * 1000 + info.pbi_start_tvusec / 1000,
+            parent: info.pbsi_ppid as i32,
         }
     })
     .collect())
 }
 
-/// Reads the BSD information of one process, which holds its group, its parent, its status and its
-/// start time (core docs/spec/process-list.md#members).
+/// Reads the short BSD information of one process: its group, its parent and its status. The
+/// system makes no check of the user for it, while it refuses `PROC_PIDTBSDINFO` for a process of
+/// another effective user, such as the setuid program `top` (core
+/// docs/spec/process-list.md#members). The arg 1 finds a zombie too.
+fn short_info(pid: i32) -> Result<libc::proc_bsdshortinfo, std::io::Error> {
+    let mut info: libc::proc_bsdshortinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdshortinfo>() as libc::c_int;
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDT_SHORTBSDINFO,
+            1,
+            (&mut info as *mut libc::proc_bsdshortinfo).cast(),
+            size,
+        )
+    };
+    if read == size {
+        Ok(info)
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// Reads the BSD information of one process, which holds its group, its status, its start time and
+/// the device of its controlling terminal; the system refuses it for a process of another effective
+/// user.
 pub fn info(pid: i32) -> Result<libc::proc_bsdinfo, std::io::Error> {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
@@ -116,12 +139,13 @@ pub fn info(pid: i32) -> Result<libc::proc_bsdinfo, std::io::Error> {
 /// `listing` names the list and `owner` the owner of a process in the errors. A process reaped after
 /// the list was read gives no information and is not in the result. Any other failure means the
 /// state is unknown.
-fn listed(
+fn listed<Info>(
     kind: u32,
     value: u32,
     listing: &str,
     owner: &str,
-) -> Result<Vec<(i32, libc::proc_bsdinfo)>, String> {
+    read: fn(i32) -> Result<Info, std::io::Error>,
+) -> Result<Vec<(i32, Info)>, String> {
     let size = unsafe { libc::proc_listpids(kind, value, std::ptr::null_mut(), 0) };
     if size < 0 {
         return Err(format!(
@@ -149,7 +173,7 @@ fn listed(
     pids.truncate(filled as usize / std::mem::size_of::<i32>());
     let mut listed = Vec::new();
     for pid in pids.into_iter().filter(|pid| *pid > 0) {
-        match info(pid) {
+        match read(pid) {
             Ok(info) => listed.push((pid, info)),
             Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {}
             Err(error) => return Err(format!("read process {pid} of {owner}: {error}")),

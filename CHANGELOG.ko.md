@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S224: process list 가 `top` 같은 terminal 의 setuid program 을 member 로 이름한다. member 를 사용자를 검사하지 않는 `PROC_PIDT_SHORTBSDINFO` 로 읽고, 그 process 의 거절된 읽기는 실패한 list 대신 그 entry 의 `error` 다.
 - S222: sidecar 가 core `docs/spec/process-list.md` 의 terminal 의 process list 를 보낸다. 이벤트 `processes {foreground, background}` 가 foreground program 과 background job 을 이름하며, 각각 `{group, pid, command, arguments, cwd, started}` 이고 job 은 `state` 를 가진다. 각 출력 뒤와 job 의 각 끝, 실행, signal 에 보내고, 실패한 읽기에는 `processes {error}` 를 한 번 보낸다. `process.list` 는 같은 list 로 답한다. 이벤트 `foreground` 는 없어졌다.
 - S220: prompt 에서의 크기 변경은 prompt 행을 되돌려 놓은 뒤 cursor 를 많아야 마지막 열인 자기 열로 되돌린다(core `docs/spec/terminal-state.md#prompt-region`). 전에는 divider drag 의 각 크기 변경 뒤 바로 표시되는 화면이 zsh 가 다시 그릴 때까지 prompt 의 첫 칸 위의 cursor 를 보였다.
 - S216: `vt-alacritty/tests/wheel_routes_test.rs` 가 core `docs/spec/terminal-read.md#wheel-input` 의 wheel route 공유 case 를 실제 engine, service 의 wheel route, 실제 PTY, 실제 program 으로 실행한다. 바뀌지 않은 sidecar 에서 두 test 가 통과한다.

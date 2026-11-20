@@ -1,5 +1,6 @@
 # Changelog
 
+- S224: The process list names a setuid program of the terminal, such as `top`, as a member: the members are read with `PROC_PIDT_SHORTBSDINFO`, which makes no check of the user, and the refused read of its process is the `error` of its entry instead of a failed list.
 - S222: The sidecar sends the process list of the terminal of core `docs/spec/process-list.md`: the event `processes {foreground, background}` names the foreground program and the background jobs, each `{group, pid, command, arguments, cwd, started}` and a job with `state`, after each output and at each exit, execution and signal of a job, and `processes {error}` once for a failed read; `process.list` replies with the same list; the event `foreground` is removed.
 - S220: A resize at a prompt puts the cursor back at its column, at most the last column, after it puts the prompt rows back (core `docs/spec/terminal-state.md#prompt-region`); the screen presented at once after each resize of a divider drag showed the prompt with the cursor on its first cell until zsh drew again.
 - S216: `vt-alacritty/tests/wheel_routes_test.rs` runs the shared cases of the wheel routes of core `docs/spec/terminal-read.md#wheel-input` through the real engine, the wheel route of the service, a real PTY and a real program; both tests pass on the unchanged sidecar.

@@ -9,16 +9,21 @@
 
 use crate::process_list::Process;
 
-/// The process `pid` of the group `group`, which started at `started` milliseconds since the Unix epoch, with the path
-/// of its executable, its arguments and its working directory. A read that the system refuses, such as for a process
-/// of another user, leaves `command`, `arguments`, `cwd` and `started` empty and names the read and its reason in
-/// `error`.
-pub fn process(group: i32, pid: i32, started: u64) -> Process {
-    let read = || -> Result<(String, Vec<String>, String), String> {
-        Ok((executable(pid)?, arguments(pid)?, working_directory(pid)?))
+/// The process `pid` of the group `group` with its start time, the path of its executable, its arguments and its
+/// working directory. A read that the system refuses, such as for a process of another effective user, leaves
+/// `command`, `arguments`, `cwd` and `started` empty and names the read and its reason in `error`. The start is read
+/// first, because the system refuses it for every process of another effective user, as it may refuse the other reads.
+pub fn process(group: i32, pid: i32) -> Process {
+    let read = || -> Result<(u64, String, Vec<String>, String), String> {
+        Ok((
+            start(pid)?,
+            executable(pid)?,
+            arguments(pid)?,
+            working_directory(pid)?,
+        ))
     };
     match read() {
-        Ok((command, arguments, cwd)) => Process {
+        Ok((started, command, arguments, cwd)) => Process {
             group,
             pid,
             command: Some(command),
@@ -37,6 +42,13 @@ pub fn process(group: i32, pid: i32, started: u64) -> Process {
             error: Some(error),
         },
     }
+}
+
+/// The start time in milliseconds since the Unix epoch.
+fn start(pid: i32) -> Result<u64, String> {
+    let info = crate::platform::darwin::process_group::info(pid)
+        .map_err(|error| format!("read the start of process {pid}: {error}"))?;
+    Ok(info.pbi_start_tvsec * 1000 + info.pbi_start_tvusec / 1000)
 }
 
 fn executable(pid: i32) -> Result<String, String> {
