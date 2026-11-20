@@ -45,7 +45,7 @@ pub fn process(group: i32, pid: i32) -> Process {
 }
 
 /// The start time in milliseconds since the Unix epoch.
-fn start(pid: i32) -> Result<u64, String> {
+pub fn start(pid: i32) -> Result<u64, String> {
     let info = crate::platform::darwin::process_group::info(pid)
         .map_err(|error| format!("read the start of process {pid}: {error}"))?;
     Ok(info.pbi_start_tvsec * 1000 + info.pbi_start_tvusec / 1000)

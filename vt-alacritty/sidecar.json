@@ -2,6 +2,7 @@
   "executable": "build/sok-vt-alacritty",
   "displayName": "soksak://sidecar/vt",
   "protocol": 1,
+  "processes": true,
   "transport": "persistent",
   "events": "events.json",
   "replay": {

@@ -1378,6 +1378,14 @@ pub trait SessionPort: Send + Sync {
     /// The process list of the terminal of the session: the foreground program and the background
     /// jobs (core docs/spec/process-list.md).
     fn processes(&self, session_id: &str) -> Result<Processes, String>;
+    /// The surface and the start time of the process `pid` when a session started it for a surface and has not reaped it, or
+    /// None (core docs/spec/sidecars.md#process-identity). A port that does not provide it fails explicitly.
+    fn process_surface(
+        &self,
+        _pid: u32,
+    ) -> Result<Option<crate::pty::SurfaceProcess>, String> {
+        Err("process queries are not supported".to_string())
+    }
 }
 
 /// Envelope of a message received from the host
@@ -6091,6 +6099,29 @@ where
 /// The message limit of a sidecar: 67108864 bytes before the newline (docs/spec/sidecars.md).
 const REQUEST_LINE_LIMIT: usize = 64 * 1024 * 1024;
 
+/// Answers the process query of the host (core docs/spec/sidecars.md#process-identity) with the surface and the start time of
+/// the process when a session started it for a surface, else with the surface null. A query without a process id or a
+/// positive request number, and a port that cannot answer, are refused with an error reply and recorded.
+fn process_query_answer(port: &dyn SessionPort, value: &Value, log: &Events) -> Value {
+    let process = value["process"]
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok());
+    let request = value["request"].as_u64().filter(|request| *request > 0);
+    let (Some(process), Some(request)) = (process, request) else {
+        let reason = "a process query needs a process id and a positive request number";
+        log.record_error("process query", reason);
+        return json!({"surface": "", "body": {"error": "invalidParams", "reason": reason}});
+    };
+    match port.process_surface(process) {
+        Ok(Some(found)) => json!({"process": process, "request": request, "surface": found.surface, "started": found.started}),
+        Ok(None) => json!({"process": process, "request": request, "surface": null}),
+        Err(error) => {
+            log.record_error("process query", &error);
+            json!({"surface": "", "body": {"error": error}})
+        }
+    }
+}
+
 async fn run_input_loop<R>(
     mut lines: FramedRead<PolledReader<R>, LinesCodec>,
     output_tx: OutputSink,
@@ -6124,6 +6155,8 @@ where
     let mut surface_epochs: HashMap<String, u64> = HashMap::new();
     let mut tasks = tokio::task::JoinSet::new();
     let connection_output = output_tx.connection().await;
+    // The port that answers the process queries of this connection; the service is shared by every port.
+    let process_port = session_port_factory();
     // Of the transfer images that this connection carried, the ones that a surface released. Their
     // replies come on this connection.
     let transfers = connection_output
@@ -6225,6 +6258,13 @@ where
         };
         let reply_tx = output_tx.bound(Arc::clone(&request));
         if let Some(value) = parsed {
+            if value.get("process").is_some() && value.get("operation").is_none() {
+                let answer = process_query_answer(process_port.as_ref(), &value, &log);
+                if reply_tx.reply(answer).await.is_err() {
+                    break;
+                }
+                continue;
+            }
             if value.get("operation").and_then(Value::as_str) == Some("close-owner") {
                 let Some(request) = value.get("request").and_then(Value::as_str) else {
                     let reply = json!({"error": "invalidParams", "reason": "the owner request has no request id"});
@@ -7692,6 +7732,13 @@ impl SessionPort for LocalSessionPort {
 
     fn processes(&self, session_id: &str) -> Result<Processes, String> {
         self.service.processes(session_id)
+    }
+
+    fn process_surface(
+        &self,
+        pid: u32,
+    ) -> Result<Option<crate::pty::SurfaceProcess>, String> {
+        Ok(self.service.process_surface(pid))
     }
 
     async fn get_events(&self) -> mpsc::Receiver<DaemonEvent> {
