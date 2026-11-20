@@ -101,11 +101,10 @@ fn arguments(pid: i32) -> Result<Vec<String>, String> {
         return Err(failure(std::io::Error::last_os_error().to_string()));
     }
     buffer.truncate(size);
-    let count_bytes: [u8; 4] = buffer
-        .get(..4)
-        .and_then(|bytes| bytes.try_into().ok())
+    let count_bytes = buffer
+        .first_chunk::<4>()
         .ok_or_else(|| failure(format!("the answer holds {size} bytes and no count")))?;
-    let count = i32::from_ne_bytes(count_bytes);
+    let count = i32::from_ne_bytes(*count_bytes);
     if count < 0 {
         return Err(failure(format!("the answer holds the count {count}")));
     }

@@ -272,9 +272,14 @@ pub fn parse_report(payload: &str, sequence_bytes: usize) -> Parsed {
         let number = (!value.is_empty()
             && value.len() <= 3
             && value.bytes().all(|byte| byte.is_ascii_digit()))
-        .then(|| value.parse::<u8>().ok())
-        .flatten()
-        .filter(|number| *number <= 100);
+        // At most three digits, so the value fits in u16 and a value of at most 100 fits in u8.
+        .then(|| {
+            value
+                .bytes()
+                .fold(0u16, |number, byte| number * 10 + u16::from(byte - b'0'))
+        })
+        .filter(|number| *number <= 100)
+        .map(|number| number as u8);
         let Some(number) = number else {
             rejections.push(format!("OSC 7501 progress is not 0 to 100: {value}"));
             return None;
