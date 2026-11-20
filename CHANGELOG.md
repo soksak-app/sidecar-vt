@@ -1,5 +1,6 @@
 # Changelog
 
+- S216: `vt-alacritty/tests/wheel_routes_test.rs` runs the shared cases of the wheel routes of core `docs/spec/terminal-read.md#wheel-input` through the real engine, the wheel route of the service, a real PTY and a real program; both tests pass on the unchanged sidecar.
 - S209: The answer of an OSC query that the engine answers (OSC 5, 17 and 19) follows the answers to the queries before it in the same output, and the other events of such an OSC follow the events of the output before it: the engine passes the output up to the end of the OSC to the library before it acts on the OSC.
 - S215: A resize of the alternate screen no longer brings back rows of earlier renders: the alternate grid has a history limit only while the engine reads a slice of output, so a smaller height cuts rows off and a larger height adds blank rows as `alacritty_terminal` does, shown or hidden; the limit that S208 left on the grid after a slice without a scroll moved the cut rows back onto the screen of a full-screen program.
 - S213: `make measure-program-redraw` waits for the output of the PTY with `poll` in place of a reading thread, and reads the PTY to its end after the quit key, so the measurement passes the event source check and the program does not block on a full PTY.

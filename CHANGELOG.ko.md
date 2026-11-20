@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S216: `vt-alacritty/tests/wheel_routes_test.rs` 가 core `docs/spec/terminal-read.md#wheel-input` 의 wheel route 공유 case 를 실제 engine, service 의 wheel route, 실제 PTY, 실제 program 으로 실행한다. 바뀌지 않은 sidecar 에서 두 test 가 통과한다.
 - S209: engine 이 답하는 OSC 질의(OSC 5, 17, 19)의 답이 같은 출력에서 그 앞의 질의의 답 뒤에 오고, 그런 OSC 의 다른 이벤트도 그 앞의 출력의 이벤트 뒤에 온다. engine 은 OSC 에 대해 행동하기 전에 OSC 의 끝까지의 출력을 library 에 넘긴다.
 - S215: alternate screen 의 resize 가 더 이상 이전 render 의 행을 되돌리지 않는다. alternate grid 는 engine 이 출력의 slice 를 읽는 동안에만 history 한도를 가지므로, 보이든 숨었든 `alacritty_terminal` 처럼 작은 높이는 행을 잘라내고 큰 높이는 빈 행을 더한다. S208 이 scroll 없는 slice 뒤에 grid 에 남긴 한도가 잘린 행을 full-screen program 의 화면으로 되돌렸다.
 - S213: `make measure-program-redraw` 가 읽는 thread 대신 `poll` 로 PTY 의 출력을 기다리고, quit key 뒤에 PTY 를 끝까지 읽어, 측정이 event source 검사를 통과하고 program 이 가득 찬 PTY 에서 막히지 않는다.
