@@ -188,6 +188,10 @@ surface는 core의 [copy path frames](https://github.com/soksak-app/core/blob/ma
 
 cursor의 깜빡임은 어떤 event도 알리지 않는 변경이므로, surface는 그것을 깜빡임 보임이 다음에 바뀌는 때의 timer로 예약한다. 그때는 cursor의 마지막 활동 뒤 cursor 설정의 깜빡임 간격의 다음 배수이고, 그때 cursor가 숨어 있으면 idle timeout이다. 간격은 설정의 시간 길이이며 frame 시간이 아니다. 그때 깜빡임은 위와 같은 변경이다. focus가 없거나 숨은 cursor, policy가 `Never`인 cursor, 깜빡이는 program 없이 policy가 `Off`인 cursor, idle timeout이 지난 cursor는 깜빡이지 않으므로 timer가 없다.
 
+### Program scroll read
+
+`screen.scroll.read {by, quiet}` 는 core [terminal read](https://github.com/soksak-app/core/blob/main/docs/spec/terminal-read.ko.md#program-scroll) 의 program scroll 의 sidecar 부분이다. surface 는 자기 screen 의 글을 읽고, Shift 없는 wheel 경로(screen 의 가운데 cell 에서 program 의 mouse report, alternate scroll 의 cursor key, 또는 viewport)로 scroll 을 보내고, 기다리고, 읽고, 같은 경로로 `-by` 의 scroll 을 보내고, 기다리고, 읽어 이벤트 `screen.scroll` 로 답한다. 각 기다림은 단계가 기다리는 동안 한 번에 하나씩 보내는 읽기 frame 요청 `{"image":{"want":{"name","generation","purpose":"read"}}}` 의 tick 을 세고, core [program scroll 의 그리기](https://github.com/soksak-app/core/blob/main/docs/spec/terminal-read.ko.md#program-scroll-의-그리기) 의 규칙으로 끝난다. 마지막 출력이 그 단계의 입력 뒤에 열린 동기 update 의 reset 으로 끝났으면 첫 tick 에서 `sync` 로(engine 은 출력이 연 update 와 마지막 출력을 끝낸 reset 의 update 를 알린다), 그 밖에는 마지막 출력이나 입력 뒤에 `quiet` 개의 tick 이 오면 `quiet` 로 끝난다. viewport 경로는 곧바로 답한다. 읽기 동안의 surface 의 `input`, `paste`, mouse 누름, `scroll`, `viewport` 요청은 읽기를 `scrollReadInterrupted` 로 끝내고 실행된다. 읽기 frame 요청의 거절, image region 의 떨어짐, session 의 끝은 읽기를 `scrollReadFailed` 로 끝낸다. `vt-alacritty` 의 `tests/scroll_read_test.rs` 가 실제 engine, 실제 PTY, `less`, mouse tracking 을 켠 program, 동기 출력을 쓰는 program, 간격 뒤에 쓰는 program 으로 그것을 확인한다.
+
 ### Strip frame
 
 session의 image surface는 `Frame::new_strip`이 만든 frame으로 그린다. render metadata를 모으는 diagnostic build(`SOKSAK_VT_TRACE_DIR`)는 CoreGraphics frame으로 그린다. render metadata를 보고하는 frame이 그것뿐이기 때문이다. 두 frame 모두 CPU로 그린다. strip frame의 pixel은 같은 화면의 CoreGraphics frame과 같으므로, CoreGraphics frame이 두 그리기의 유일한 기준이다.

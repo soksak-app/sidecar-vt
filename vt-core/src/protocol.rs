@@ -845,6 +845,15 @@ pub trait Engine: Send + 'static {
     fn sync_deadline(&self) -> Option<Instant>;
     /// Ends the synchronized update that holds output, and processes the output that it held.
     fn stop_sync(&mut self);
+    /// The number of synchronized updates (DEC 2026) that the output opened. An engine without synchronized updates opens none.
+    fn synchronized_opened(&self) -> u64 {
+        0
+    }
+    /// The number of the synchronized update whose reset ended the last output, or None when the last output did not end with
+    /// the reset of an update (core docs/spec/terminal-read.md#draw-of-the-program-scroll).
+    fn synchronized_end(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// A neutral event passed between the engine and the service.
@@ -1438,6 +1447,11 @@ enum SurfaceCommand {
         screen: RowScreen,
         from: u64,
         count: u32,
+    },
+    /// The program scroll read of core docs/spec/terminal-read.md#program-scroll: scroll by `by` lines, read, scroll back.
+    ScrollRead {
+        by: i32,
+        quiet: u32,
     },
     ScreenWatch {
         enabled: bool,
@@ -2578,6 +2592,107 @@ fn record_wheel(
         &fields,
     );
     route
+}
+
+/// The wheel input of `lines` lines on `route` under `modes` at the cell `col`, `row`: the mouse reports of the program, the
+/// cursor keys of the alternate scroll, or None for the viewport, which the engine moves itself.
+fn wheel_bytes(
+    route: WheelRoute,
+    modes: &Modes,
+    lines: i32,
+    col: u16,
+    row: u16,
+) -> Result<Option<Vec<u8>>, String> {
+    match route {
+        WheelRoute::Program => encoding::encode_wheel(modes, lines > 0, col, row)
+            .map(|event| Some(event.repeat(lines.unsigned_abs() as usize))),
+        WheelRoute::AlternateScroll => {
+            let key = if lines > 0 { "Up" } else { "Down" };
+            let keys = vec![
+                InputKey {
+                    key: key.to_string(),
+                    text: String::new(),
+                    shift: false,
+                    alt: false,
+                    ctrl: false
+                };
+                lines.unsigned_abs() as usize
+            ];
+            encode_keys(&keys, modes).map(Some)
+        }
+        WheelRoute::Viewport => Ok(None),
+    }
+}
+
+/// The largest `by` of a scroll read and the bounds of its quiet interval in display frames
+/// (core docs/spec/terminal-read.md#program-scroll).
+const SCROLL_READ_BY_MAX: i64 = 1000;
+const SCROLL_READ_QUIET_MAX: u64 = 120;
+
+/// A program scroll read that waits for the program to draw (core docs/spec/terminal-read.md#program-scroll). The scroll step
+/// and then the restore step each wait by the rule of core docs/spec/terminal-read.md#draw-of-the-program-scroll.
+struct ScrollRead {
+    by: i32,
+    quiet: u32,
+    route: WheelRoute,
+    /// The text of the screen before the scroll input.
+    first: Vec<String>,
+    /// The text after the scroll step and the event that ended its wait, once the step ended.
+    after: Option<(Vec<String>, &'static str)>,
+    /// The synchronized updates that the output had opened when the input of the step was sent.
+    opened: u64,
+    /// The ticks since the last output that followed the input of the step, or since the input.
+    quiet_ticks: u32,
+    /// Whether the last output ended with the reset of an update that opened after the input of the step.
+    synced: bool,
+    /// Whether a read frame request waits for its tick.
+    wanted: bool,
+    refresh_rate: Option<u64>,
+}
+
+/// The plain text of each row of `screen`: the characters of the cells of a width other than 0, without the spaces at its end.
+fn screen_text(screen: &Screen) -> Vec<String> {
+    screen
+        .lines
+        .iter()
+        .map(|line| {
+            let row: String = line
+                .iter()
+                .filter(|cell| cell.width != 0)
+                // default: a cell without a character is blank, as the plain text of the rows of `screen.rows` reads it.
+                .map(|cell| cell.ch.as_deref().unwrap_or(" "))
+                .collect();
+            row.trim_end().to_string()
+        })
+        .collect()
+}
+
+/// The cell at the middle of `screen`, where a scroll read places its wheel reports.
+fn screen_middle(screen: &Screen) -> (u16, u16) {
+    (screen.cols / 2, screen.rows / 2)
+}
+
+/// Sends the frame request of a read, which the host answers at the display frames of the screen of the window also while the
+/// region does not draw (core docs/spec/native-surfaces.md#copy-path-frames). Returns false when the output channel has closed.
+async fn request_read_frame(
+    surface_id: &str,
+    state: &ImageState,
+    read: &mut ScrollRead,
+    output_tx: &OutputSink,
+) -> bool {
+    if read.wanted {
+        return true;
+    }
+    read.wanted = true;
+    let request = json!({"surface": surface_id, "body": {"image": {"want": {
+        "name": state.name, "generation": state.generation, "purpose": "read",
+    }}}});
+    output_tx.send(request.to_string()).await.is_ok()
+}
+
+/// The error reply that ends a scroll read.
+fn scroll_read_error(surface_id: &str, error: &str, reason: String) -> Value {
+    json!({"surface": surface_id, "body": {"error": error, "reason": reason}})
 }
 
 /// Whether the host is copying the previous raster. Screen changes in the meantime stay dirty, and
@@ -3990,6 +4105,8 @@ async fn surface_task(
     let mut inputs = ReplayInputs::new(log.clone());
     let mut screens = ScreenStream::default();
     let mut screen_watched = false;
+    // The program scroll read that waits for the program, or None (core docs/spec/terminal-read.md#program-scroll).
+    let mut scroll_read: Option<ScrollRead> = None;
     let mut session_id: Option<String> = None;
     // The last foreground read of the session: the value sent with the event `foreground`, or the
     // error that was recorded (core docs/spec/terminal-read.md#session-state).
@@ -4307,6 +4424,10 @@ async fn surface_task(
                             }
                     }
                     SurfaceCommand::ImageDetach { detach, request_check } => {
+                        if scroll_read.take().is_some() {
+                            let response = scroll_read_error(&surface_id, "scrollReadFailed", "the image region was detached during the scroll read".to_string());
+                            if output_tx.reply(response).await.is_err() { return; }
+                        }
                         let current = [
                             image_state
                                 .as_ref()
@@ -4605,6 +4726,10 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::InputTransaction { actions, preedit: next_preedit, cids, request } => {
+                        if scroll_read.take().is_some() {
+                            let response = scroll_read_error(&surface_id, "scrollReadInterrupted", "input input of the person reached the session during the scroll read".to_string());
+                            if output_tx.reply(response).await.is_err() { return; }
+                        }
                         last_input = Some(Instant::now());
                         let modes = engine.modes();
                         let mut next_focused = focused;
@@ -4689,6 +4814,10 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::Paste { text, cids } => {
+                        if scroll_read.take().is_some() {
+                            let response = scroll_read_error(&surface_id, "scrollReadInterrupted", "input paste of the person reached the session during the scroll read".to_string());
+                            if output_tx.reply(response).await.is_err() { return; }
+                        }
                         last_input = Some(Instant::now());
                         cursor_activity = Instant::now();
                         last_cursor_frame = None;
@@ -4740,6 +4869,10 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::Mouse { input_id, phase, x, y, pressed, shift, alt, ctrl, cids } => {
+                        if matches!(phase, MousePhase::Down) && scroll_read.take().is_some() {
+                            let response = scroll_read_error(&surface_id, "scrollReadInterrupted", "input mouse of the person reached the session during the scroll read".to_string());
+                            if output_tx.reply(response).await.is_err() { return; }
+                        }
                         let modes = engine.modes();
                         let cell = match image_state.as_ref()
                             .ok_or_else(|| "mouse image is not configured".to_string())
@@ -4940,6 +5073,10 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::Viewport { offset } => {
+                        if scroll_read.take().is_some() {
+                            let response = scroll_read_error(&surface_id, "scrollReadInterrupted", "input viewport of the person reached the session during the scroll read".to_string());
+                            if output_tx.reply(response).await.is_err() { return; }
+                        }
                         // Limits the viewport to the range of history that the engine retains.
                         let delta = i64::from(offset) - i64::from(engine.viewport_offset());
                         if delta != 0 {
@@ -4952,34 +5089,21 @@ async fn surface_task(
                             && !present_screen(&surface_id, screen, state, &output_tx, "viewport", &log, inputs.sequence).await { return; }
                     }
                     SurfaceCommand::Scroll { lines, col, row, shift, cids } => {
+                        if scroll_read.take().is_some() {
+                            let response = scroll_read_error(&surface_id, "scrollReadInterrupted", "input scroll of the person reached the session during the scroll read".to_string());
+                            if output_tx.reply(response).await.is_err() { return; }
+                        }
                         let modes = engine.modes();
                         // Applies, in this order: mouse reporting unless Shift is held, the alternate
                         // scroll of the alternate screen, and the viewport of the primary screen.
                         let route = record_wheel(&log, &surface_id, lines, col, row, shift, &modes);
-                        let bytes = match route {
-                            WheelRoute::Program => {
-                            match encoding::encode_wheel(&modes, lines > 0, col, row) {
-                                Ok(event) => Some(event.repeat(lines.unsigned_abs() as usize)),
-                                Err(error) => {
-                                    let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": error}});
-                                    if output_tx.reply(response).await.is_err() { return; }
-                                    continue;
-                                }
+                        let bytes = match wheel_bytes(route, &modes, lines, col, row) {
+                            Ok(bytes) => bytes,
+                            Err(error) => {
+                                let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": error}});
+                                if output_tx.reply(response).await.is_err() { return; }
+                                continue;
                             }
-                            }
-                            WheelRoute::AlternateScroll => {
-                            let key = if lines > 0 { "Up" } else { "Down" };
-                            let keys = vec![InputKey { key: key.to_string(), text: String::new(), shift: false, alt: false, ctrl: false }; lines.unsigned_abs() as usize];
-                            match encode_keys(&keys, &modes) {
-                                Ok(bytes) => Some(bytes),
-                                Err(error) => {
-                                    let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": error}});
-                                    if output_tx.reply(response).await.is_err() { return; }
-                                    continue;
-                                }
-                            }
-                            }
-                            WheelRoute::Viewport => None,
                         };
                         match bytes {
                             Some(bytes) => {
@@ -5173,6 +5297,59 @@ async fn surface_task(
                             return;
                         }
                     }
+                    SurfaceCommand::ScrollRead { by, quiet } => {
+                        // core docs/spec/terminal-read.md#program-scroll: the screen before the scroll, the scroll by the wheel
+                        // route without Shift, and the waits of core docs/spec/terminal-read.md#draw-of-the-program-scroll.
+                        let refusal = if scroll_read.is_some() {
+                            Some("a scroll read is running")
+                        } else if image_state.is_none() {
+                            Some("a scroll read needs the display frames of an image region")
+                        } else if session_id.is_none() {
+                            Some("a scroll read needs an open session")
+                        } else {
+                            None
+                        };
+                        if let Some(reason) = refusal {
+                            let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": reason}});
+                            if output_tx.reply(response).await.is_err() { return; }
+                            continue;
+                        }
+                        let modes = engine.modes();
+                        let route = WheelRoute::of(&modes, false);
+                        let screen = engine.screen();
+                        let first = screen_text(&screen);
+                        let (col, row) = screen_middle(&screen);
+                        let bytes = match wheel_bytes(route, &modes, by, col, row) {
+                            Ok(bytes) => bytes,
+                            Err(error) => {
+                                let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": error}});
+                                if output_tx.reply(response).await.is_err() { return; }
+                                continue;
+                            }
+                        };
+                        let Some(bytes) = bytes else {
+                            // The viewport moves in the engine at once, and no program draws.
+                            inputs.scroll_viewport(engine.as_mut(), session_id.as_deref(), by);
+                            let after = screen_text(&engine.screen());
+                            inputs.scroll_viewport(engine.as_mut(), session_id.as_deref(), -by);
+                            let last = screen_text(&engine.screen());
+                            let mut body = json!({"event": "screen.scroll", "route": route.name(), "changed": after != first, "text": after,
+                                "restored": last == first, "settledBy": {"scroll": "viewport", "restore": "viewport"}, "quiet": quiet, "refreshRate": null});
+                            if last != first {
+                                body["first"] = json!({"before": first.first(), "after": last.first()});
+                            }
+                            if output_tx.reply(json!({"surface": surface_id, "body": body})).await.is_err() { return; }
+                            continue;
+                        };
+                        if let Some(ref sid) = session_id
+                            && !inputs.write(&session_port, sid, &bytes, &[], AfterWrite::Scroll(output_tx.clone(), json!(surface_id))).await { return; }
+                        let mut read = ScrollRead {
+                            by, quiet, route, first, after: None, opened: engine.synchronized_opened(), quiet_ticks: 0, synced: false, wanted: false, refresh_rate: None,
+                        };
+                        if let Some(state) = image_state.as_ref()
+                            && !request_read_frame(&surface_id, state, &mut read, &output_tx).await { return; }
+                        scroll_read = Some(read);
+                    }
                     SurfaceCommand::ScreenRows { screen, from, count } => {
                         // The rows are not part of the screen message, so no screen is sent and the
                         // page's screen state is unchanged.
@@ -5273,6 +5450,58 @@ async fn surface_task(
                                     return;
                                 }
                             }
+                            let Some(read) = scroll_read.as_mut() else { continue };
+                            if !read.wanted {
+                                continue;
+                            }
+                            read.wanted = false;
+                            read.refresh_rate = tick.get("refreshRate").and_then(Value::as_u64);
+                            // core docs/spec/terminal-read.md#draw-of-the-program-scroll: the reset of an update that opened after
+                            // the input, with no output since, or `quiet` ticks without output.
+                            let settled = if read.synced {
+                                Some("sync")
+                            } else {
+                                read.quiet_ticks += 1;
+                                (read.quiet_ticks >= read.quiet).then_some("quiet")
+                            };
+                            let Some(settled) = settled else {
+                                let Some(state) = image_state.as_ref() else { continue };
+                                if !request_read_frame(&surface_id, state, read, &output_tx).await { return; }
+                                continue;
+                            };
+                            let screen = engine.screen();
+                            let text = screen_text(&screen);
+                            if read.after.is_none() {
+                                read.after = Some((text, settled));
+                                let (col, row) = screen_middle(&screen);
+                                let bytes = match wheel_bytes(read.route, &engine.modes(), -read.by, col, row) {
+                                    Ok(Some(bytes)) => bytes,
+                                    Ok(None) => unreachable!("a scroll read on the viewport route waits for no tick"),
+                                    Err(error) => {
+                                        scroll_read = None;
+                                        let response = scroll_read_error(&surface_id, "scrollReadFailed", format!("the scroll back was not sent: {error}"));
+                                        if output_tx.reply(response).await.is_err() { return; }
+                                        continue;
+                                    }
+                                };
+                                if let Some(ref sid) = session_id
+                                    && !inputs.write(&session_port, sid, &bytes, &[], AfterWrite::Scroll(output_tx.clone(), json!(surface_id))).await { return; }
+                                read.opened = engine.synchronized_opened();
+                                read.quiet_ticks = 0;
+                                read.synced = false;
+                                let Some(state) = image_state.as_ref() else { continue };
+                                if !request_read_frame(&surface_id, state, read, &output_tx).await { return; }
+                                continue;
+                            }
+                            let read = scroll_read.take().expect("the scroll read of this tick");
+                            let (after, scrolled) = read.after.expect("the restore step follows the scroll step");
+                            let restored = text == read.first;
+                            let mut body = json!({"event": "screen.scroll", "route": read.route.name(), "changed": after != read.first, "text": after,
+                                "restored": restored, "settledBy": {"scroll": scrolled, "restore": settled}, "quiet": read.quiet, "refreshRate": read.refresh_rate});
+                            if !restored {
+                                body["first"] = json!({"before": read.first.first(), "after": text.first()});
+                            }
+                            if output_tx.reply(json!({"surface": surface_id, "body": body})).await.is_err() { return; }
                             continue;
                         }
                         if let Some(want) = image_obj.and_then(|o| o.get("want")) {
@@ -5282,6 +5511,10 @@ async fn surface_task(
                             log.record_error("image want", format!("the host refused the frame request: {want}"));
                             if let Some(state) = image_state.as_mut() {
                                 state.frame_wanted = false;
+                            }
+                            if want.get("purpose").and_then(Value::as_str) == Some("read") && scroll_read.take().is_some() {
+                                let response = scroll_read_error(&surface_id, "scrollReadFailed", format!("the host refused the read frame request: {want}"));
+                                if output_tx.reply(response).await.is_err() { return; }
                             }
                             continue;
                         }
@@ -5403,6 +5636,11 @@ async fn surface_task(
                                 crate::engine_trace::record(&log, &surface_id, || format!("feed {}", base64_encode(&data)));
                                 inputs.output(sid, &data);
                                 engine.feed(&data);
+                                if let Some(read) = scroll_read.as_mut() {
+                                    read.quiet_ticks = 0;
+                                    read.synced = engine.sync_deadline().is_none()
+                                        && engine.synchronized_end().is_some_and(|update| update > read.opened);
+                                }
                                 // Semantic invalidation follows engine mutation, independently
                                 // of a raster copy, frame request or drawing visibility. Unwatched
                                 // surfaces prepare and send no notification.
@@ -5439,6 +5677,10 @@ async fn surface_task(
                     DaemonEvent::Exit { session_id: ref recv_sid } => {
                         if let Some(ref sid) = session_id
                             && recv_sid == sid {
+                                if scroll_read.take().is_some() {
+                                    let response = scroll_read_error(&surface_id, "scrollReadFailed", "the session ended during the scroll read".to_string());
+                                    if output_tx.reply(response).await.is_err() { return; }
+                                }
                                 if !inputs.finish_all_writes().await { return; }
                                 session_ended = true;
                                 if let Some(state) = image_state.as_mut()
@@ -6405,6 +6647,33 @@ where
                                         row,
                                         shift,
                                         cids: cids.clone(),
+                                    })
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            "screen.scroll.read" => {
+                                let by = body
+                                    .get("by")
+                                    .and_then(Value::as_i64)
+                                    .filter(|by| *by != 0 && by.abs() <= SCROLL_READ_BY_MAX);
+                                let quiet = body
+                                    .get("quiet")
+                                    .and_then(Value::as_u64)
+                                    .filter(|quiet| (1..=SCROLL_READ_QUIET_MAX).contains(quiet));
+                                let (Some(by), Some(quiet)) = (by, quiet) else {
+                                    let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": format!("screen.scroll.read requires an integer by from -{SCROLL_READ_BY_MAX} to {SCROLL_READ_BY_MAX} other than 0 and an integer quiet from 1 to {SCROLL_READ_QUIET_MAX}")}});
+                                    if reply_tx.reply(response).await.is_err() {
+                                        break;
+                                    }
+                                    continue;
+                                };
+                                if tx
+                                    .send(SurfaceCommand::ScrollRead {
+                                        by: by as i32,
+                                        quiet: quiet as u32,
                                     })
                                     .await
                                     .is_err()
