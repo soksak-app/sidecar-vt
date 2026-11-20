@@ -5,6 +5,7 @@ pub mod encoding;
 pub mod engine_trace;
 pub mod events;
 pub mod guard;
+pub mod handoff;
 pub mod inline_image;
 pub mod locale;
 pub mod messaging;

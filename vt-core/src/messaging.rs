@@ -203,6 +203,16 @@ impl Registration {
         surface: &str,
         folder: &Path,
     ) -> Result<(Self, Reports), Refusal> {
+        // The page of a terminal has no file operation, so the sidecar creates the folder of the terminal and its missing parents
+        // (core docs/spec/messaging.md#folder-of-a-terminal). A path that is a file stays a file, and the check below refuses it.
+        if !folder.exists() {
+            std::fs::create_dir_all(folder).map_err(|error| {
+                Refusal::new(
+                    "folder-create-failed",
+                    format!("{}: {error}", folder.display()),
+                )
+            })?;
+        }
         let metadata = std::fs::metadata(folder).map_err(|error| match error.kind() {
             std::io::ErrorKind::NotFound => {
                 Refusal::new("folder-missing", folder.display().to_string())

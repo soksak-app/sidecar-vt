@@ -2,6 +2,40 @@
   "contract": "docs/spec/terminal-state.md#prompt-region",
   "cases": [
     {
+      "name": "the cursor stays after the prompt until the shell draws again",
+      "size": [30, 4],
+      "steps": [
+        {
+          "output": "\u001b]133;A\u0007\u001b]133;P;k=i\u0007~/ai/test % \u001b]133;B\u0007",
+          "screen": ["~/ai/test %", "", "", ""],
+          "cursor": [0, 12]
+        },
+        {
+          "resize": [20, 4],
+          "screen": ["~/ai/test %", "", "", ""],
+          "history": [],
+          "cursor": [0, 12]
+        },
+        {
+          "resize": [30, 4],
+          "screen": ["~/ai/test %", "", "", ""],
+          "history": [],
+          "cursor": [0, 12]
+        },
+        {
+          "resize": [10, 4],
+          "screen": ["~/ai/test", "", "", ""],
+          "history": [],
+          "cursor": [0, 9]
+        },
+        {
+          "output": "\r\r\u001b[J\u001b]133;P;k=i\u0007~/ai/test % \u001b]133;B\u0007",
+          "screen": ["~/ai/test", "%", "", ""],
+          "cursor": [1, 2]
+        }
+      ]
+    },
+    {
       "name": "a wrapped input line stands at the previous width until the shell draws it again",
       "size": [20, 6],
       "steps": [
@@ -14,7 +48,7 @@
           "resize": [10, 6],
           "screen": ["o1", "o2", "P> abcdefg", "rstuvwxyz", "", ""],
           "history": [],
-          "cursor": [3, 0]
+          "cursor": [3, 9]
         },
         {
           "output": "\u001b[1A\rP> abcdefghijklmnopqrstuvwxyz\u001b[J",
@@ -25,7 +59,7 @@
           "resize": [20, 6],
           "screen": ["o1", "o2", "P> abcdefg", "hijklmnopq", "rstuvwxyz", ""],
           "history": [],
-          "cursor": [4, 0]
+          "cursor": [4, 9]
         },
         {
           "output": "\u001b[2A\rP> abcdefghijklmnopqrstuvwxyz\u001b[J",
@@ -48,7 +82,7 @@
           "resize": [10, 6],
           "screen": ["o1", "LONG-FIRST", "P> ab", "", "", ""],
           "history": [],
-          "cursor": [2, 0]
+          "cursor": [2, 5]
         },
         {
           "output": "\u001b[1A\r\u001b]133;P;k=i\u0007LONG-FIRST-LINE\r\nP> \u001b]133;B\u0007ab\u001b[J",
@@ -59,7 +93,7 @@
           "resize": [20, 6],
           "screen": ["o1", "LONG-FIRST", "-LINE", "P> ab", "", ""],
           "history": [],
-          "cursor": [3, 0]
+          "cursor": [3, 5]
         },
         {
           "output": "\u001b[2A\r\u001b]133;P;k=i\u0007LONG-FIRST-LINE\r\nP> \u001b]133;B\u0007ab\u001b[J",
@@ -82,7 +116,7 @@
           "resize": [10, 6],
           "screen": ["o1", "LONG-FIRST", "-LINE", "P> abcdefg", "rstuvwxyz", ""],
           "history": [],
-          "cursor": [4, 0]
+          "cursor": [4, 9]
         },
         {
           "output": "\u001b[1A\r\u001b]133;P;k=s\u0007P> abcdefghijklmnopqrstuvwxyz\u001b[J",
@@ -93,7 +127,7 @@
           "resize": [20, 6],
           "screen": ["o1", "LONG-FIRST-LINE", "P> abcdefg", "hijklmnopq", "rstuvwxyz", ""],
           "history": [],
-          "cursor": [4, 0]
+          "cursor": [4, 9]
         },
         {
           "output": "\u001b[2A\r\u001b]133;P;k=s\u0007P> abcdefghijklmnopqrstuvwxyz\u001b[J",
@@ -116,13 +150,13 @@
           "resize": [20, 4],
           "screen": ["P> ab", "", "", ""],
           "history": [],
-          "cursor": [0, 0]
+          "cursor": [0, 5]
         },
         {
           "resize": [30, 4],
           "screen": ["P> ab", "", "", ""],
           "history": [],
-          "cursor": [0, 0]
+          "cursor": [0, 5]
         }
       ]
     },
@@ -139,7 +173,7 @@
           "resize": [10, 6],
           "screen": ["o1", "LONG-FIRST", "P> ab", "", "", ""],
           "history": [],
-          "cursor": [2, 0]
+          "cursor": [2, 5]
         }
       ]
     },
@@ -156,13 +190,13 @@
           "resize": [10, 6],
           "screen": ["P> for x i", "n a b c d", "e f", "for> echo", "", ""],
           "history": [],
-          "cursor": [3, 0]
+          "cursor": [3, 9]
         },
         {
           "resize": [20, 6],
           "screen": ["P> for x in a b c d", "e f", "for> echo", "", "", ""],
           "history": [],
-          "cursor": [2, 0]
+          "cursor": [2, 9]
         }
       ]
     },
@@ -253,7 +287,7 @@
           "resize": [20, 6],
           "screen": ["o1", "P> abcdefghijklmnopq", "rstuvwxyz", "P> abcdefg", "hijklmn", ""],
           "history": [],
-          "cursor": [4, 0]
+          "cursor": [4, 7]
         }
       ]
     },
@@ -287,7 +321,7 @@
           "resize": [10, 2],
           "screen": ["LINE-1", "LINE-2"],
           "history": ["o1", ""],
-          "cursor": [1, 0],
+          "cursor": [1, 5],
           "errors": ["terminal resize: the prompt region starts at the screen row -1 after the reflow, above the screen"]
         }
       ]
@@ -303,7 +337,7 @@
           "resize": [10, 4],
           "screen": ["o1", "P>abcdefg", "", ""],
           "history": [],
-          "cursor": [1, 0]
+          "cursor": [1, 9]
         }
       ]
     },
@@ -320,7 +354,7 @@
           "resize": [30, 8],
           "screen": ["PROMPT-LIN", "E", "P>abcdefgh", "ijklmnopqr", "stuvwxyz01", "23", "", ""],
           "history": [],
-          "cursor": [5, 0]
+          "cursor": [5, 2]
         }
       ]
     }

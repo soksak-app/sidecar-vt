@@ -1924,6 +1924,155 @@ async fn output_without_input_is_drawn_at_the_tick_of_its_frame_request() {
     );
 }
 
+/// A surface whose host is the test: each line that the sidecar sends reaches the test, and the
+/// test sends each answer, so the test decides the order of the frame answers, the ticks and the
+/// drawing states.
+struct HostedSurface {
+    events: TestEvents,
+    outputs: mpsc::Sender<soksak_sidecar_vt_core::protocol::DaemonEvent>,
+    requests: mpsc::Sender<Vec<u8>>,
+    lines: mpsc::Receiver<serde_json::Value>,
+}
+
+impl HostedSurface {
+    async fn start() -> Self {
+        let events = TestEvents::new();
+        let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
+        let (outputs, receiver) = mpsc::channel(64);
+        let port = Arc::new(OutputPort(std::sync::Mutex::new(Some(receiver))));
+        let factory: Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync> =
+            Arc::new(move || port.clone() as Arc<dyn SessionPort>);
+        let (mut to_serve, serve_in) = tokio::io::duplex(64 * 1024);
+        let (serve_out, from_serve) = tokio::io::duplex(64 * 1024);
+        let handle = events.handle();
+        tokio::spawn(async move {
+            let _ = serve(engine_factory, serve_in, serve_out, factory, handle).await;
+        });
+        let (requests, mut pending) = mpsc::channel::<Vec<u8>>(64);
+        tokio::spawn(async move {
+            while let Some(request) = pending.recv().await {
+                to_serve.write_all(&request).await.unwrap();
+            }
+        });
+        let (sent, lines) = mpsc::channel(256);
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(from_serve).lines();
+            while let Some(line) = reader.next_line().await.unwrap() {
+                if sent
+                    .send(serde_json::from_str(&line).unwrap())
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        let mut surface = HostedSurface {
+            events,
+            outputs,
+            requests,
+            lines,
+        };
+        surface
+            .send(r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}"#)
+            .await;
+        surface
+            .send(r#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}"#)
+            .await;
+        let first = surface.next_image("frame", "the first frame").await;
+        surface.consume(&first).await;
+        surface
+    }
+
+    async fn send(&self, line: &str) {
+        self.requests
+            .send(format!("{line}\n").into_bytes())
+            .await
+            .unwrap();
+    }
+
+    /// The next image message of the sidecar of `kind`: `frame` for a frame of the raster, or
+    /// `want` for a frame request. Every other line is passed over.
+    async fn next_image(&mut self, kind: &str, step: &str) -> serde_json::Value {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let line = self.lines.recv().await.expect("the sidecar ended");
+                let image = &line["body"]["image"];
+                let found = match kind {
+                    "frame" => image["sequence"].is_u64(),
+                    _ => image[kind].is_object(),
+                };
+                if found {
+                    return image.clone();
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{step}: the sidecar sent no {kind} within 5 s"))
+    }
+
+    /// Answers a frame as copied.
+    async fn consume(&self, frame: &serde_json::Value) {
+        let sequence = frame["sequence"].as_u64().unwrap();
+        let raster = frame["raster"].as_u64().unwrap();
+        self.send(&format!(
+            r#"{{"surface":"s1","body":{{"image":{{"consumed":{{"name":"view","generation":1,"raster":{raster},"sequence":{sequence}}}}}}}}}"#
+        ))
+        .await;
+    }
+
+    async fn tick(&self, sequence: u64) {
+        self.send(&format!(
+            r#"{{"surface":"s1","body":{{"image":{{"tick":{{"name":"view","generation":1,"sequence":{sequence},"refreshRate":120}}}}}}}}"#
+        ))
+        .await;
+    }
+
+    async fn drawing(&self, drawing: bool) {
+        self.send(&format!(
+            r#"{{"surface":"s1","body":{{"image":{{"drawing":{{"name":"view","generation":1,"drawing":{drawing},"hidden":false}}}}}}}}"#
+        ))
+        .await;
+    }
+
+    /// Sends one output and waits until the surface has read it.
+    async fn output(&self, data: &[u8]) {
+        let before = self.events.named("sidecar.vt.pty_read").len();
+        self.outputs.send(daemon_output(data)).await.unwrap();
+        wait_events(&self.events, "sidecar.vt.pty_read", before + 1, |_| true).await;
+    }
+}
+
+// A frame request that the host accepted while the region did not draw has no tick, and the
+// drawing state that follows ends it (core docs/spec/native-surfaces.md#copy-path-frames): after
+// the region draws again, the next change sends its frame request, so its frame draws it. Input:
+// a frame in flight, an output, the drawing state false, the answer of the frame, which sends a
+// frame request that the host accepts without a tick, the drawing state true and an output.
+#[tokio::test(start_paused = true)]
+async fn a_change_after_the_region_draws_again_requests_its_frame() {
+    let mut surface = HostedSurface::start().await;
+    surface.output(b"a").await;
+    surface.next_image("want", "the output a").await;
+    surface.tick(1).await;
+    let in_flight = surface
+        .next_image("frame", "the tick of the output a")
+        .await;
+    surface.output(b"b").await;
+    surface.drawing(false).await;
+    surface.consume(&in_flight).await;
+    // The host accepts this request without a tick, because the region does not draw.
+    surface
+        .next_image("want", "the answer while the region does not draw")
+        .await;
+    surface.drawing(true).await;
+    let drawn = surface.next_image("frame", "the region draws again").await;
+    surface.consume(&drawn).await;
+    surface.output(b"c").await;
+    surface
+        .next_image("want", "the output c after the region draws again")
+        .await;
+}
+
 // The blink of a focused cursor is drawn at the blink interval of its setting, counted from the
 // last activity of the cursor, and not at a step of a fixed timer: with an interval of 530 ms the
 // first blink frame follows the frame of the setting by 530 ms.
