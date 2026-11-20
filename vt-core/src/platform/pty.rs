@@ -23,6 +23,23 @@ pub fn process_group_leader(
     }
 }
 
+/// The foreground process group of the terminal of the master, which `tcgetpgrp` names (core
+/// docs/spec/process-list.md#foreground-program). `process_group_leader` of the PTY library answers
+/// a failure of the call as no group, so this function calls it and reports the failure.
+pub fn foreground_group(master: &dyn MasterPty) -> Result<i32, String> {
+    let fd = master
+        .as_raw_fd()
+        .ok_or("read the foreground of the session: the PTY master has no descriptor")?;
+    let group = unsafe { libc::tcgetpgrp(fd) };
+    if group < 0 {
+        return Err(format!(
+            "read the foreground of the session: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(group)
+}
+
 /// The number of bytes in the PTY input queue that the master wrote and the child has not read yet.
 /// This is a diagnostic measurement.
 /// A non-blocking duplicate of the master, which the session task reads and writes. A duplicate

@@ -1206,6 +1206,8 @@ fn observed_session(
         owner: String::new(),
         master: Mutex::new(None),
         process_group: with_group.then_some(group),
+        // This child has no terminal, and these tests read no process list.
+        terminal: Err("the session has no terminal".to_string()),
         input: Mutex::new(None),
         queued_input: AtomicUsize::new(0),
         input_bound: QUEUED_INPUT_BYTES,

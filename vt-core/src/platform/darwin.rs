@@ -4,5 +4,6 @@ pub mod frame;
 pub mod locale;
 pub mod process_group;
 pub mod process_info;
+pub mod process_watch;
 pub mod service;
 pub mod stall_sample;

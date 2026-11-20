@@ -4,6 +4,7 @@ use crate::guard::{self, LineInput};
 use crate::inline_image::{Dimension, InlineImageCommand};
 use crate::messaging;
 use crate::policy::Class;
+pub use crate::process_list::Processes;
 use crate::screen_stream::{ScreenCells, ScreenOrder, ScreenStream, SentScreen, screen_cells};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -1256,18 +1257,6 @@ pub struct Scrollback {
     pub dropped: u64,
 }
 
-/// The leader of the foreground process group of the terminal of a session, with the path of its
-/// executable and its working directory; a read that the system refused leaves both empty and names
-/// the read in `error` (core docs/spec/terminal-read.md#session-state).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct Foreground {
-    pub pid: i32,
-    pub command: Option<String>,
-    pub cwd: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Screen {
     pub cols: u16,
@@ -1362,9 +1351,9 @@ pub trait SessionPort: Send + Sync {
         Err("session PTY measurement is not supported".to_string())
     }
     async fn get_events(&self) -> mpsc::Receiver<DaemonEvent>;
-    /// The leader of the foreground process group of the terminal of the session, or None when the
-    /// terminal has no foreground process group (core docs/spec/terminal-read.md#session-state).
-    fn foreground(&self, session_id: &str) -> Result<Option<Foreground>, String>;
+    /// The process list of the terminal of the session: the foreground program and the background
+    /// jobs (core docs/spec/process-list.md).
+    fn processes(&self, session_id: &str) -> Result<Processes, String>;
 }
 
 /// Envelope of a message received from the host
@@ -1386,6 +1375,8 @@ struct Envelope {
 enum SurfaceCommand {
     /// Reads the terminal state of the session (core docs/spec/terminal-state.md#state-read).
     ShellStateRead,
+    /// Reads the process list of the session (core docs/spec/process-list.md#request).
+    ProcessList,
     Open {
         image: Option<String>,
         request: ShellRequest,
@@ -2333,33 +2324,64 @@ async fn end_selection(
     }
 }
 
-/// Reads the foreground of the terminal of the session after an output and sends the event
-/// `foreground` when it differs from the value sent before; a failed read is recorded once until
-/// the next read differs (core docs/spec/terminal-read.md#session-state). Returns false when the
-/// output is closed.
-async fn send_foreground(
+/// The last process list that a surface sent with the event `processes`, or the failure of its
+/// read that it sent (core docs/spec/process-list.md#session-state).
+#[derive(Default)]
+struct ProcessesSent {
+    list: Option<(
+        Option<crate::process_list::Process>,
+        Vec<crate::process_list::Job>,
+    )>,
+    failure: Option<String>,
+}
+
+/// Reads the process list of the terminal of the session and sends the event `processes` when it
+/// differs from the list sent before, or `{event: "processes", error}` once for a failed read; then
+/// sets the watches of the members of the jobs and reads again when a member ended before its watch
+/// began (core docs/spec/process-list.md#session-state). Returns false when the output is closed.
+async fn send_processes(
     surface_id: &str,
     session_port: &dyn SessionPort,
     session_id: &str,
-    last: &mut Option<Result<Option<Foreground>, String>>,
+    sent: &mut ProcessesSent,
+    watch: &mut crate::platform::darwin::process_watch::ProcessWatch,
     output_tx: &OutputSink,
     log: &Events,
 ) -> bool {
-    let read = session_port.foreground(session_id);
-    if last.as_ref() == Some(&read) {
-        return true;
-    }
-    match &read {
-        Ok(foreground) => {
-            let event = json!({"surface": surface_id, "body": {"event": "foreground", "foreground": foreground}});
-            if output_tx.send(event.to_string()).await.is_err() {
-                return false;
+    loop {
+        match session_port.processes(session_id) {
+            Ok(processes) => {
+                sent.failure = None;
+                let list = (processes.foreground, processes.background);
+                if sent.list.as_ref() != Some(&list) {
+                    let event = json!({"surface": surface_id, "body": {"event": "processes", "foreground": list.0, "background": list.1}});
+                    if output_tx.send(event.to_string()).await.is_err() {
+                        return false;
+                    }
+                    sent.list = Some(list);
+                }
+                let update = watch.add(&processes.watched.into_iter().collect());
+                for refusal in update.refused {
+                    log.record_error("processes", refusal);
+                }
+                if !update.ended {
+                    return true;
+                }
+            }
+            Err(reason) => {
+                sent.list = None;
+                if sent.failure.as_deref() != Some(reason.as_str()) {
+                    log.record_error("processes", &reason);
+                    let event = json!({"surface": surface_id, "body": {"event": "processes", "error": reason}});
+                    if output_tx.send(event.to_string()).await.is_err() {
+                        return false;
+                    }
+                    sent.failure = Some(reason);
+                }
+                return true;
             }
         }
-        Err(reason) => log.record_error("foreground", reason),
     }
-    *last = Some(read);
-    true
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4108,9 +4130,24 @@ async fn surface_task(
     // The program scroll read that waits for the program, or None (core docs/spec/terminal-read.md#program-scroll).
     let mut scroll_read: Option<ScrollRead> = None;
     let mut session_id: Option<String> = None;
-    // The last foreground read of the session: the value sent with the event `foreground`, or the
-    // error that was recorded (core docs/spec/terminal-read.md#session-state).
-    let mut foreground: Option<Result<Option<Foreground>, String>> = None;
+    // The last process list of the session that the event `processes` sent, and the kqueue that watches the members of its
+    // jobs (core docs/spec/process-list.md#session-state).
+    let mut processes_sent = ProcessesSent::default();
+    let mut process_watch = match crate::platform::darwin::process_watch::ProcessWatch::new() {
+        Ok(watch) => watch,
+        Err(reason) => {
+            log.record_error("processes", &reason);
+            let event =
+                json!({"surface": surface_id, "body": {"event": "error", "reason": reason}});
+            if output_tx.send(event.to_string()).await.is_err() {
+                log.record_error(
+                    "processes",
+                    "the error event was not delivered: the output has closed",
+                );
+            }
+            return;
+        }
+    };
     let mut daemon_events_rx = session_port.get_events().await;
     let mut image_state: Option<ImageState> = None;
     // The terminal state of the session of this surface, from the OSC 133 marks (shell_state.rs).
@@ -4270,6 +4307,21 @@ async fn surface_task(
                         } else if !present_screen(&surface_id, screen, state, &output_tx, "blink", &log, inputs.sequence).await {
                             return;
                         }
+                    }
+            }
+            // A watched process of the jobs ended, executed a program or received a signal (core docs/spec/process-list.md#session-state).
+            changed = process_watch.changed(), if !process_watch.watched().is_empty() => {
+                if let Err(reason) = changed {
+                    log.record_error("processes", reason);
+                    // The watch stops until the next read sets it again, so that the failure does not repeat at once.
+                    for refusal in process_watch.clear() {
+                        log.record_error("processes", refusal);
+                    }
+                    continue;
+                }
+                if let Some(sid) = session_id.as_deref()
+                    && !send_processes(&surface_id, session_port.as_ref(), sid, &mut processes_sent, &mut process_watch, &output_tx, &log).await {
+                        return;
                     }
             }
             report = async { message_reports.as_mut().expect("the branch is enabled only with reports").recv().await }, if message_reports.is_some() => {
@@ -4981,6 +5033,22 @@ async fn surface_task(
                     // the reader has read, then answers. It is a diagnostic observation that
                     // distinguishes a successful write, the child's receipt, and the child's
                     // output.
+                    // Reads the process list at the time of the request (core docs/spec/process-list.md#reply).
+                    SurfaceCommand::ProcessList => {
+                        let request = json!({"operation": "process.list"});
+                        let response = match session_id.as_deref() {
+                            Some(session) => match session_port.processes(session) {
+                                Ok(processes) => json!({"surface": surface_id, "body": {
+                                    "event": "process.list",
+                                    "foreground": processes.foreground,
+                                    "background": processes.background,
+                                }}),
+                                Err(error) => json!({"surface": surface_id, "body": {"error": error, "request": request}}),
+                            },
+                            None => json!({"surface": surface_id, "body": {"error": "Session not open", "request": request}}),
+                        };
+                        if output_tx.reply(response).await.is_err() { return; }
+                    }
                     SurfaceCommand::ShellStateRead => {
                         let response = match session_id.as_deref() {
                             Some(session) => {
@@ -5651,7 +5719,7 @@ async fn surface_task(
                                 sync_deadline = engine.sync_deadline();
                                 record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
                                 if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut shell_state).await { return; }
-                                if !send_foreground(&surface_id, session_port.as_ref(), sid, &mut foreground, &output_tx, &log).await { return; }
+                                if !send_processes(&surface_id, session_port.as_ref(), sid, &mut processes_sent, &mut process_watch, &output_tx, &log).await { return; }
                                 if headless || hold_while_presenting(&mut image_state) { continue; }
                                 if let Some(ref mut img_state) = image_state {
                                     // The frame request decides first, because a screen copies the
@@ -6686,6 +6754,11 @@ where
                                     break;
                                 }
                             }
+                            "process.list" => {
+                                if tx.send(SurfaceCommand::ProcessList).await.is_err() {
+                                    break;
+                                }
+                            }
                             "screen.watch" => match body.get("enabled").and_then(Value::as_bool) {
                                 Some(enabled) => {
                                     if tx
@@ -7446,8 +7519,8 @@ impl SessionPort for LocalSessionPort {
         self.service.pty_measurement(session_id)
     }
 
-    fn foreground(&self, session_id: &str) -> Result<Option<Foreground>, String> {
-        self.service.foreground(session_id)
+    fn processes(&self, session_id: &str) -> Result<Processes, String> {
+        self.service.processes(session_id)
     }
 
     async fn get_events(&self) -> mpsc::Receiver<DaemonEvent> {

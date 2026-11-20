@@ -1,5 +1,5 @@
 use super::{
-    DaemonEvent, Foreground, SessionPort, ShellRequest, WriteCompletion, WriteOrigin,
+    DaemonEvent, Processes, SessionPort, ShellRequest, WriteCompletion, WriteOrigin,
     write_completed,
 };
 use async_trait::async_trait;
@@ -32,9 +32,13 @@ impl FakeSessionPort {
 
 #[async_trait]
 impl SessionPort for FakeSessionPort {
-    /// This port has no terminal, so no process holds its foreground.
-    fn foreground(&self, _session_id: &str) -> Result<Option<Foreground>, String> {
-        Ok(None)
+    /// This port has no terminal, so its process list holds no process.
+    fn processes(&self, _session_id: &str) -> Result<Processes, String> {
+        Ok(Processes {
+            foreground: None,
+            background: Vec::new(),
+            watched: Vec::new(),
+        })
     }
 
     async fn open(&self, request: &ShellRequest, _cols: u16, _rows: u16) -> Result<String, String> {

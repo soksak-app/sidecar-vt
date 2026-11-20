@@ -171,12 +171,16 @@ struct TracePort;
 
 #[async_trait::async_trait]
 impl SessionPort for TracePort {
-    /// This port has no terminal, so no process holds its foreground.
-    fn foreground(
+    /// This port has no terminal, so its process list holds no process.
+    fn processes(
         &self,
         _session_id: &str,
-    ) -> Result<Option<soksak_sidecar_vt_core::Foreground>, String> {
-        Ok(None)
+    ) -> Result<soksak_sidecar_vt_core::process_list::Processes, String> {
+        Ok(soksak_sidecar_vt_core::process_list::Processes {
+            foreground: None,
+            background: Vec::new(),
+            watched: Vec::new(),
+        })
     }
 
     async fn open(
@@ -605,12 +609,16 @@ struct OutputPort(
 
 #[async_trait::async_trait]
 impl SessionPort for OutputPort {
-    /// This port has no terminal, so no process holds its foreground.
-    fn foreground(
+    /// This port has no terminal, so its process list holds no process.
+    fn processes(
         &self,
         _session_id: &str,
-    ) -> Result<Option<soksak_sidecar_vt_core::Foreground>, String> {
-        Ok(None)
+    ) -> Result<soksak_sidecar_vt_core::process_list::Processes, String> {
+        Ok(soksak_sidecar_vt_core::process_list::Processes {
+            foreground: None,
+            background: Vec::new(),
+            watched: Vec::new(),
+        })
     }
 
     async fn open(
@@ -1088,12 +1096,16 @@ struct FailingOpenPort;
 
 #[async_trait::async_trait]
 impl SessionPort for FailingOpenPort {
-    /// This port has no terminal, so no process holds its foreground.
-    fn foreground(
+    /// This port has no terminal, so its process list holds no process.
+    fn processes(
         &self,
         _session_id: &str,
-    ) -> Result<Option<soksak_sidecar_vt_core::Foreground>, String> {
-        Ok(None)
+    ) -> Result<soksak_sidecar_vt_core::process_list::Processes, String> {
+        Ok(soksak_sidecar_vt_core::process_list::Processes {
+            foreground: None,
+            background: Vec::new(),
+            watched: Vec::new(),
+        })
     }
 
     async fn open(
@@ -1645,12 +1657,16 @@ struct HeldOpenPort(Arc<tokio::sync::Semaphore>);
 
 #[async_trait::async_trait]
 impl SessionPort for HeldOpenPort {
-    /// This port has no terminal, so no process holds its foreground.
-    fn foreground(
+    /// This port has no terminal, so its process list holds no process.
+    fn processes(
         &self,
         _session_id: &str,
-    ) -> Result<Option<soksak_sidecar_vt_core::Foreground>, String> {
-        Ok(None)
+    ) -> Result<soksak_sidecar_vt_core::process_list::Processes, String> {
+        Ok(soksak_sidecar_vt_core::process_list::Processes {
+            foreground: None,
+            background: Vec::new(),
+            watched: Vec::new(),
+        })
     }
 
     async fn open(

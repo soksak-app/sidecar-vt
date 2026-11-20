@@ -28,11 +28,104 @@ const PROC_PGRP_ONLY: u32 = 2;
 /// Reads the members and state of a process group. A process reaped during the read is not in the
 /// result.
 pub fn members(group: i32) -> Result<Vec<Member>, String> {
-    let size =
-        unsafe { libc::proc_listpids(PROC_PGRP_ONLY, group as u32, std::ptr::null_mut(), 0) };
+    Ok(listed(
+        PROC_PGRP_ONLY,
+        group as u32,
+        &format!("process group {group}"),
+        &format!("group {group}"),
+    )?
+    .into_iter()
+    .map(|(pid, info)| Member {
+        pid,
+        zombie: info.pbi_status == libc::SZOMB,
+        exiting: info.pbi_flags & PROC_FLAG_INEXIT != 0,
+    })
+    .collect())
+}
+
+// PROC_TTY_ONLY from sys/proc_info.h. The libc crate does not export this value.
+const PROC_TTY_ONLY: u32 = 3;
+
+/// One process whose controlling terminal is the terminal of a session, with its group, its parent
+/// and its state (core docs/spec/process-list.md#members).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalMember {
+    pub member: crate::process_list::Member,
+    pub parent: i32,
+    /// The start time in milliseconds since the Unix epoch.
+    pub started: u64,
+}
+
+/// Reads the processes whose controlling terminal is the device `device`. A process reaped during
+/// the read is not in the result; another failed read fails the list, because the group and the
+/// state of that process cannot be stated (core docs/spec/process-list.md#failures).
+pub fn terminal(device: u32) -> Result<Vec<TerminalMember>, String> {
+    use crate::process_list::{Member, MemberState};
+    Ok(listed(
+        PROC_TTY_ONLY,
+        device,
+        &format!("the processes of terminal {device}"),
+        &format!("terminal {device}"),
+    )?
+    .into_iter()
+    .map(|(pid, info)| {
+        let state = if info.pbi_status == libc::SZOMB || info.pbi_flags & PROC_FLAG_INEXIT != 0 {
+            MemberState::Ended
+        } else if info.pbi_status == libc::SSTOP {
+            MemberState::Stopped
+        } else {
+            MemberState::Running
+        };
+        TerminalMember {
+            member: Member {
+                pid,
+                group: info.pbi_pgid as i32,
+                state,
+            },
+            parent: info.pbi_ppid as i32,
+            started: info.pbi_start_tvsec * 1000 + info.pbi_start_tvusec / 1000,
+        }
+    })
+    .collect())
+}
+
+/// Reads the BSD information of one process, which holds its group, its parent, its status and its
+/// start time (core docs/spec/process-list.md#members).
+pub fn info(pid: i32) -> Result<libc::proc_bsdinfo, std::io::Error> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // PROC_PIDTBSDINFO answers ESRCH for a zombie when arg is 0, and finds the zombie too when arg
+    // is 1.
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            1,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    if read == size {
+        Ok(info)
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// Lists the pids of the kind `kind` with the value `value` and reads the BSD information of each;
+/// `listing` names the list and `owner` the owner of a process in the errors. A process reaped after
+/// the list was read gives no information and is not in the result. Any other failure means the
+/// state is unknown.
+fn listed(
+    kind: u32,
+    value: u32,
+    listing: &str,
+    owner: &str,
+) -> Result<Vec<(i32, libc::proc_bsdinfo)>, String> {
+    let size = unsafe { libc::proc_listpids(kind, value, std::ptr::null_mut(), 0) };
     if size < 0 {
         return Err(format!(
-            "list process group {group}: {}",
+            "list {listing}: {}",
             std::io::Error::last_os_error()
         ));
     }
@@ -41,48 +134,26 @@ pub fn members(group: i32) -> Result<Vec<Member>, String> {
     let mut pids = vec![0i32; capacity];
     let filled = unsafe {
         libc::proc_listpids(
-            PROC_PGRP_ONLY,
-            group as u32,
+            kind,
+            value,
             pids.as_mut_ptr().cast(),
             (capacity * std::mem::size_of::<i32>()) as libc::c_int,
         )
     };
     if filled < 0 {
         return Err(format!(
-            "list process group {group}: {}",
+            "list {listing}: {}",
             std::io::Error::last_os_error()
         ));
     }
     pids.truncate(filled as usize / std::mem::size_of::<i32>());
-    let mut members = Vec::new();
+    let mut listed = Vec::new();
     for pid in pids.into_iter().filter(|pid| *pid > 0) {
-        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-        // PROC_PIDTBSDINFO answers ESRCH for a zombie when arg is 0, and finds the zombie too when
-        // arg is 1.
-        let read = unsafe {
-            libc::proc_pidinfo(
-                pid,
-                libc::PROC_PIDTBSDINFO,
-                1,
-                (&mut info as *mut libc::proc_bsdinfo).cast(),
-                size,
-            )
-        };
-        if read == size {
-            members.push(Member {
-                pid,
-                zombie: info.pbi_status == libc::SZOMB,
-                exiting: info.pbi_flags & PROC_FLAG_INEXIT != 0,
-            });
-            continue;
-        }
-        // A process reaped after the list was read gives no information. Any other failure means
-        // the state is unknown.
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::ESRCH) {
-            return Err(format!("read process {pid} of group {group}: {error}"));
+        match info(pid) {
+            Ok(info) => listed.push((pid, info)),
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {}
+            Err(error) => return Err(format!("read process {pid} of {owner}: {error}")),
         }
     }
-    Ok(members)
+    Ok(listed)
 }

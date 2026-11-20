@@ -10,12 +10,12 @@ use async_trait::async_trait;
 #[cfg(feature = "fault-injection")]
 use soksak_sidecar_vt_core::platform::darwin::frame::fault;
 use soksak_sidecar_vt_core::platform::darwin::frame::{Frame, metrics};
+use soksak_sidecar_vt_core::process_list::Processes;
 /// Serve contract integration tests that use a fake daemon
 use soksak_sidecar_vt_core::protocol::{
-    Cell, Cursor, CursorShape, DaemonEvent, Engine, EngineEvent, Foreground, Modes,
-    OutputSubmissionObserver, OutputSubmissionStage, PersistentOwner, PersistentRegistry, Screen,
-    SessionPort, ShellRequest, serve as serve_with_events, serve_with_registry,
-    serve_with_submission_observer,
+    Cell, Cursor, CursorShape, DaemonEvent, Engine, EngineEvent, Modes, OutputSubmissionObserver,
+    OutputSubmissionStage, PersistentOwner, PersistentRegistry, Screen, SessionPort, ShellRequest,
+    serve as serve_with_events, serve_with_registry, serve_with_submission_observer,
 };
 use soksak_sidecar_vt_core::pty::PtyMeasurement;
 use soksak_sidecar_vt_core::{
@@ -549,9 +549,16 @@ impl FakeSessionPort {
 
 #[async_trait]
 impl SessionPort for FakeSessionPort {
-    /// This port has no terminal, so no process holds its foreground.
-    fn foreground(&self, _session_id: &str) -> Result<Option<Foreground>, String> {
-        Ok(None)
+    /// This port has no terminal, so its process list holds no process.
+    fn processes(
+        &self,
+        _session_id: &str,
+    ) -> Result<soksak_sidecar_vt_core::process_list::Processes, String> {
+        Ok(soksak_sidecar_vt_core::process_list::Processes {
+            foreground: None,
+            background: Vec::new(),
+            watched: Vec::new(),
+        })
     }
 
     async fn open(&self, request: &ShellRequest, cols: u16, rows: u16) -> Result<String, String> {
@@ -9265,17 +9272,8 @@ async fn a_persistent_surface_task_that_panics_is_reported_as_an_error_event() {
     );
 }
 
-/// Covers core docs/spec/terminal-read.md#session-state: after each output of a real PTY session the sidecar reads
-/// the leader of the foreground process group of the terminal, and sends the event `foreground` when it differs from
-/// the value it sent before. `less` takes the terminal and draws its screen, so its output names it; `q` returns the
-/// terminal to the shell, whose prompt names the shell again. Every wait ends on an output line of the sidecar.
-#[tokio::test]
-async fn the_foreground_event_names_the_program_that_holds_the_terminal() {
-    let file = tempfile::NamedTempFile::new().expect("a file for less");
-    let numbered: String = (1..=200).map(|line| format!("{line}\n")).collect();
-    std::fs::write(file.path(), numbered).expect("the numbered lines are written");
-    let directory = std::fs::canonicalize("/tmp").expect("the folder of the session");
-    let (mut to_serve, mut lines, _task) = start_messaging_service();
+/// Opens a real PTY session of `/bin/sh` in `/tmp` on the surface `s1` and returns the folder of the session.
+async fn open_shell_session(to_serve: &mut tokio::io::DuplexStream) -> String {
     for line in [
         r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","directory":"/tmp","image":"view"}}"#,
         r#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}"#,
@@ -9285,31 +9283,209 @@ async fn the_foreground_event_names_the_program_that_holds_the_terminal() {
             .await
             .expect("the request line was not written");
     }
-    let is_foreground = |value: &serde_json::Value| {
-        value["surface"] == "s1" && value["body"]["event"] == "foreground"
-    };
-    let shell = next_line_where(&mut lines, is_foreground).await;
-    let shell = shell["body"]["foreground"].clone();
-    assert!(shell["pid"].is_i64(), "{shell}");
-    assert!(shell["command"].is_string(), "{shell}");
-    assert_eq!(shell["cwd"], directory.to_str().unwrap(), "{shell}");
-    let input = serde_json::json!({"surface": "s1", "body": {"operation": "input", "actions": [{"type": "insert", "text": format!("/usr/bin/less {}\r", file.path().display()), "replacementRange": null, "attributed": false}], "preedit": {"text": "", "markedRange": null, "selectedRange": null, "replacementRange": null, "attributed": false}}});
+    std::fs::canonicalize("/tmp")
+        .expect("the folder of the session")
+        .to_str()
+        .expect("the folder is UTF-8")
+        .to_string()
+}
+
+/// Types `text` into the session of the surface `s1`.
+async fn type_into_session(to_serve: &mut tokio::io::DuplexStream, text: &str) {
+    let input = serde_json::json!({"surface": "s1", "body": {"operation": "input", "actions": [{"type": "insert", "text": text, "replacementRange": null, "attributed": false}], "preedit": {"text": "", "markedRange": null, "selectedRange": null, "replacementRange": null, "attributed": false}}});
     to_serve
         .write_all(format!("{input}\n").as_bytes())
         .await
         .expect("the input line was not written");
-    let less = next_line_where(&mut lines, |value| {
-        is_foreground(value) && value["body"]["foreground"]["command"] == "/usr/bin/less"
+}
+
+fn is_processes(value: &serde_json::Value) -> bool {
+    value["surface"] == "s1" && value["body"]["event"] == "processes"
+}
+
+/// The job of `/bin/sleep` in the background member of a `processes` event, if it has one.
+fn sleep_job(value: &serde_json::Value) -> Option<serde_json::Value> {
+    value["body"]["background"]
+        .as_array()?
+        .iter()
+        .find(|job| job["command"] == "/bin/sleep")
+        .cloned()
+}
+
+/// Ends a process that a test started in a session when the test ends, also when it fails.
+struct EndsProcess(i32);
+
+impl Drop for EndsProcess {
+    fn drop(&mut self) {
+        unsafe { libc::kill(self.0, libc::SIGKILL) };
+    }
+}
+
+/// Covers core docs/spec/process-list.md: after each output of a real PTY session the sidecar reads the process list of
+/// the terminal and sends the event `processes` when it differs from the list that it sent before, and the operation
+/// `process.list` reads it at the time of the request. The shell at its prompt is the foreground program; a job started
+/// with `&` is a background job with its group, pid, executable, arguments, folder, start time and state; `less` takes the
+/// terminal and its output names it, while the job stays in the background; `q` returns the terminal to the shell. Every
+/// wait ends on an output line of the sidecar.
+#[tokio::test]
+async fn the_process_list_names_less_in_the_foreground_and_a_sleep_job_in_the_background() {
+    let file = tempfile::NamedTempFile::new().expect("a file for less");
+    let numbered: String = (1..=200).map(|line| format!("{line}\n")).collect();
+    std::fs::write(file.path(), numbered).expect("the numbered lines are written");
+    let (mut to_serve, mut lines, _task) = start_messaging_service();
+    let directory = open_shell_session(&mut to_serve).await;
+    let first = next_line_where(&mut lines, is_processes).await;
+    let shell = first["body"]["foreground"].clone();
+    assert!(shell["pid"].is_i64(), "{shell}");
+    assert_eq!(shell["group"], shell["pid"], "{shell}");
+    assert!(shell["command"].is_string(), "{shell}");
+    assert!(shell["arguments"].is_array(), "{shell}");
+    assert!(shell["started"].is_u64(), "{shell}");
+    assert_eq!(shell["cwd"], directory, "{shell}");
+    assert_eq!(
+        first["body"]["background"],
+        serde_json::json!([]),
+        "{first}"
+    );
+
+    type_into_session(&mut to_serve, "/bin/sleep 100 &\r").await;
+    let started = next_line_where(&mut lines, |value| {
+        is_processes(value) && sleep_job(value).is_some()
     })
     .await;
-    let less = less["body"]["foreground"].clone();
-    assert_ne!(less["pid"], shell["pid"], "{less}");
-    assert_eq!(less["cwd"], directory.to_str().unwrap(), "{less}");
-    let quit = serde_json::json!({"surface": "s1", "body": {"operation": "input", "actions": [{"type": "insert", "text": "q", "replacementRange": null, "attributed": false}], "preedit": {"text": "", "markedRange": null, "selectedRange": null, "replacementRange": null, "attributed": false}}});
-    to_serve
-        .write_all(format!("{quit}\n").as_bytes())
-        .await
-        .expect("the input line was not written");
-    let back = next_line_where(&mut lines, is_foreground).await;
+    let job = sleep_job(&started).expect("the event names the job");
+    let _ends = EndsProcess(job["pid"].as_i64().expect("the job has a pid") as i32);
+    assert_eq!(job["group"], job["pid"], "{job}");
+    assert_eq!(job["arguments"], serde_json::json!(["100"]), "{job}");
+    assert_eq!(job["state"], "running", "{job}");
+    assert_eq!(job["cwd"], directory, "{job}");
+    assert!(job["started"].is_u64(), "{job}");
+    assert_eq!(started["body"]["foreground"], shell, "{started}");
+
+    type_into_session(
+        &mut to_serve,
+        &format!("/usr/bin/less {}\r", file.path().display()),
+    )
+    .await;
+    let less = next_line_where(&mut lines, |value| {
+        is_processes(value) && value["body"]["foreground"]["command"] == "/usr/bin/less"
+    })
+    .await;
+    let program = less["body"]["foreground"].clone();
+    assert_ne!(program["pid"], shell["pid"], "{program}");
+    assert_eq!(
+        program["arguments"],
+        serde_json::json!([file.path().to_str().expect("the file path is UTF-8")]),
+        "{program}"
+    );
+    assert_eq!(program["cwd"], directory, "{program}");
+    assert_eq!(
+        less["body"]["background"],
+        serde_json::json!([job]),
+        "{less}"
+    );
+
+    send_messaging_request(
+        &mut to_serve,
+        "s1",
+        "list",
+        serde_json::json!({"operation": "process.list"}),
+    )
+    .await;
+    let reply = messaging_reply(&mut lines, "list").await;
+    assert_eq!(reply["body"]["event"], "process.list", "{reply}");
+    assert_eq!(reply["body"]["foreground"], program, "{reply}");
+    assert_eq!(
+        reply["body"]["background"],
+        serde_json::json!([job]),
+        "{reply}"
+    );
+
+    type_into_session(&mut to_serve, "q").await;
+    let back = next_line_where(&mut lines, |value| {
+        is_processes(value) && value["body"]["foreground"]["pid"] == shell["pid"]
+    })
+    .await;
     assert_eq!(back["body"]["foreground"], shell, "{back}");
+    assert_eq!(
+        back["body"]["background"],
+        serde_json::json!([job]),
+        "{back}"
+    );
+}
+
+/// Covers core docs/spec/process-list.md#session-state: the sidecar watches the members of the background jobs and their
+/// parents, so the list follows a stop, a continue and the end of a job that no output reports. The test sends the
+/// signals to the job itself; `/bin/sh` reports a change of a job only before its next prompt, so the session writes no
+/// output for them. Every wait ends on an output line of the sidecar.
+#[tokio::test]
+async fn the_processes_event_follows_the_stop_and_the_end_of_a_job_without_output() {
+    let (mut to_serve, mut lines, _task) = start_messaging_service();
+    open_shell_session(&mut to_serve).await;
+    next_line_where(&mut lines, is_processes).await;
+    type_into_session(&mut to_serve, "/bin/sleep 100 &\r").await;
+    let started = next_line_where(&mut lines, |value| {
+        is_processes(value) && sleep_job(value).is_some()
+    })
+    .await;
+    let job = sleep_job(&started).expect("the event names the job");
+    let pid = job["pid"].as_i64().expect("the job has a pid") as i32;
+    let _ends = EndsProcess(pid);
+
+    assert_eq!(
+        unsafe { libc::kill(pid, libc::SIGSTOP) },
+        0,
+        "the stop signal is sent"
+    );
+    let stopped = next_line_where(&mut lines, |value| {
+        is_processes(value) && sleep_job(value).is_some_and(|job| job["state"] == "stopped")
+    })
+    .await;
+    assert_eq!(
+        sleep_job(&stopped).expect("the job")["pid"],
+        pid,
+        "{stopped}"
+    );
+
+    assert_eq!(
+        unsafe { libc::kill(pid, libc::SIGCONT) },
+        0,
+        "the continue signal is sent"
+    );
+    next_line_where(&mut lines, |value| {
+        is_processes(value) && sleep_job(value).is_some_and(|job| job["state"] == "running")
+    })
+    .await;
+
+    assert_eq!(
+        unsafe { libc::kill(pid, libc::SIGKILL) },
+        0,
+        "the kill signal is sent"
+    );
+    let ended = next_line_where(&mut lines, |value| {
+        is_processes(value) && value["body"]["background"] == serde_json::json!([])
+    })
+    .await;
+    assert!(ended["body"]["foreground"]["pid"].is_i64(), "{ended}");
+}
+
+/// Covers core docs/spec/process-list.md#failures: a process list of a surface without an open session is refused with
+/// `Session not open` and the request.
+#[tokio::test]
+async fn a_process_list_without_a_session_is_refused_with_session_not_open() {
+    let (mut to_serve, mut lines, _task) = start_messaging_service();
+    send_messaging_request(
+        &mut to_serve,
+        "s1",
+        "list",
+        serde_json::json!({"operation": "process.list"}),
+    )
+    .await;
+    let reply = messaging_reply(&mut lines, "list").await;
+    assert_eq!(reply["body"]["error"], "Session not open", "{reply}");
+    assert_eq!(
+        reply["body"]["request"],
+        serde_json::json!({"operation": "process.list"}),
+        "{reply}"
+    );
 }

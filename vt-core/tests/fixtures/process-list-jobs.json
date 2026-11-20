@@ -1,0 +1,175 @@
+{
+  "contract": "docs/spec/process-list.md",
+  "cases": [
+    {
+      "name": "the shell at its prompt is the foreground and has no job",
+      "leader": 100,
+      "foreground": 100,
+      "members": [
+        {"pid": 100, "group": 100, "state": "running"}
+      ],
+      "expected": {
+        "foreground": {"group": 100, "pid": 100},
+        "background": []
+      }
+    },
+    {
+      "name": "a job started with & while less holds the terminal",
+      "leader": 100,
+      "foreground": 300,
+      "members": [
+        {"pid": 100, "group": 100, "state": "running"},
+        {"pid": 200, "group": 200, "state": "running"},
+        {"pid": 300, "group": 300, "state": "running"}
+      ],
+      "expected": {
+        "foreground": {"group": 300, "pid": 300},
+        "background": [
+          {"group": 200, "pid": 200, "state": "running"}
+        ]
+      }
+    },
+    {
+      "name": "a stopped job and a running job in ascending order of the group",
+      "leader": 100,
+      "foreground": 100,
+      "members": [
+        {"pid": 410, "group": 410, "state": "running"},
+        {"pid": 100, "group": 100, "state": "running"},
+        {"pid": 205, "group": 205, "state": "stopped"}
+      ],
+      "expected": {
+        "foreground": {"group": 100, "pid": 100},
+        "background": [
+          {"group": 205, "pid": 205, "state": "stopped"},
+          {"group": 410, "pid": 410, "state": "running"}
+        ]
+      }
+    },
+    {
+      "name": "a pipeline job is one entry named by its leader",
+      "leader": 100,
+      "foreground": 100,
+      "members": [
+        {"pid": 100, "group": 100, "state": "running"},
+        {"pid": 501, "group": 500, "state": "running"},
+        {"pid": 500, "group": 500, "state": "running"}
+      ],
+      "expected": {
+        "foreground": {"group": 100, "pid": 100},
+        "background": [
+          {"group": 500, "pid": 500, "state": "running"}
+        ]
+      }
+    },
+    {
+      "name": "a job whose leader ended is named by its member with the lowest pid",
+      "leader": 100,
+      "foreground": 100,
+      "members": [
+        {"pid": 100, "group": 100, "state": "running"},
+        {"pid": 620, "group": 600, "state": "running"},
+        {"pid": 610, "group": 600, "state": "running"}
+      ],
+      "expected": {
+        "foreground": {"group": 100, "pid": 100},
+        "background": [
+          {"group": 600, "pid": 610, "state": "running"}
+        ]
+      }
+    },
+    {
+      "name": "a job is running while one member is not stopped",
+      "leader": 100,
+      "foreground": 100,
+      "members": [
+        {"pid": 100, "group": 100, "state": "running"},
+        {"pid": 700, "group": 700, "state": "stopped"},
+        {"pid": 701, "group": 700, "state": "running"}
+      ],
+      "expected": {
+        "foreground": {"group": 100, "pid": 100},
+        "background": [
+          {"group": 700, "pid": 700, "state": "running"}
+        ]
+      }
+    },
+    {
+      "name": "an ended member is not counted and a group of ended members has no entry",
+      "leader": 100,
+      "foreground": 100,
+      "members": [
+        {"pid": 100, "group": 100, "state": "running"},
+        {"pid": 800, "group": 800, "state": "stopped"},
+        {"pid": 801, "group": 800, "state": "ended"},
+        {"pid": 900, "group": 900, "state": "ended"}
+      ],
+      "expected": {
+        "foreground": {"group": 100, "pid": 100},
+        "background": [
+          {"group": 800, "pid": 800, "state": "stopped"}
+        ]
+      }
+    },
+    {
+      "name": "the members of the foreground group and of the shell group are not jobs",
+      "leader": 100,
+      "foreground": 300,
+      "members": [
+        {"pid": 100, "group": 100, "state": "running"},
+        {"pid": 150, "group": 100, "state": "running"},
+        {"pid": 300, "group": 300, "state": "running"},
+        {"pid": 301, "group": 300, "state": "stopped"}
+      ],
+      "expected": {
+        "foreground": {"group": 300, "pid": 300},
+        "background": []
+      }
+    },
+    {
+      "name": "a job whose leader is a zombie is named by its member with the lowest pid that has not ended",
+      "leader": 100,
+      "foreground": 100,
+      "members": [
+        {"pid": 100, "group": 100, "state": "running"},
+        {"pid": 1000, "group": 1000, "state": "ended"},
+        {"pid": 1003, "group": 1000, "state": "stopped"},
+        {"pid": 1002, "group": 1000, "state": "stopped"}
+      ],
+      "expected": {
+        "foreground": {"group": 100, "pid": 100},
+        "background": [
+          {"group": 1000, "pid": 1002, "state": "stopped"}
+        ]
+      }
+    },
+    {
+      "name": "a foreground pipeline whose leader ended is named by its member with the lowest pid",
+      "leader": 100,
+      "foreground": 1100,
+      "members": [
+        {"pid": 100, "group": 100, "state": "running"},
+        {"pid": 1100, "group": 1100, "state": "ended"},
+        {"pid": 1102, "group": 1100, "state": "running"},
+        {"pid": 1101, "group": 1100, "state": "running"}
+      ],
+      "expected": {
+        "foreground": {"group": 1100, "pid": 1101},
+        "background": []
+      }
+    },
+    {
+      "name": "a foreground group without a member that has not ended has no foreground program",
+      "leader": 100,
+      "foreground": 1200,
+      "members": [
+        {"pid": 100, "group": 100, "state": "running"},
+        {"pid": 1200, "group": 1200, "state": "ended"}
+      ],
+      "expected": {
+        "foreground": null,
+        "background": []
+      }
+    }
+  ]
+}

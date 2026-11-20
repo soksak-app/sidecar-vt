@@ -127,6 +127,10 @@ struct Session {
     owner: String,
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     process_group: Option<i32>,
+    /// The shell, which is the session leader, and the device of its controlling terminal, which
+    /// is the terminal of the session, read when the shell starts, or the failure of that read (core
+    /// docs/spec/process-list.md#members). The device stays readable after the shell ends.
+    terminal: Result<(i32, u32), String>,
     /// The queue of writes that the I/O task consumes. None once the writer is closed.
     input: Mutex<Option<mpsc::UnboundedSender<QueuedWrite>>>,
     /// The bytes of the queue that the master has not accepted.
@@ -374,6 +378,9 @@ impl PtyService {
             .spawn_command(command)
             .map_err(|error| format!("spawn PTY session: {error}"))?;
         let process_group = process_group_leader(pair.master.as_ref());
+        // The child sets its session and its controlling terminal before its program starts, and the spawn returns after
+        // the start, so the device is set.
+        let terminal = shell_terminal(child.process_id());
         let runtime = tokio::runtime::Handle::try_current()
             .map_err(|error| format!("start the PTY session task: {error}"))?;
         let stream = {
@@ -390,6 +397,7 @@ impl PtyService {
             owner: owner.to_string(),
             master: Mutex::new(Some(pair.master)),
             process_group,
+            terminal,
             input: Mutex::new(Some(input)),
             queued_input: AtomicUsize::new(0),
             input_bound: self.input_bound,
@@ -512,20 +520,54 @@ impl PtyService {
         Ok(PtyMeasurement { pending, written })
     }
 
-    /// The leader of the foreground process group of the terminal of the session, with the path of
-    /// its executable and its working directory, or None when the terminal has no foreground process
-    /// group (core docs/spec/terminal-read.md#session-state).
-    pub fn foreground(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<crate::protocol::Foreground>, String> {
+    /// The process list of the terminal of the session: the foreground program, the background jobs
+    /// and the processes that the sidecar watches for the events of the jobs (core
+    /// docs/spec/process-list.md).
+    pub fn processes(&self, session_id: &str) -> Result<crate::process_list::Processes, String> {
+        use crate::platform::darwin::{process_group, process_info};
+        use crate::process_list::{Job, Processes, entries, job_members};
         let session = self.session(session_id)?;
-        let guard = session.recover(&session.master, "master");
-        let master = guard
-            .as_ref()
-            .ok_or_else(|| "session master is closed".to_string())?;
-        Ok(process_group_leader(master.as_ref())
-            .map(crate::platform::darwin::process_info::foreground))
+        let foreground = {
+            let guard = session.recover(&session.master, "master");
+            let master = guard
+                .as_ref()
+                .ok_or_else(|| "session master is closed".to_string())?;
+            crate::platform::pty::foreground_group(master.as_ref())?
+        };
+        let (leader, device) = session.terminal.clone()?;
+        let members = process_group::terminal(device)?;
+        let rule: Vec<_> = members.iter().map(|member| member.member).collect();
+        let (foreground_entry, background) = entries(leader, foreground, &rule);
+        let process = |group: i32, pid: i32| {
+            let started = members
+                .iter()
+                .find(|member| member.member.pid == pid)
+                .map(|member| member.started)
+                .expect("the process of an entry is a member");
+            process_info::process(group, pid, started)
+        };
+        let jobs = job_members(leader, foreground, &rule);
+        // The parent of a member receives SIGCHLD after the member stopped, continued or ended, so it is watched with the
+        // members; launchd (pid 1) is the parent of every orphan of the system.
+        let parents = members
+            .iter()
+            .filter(|member| jobs.contains(&member.member.pid))
+            .map(|member| member.parent)
+            .filter(|parent| *parent > 1);
+        let mut watched: Vec<i32> = jobs.iter().copied().chain(parents).collect();
+        watched.sort_unstable();
+        watched.dedup();
+        Ok(Processes {
+            foreground: foreground_entry.map(|entry| process(entry.group, entry.pid)),
+            background: background
+                .into_iter()
+                .map(|entry| Job {
+                    process: process(entry.group, entry.pid),
+                    state: entry.state,
+                })
+                .collect(),
+            watched,
+        })
     }
 
     pub fn close(&self, session_id: &str) -> Result<(), String> {
@@ -665,6 +707,23 @@ impl PtyService {
             .cloned()
             .ok_or_else(|| format!("session {session_id} not found"))
     }
+}
+
+/// The shell `pid`, which is the session leader, and the device of its controlling terminal (core
+/// docs/spec/process-list.md#members).
+fn shell_terminal(pid: Option<u32>) -> Result<(i32, u32), String> {
+    let pid =
+        pid.ok_or("read the terminal of the session: the session has no shell process")? as i32;
+    let device = crate::platform::darwin::process_group::info(pid)
+        .map_err(|error| format!("read the terminal of the session: process {pid}: {error}"))?
+        .e_tdev;
+    // NODEV of sys/types.h, (dev_t)-1, which the libc crate does not export.
+    if device == u32::MAX {
+        return Err(format!(
+            "read the terminal of the session: process {pid} has no controlling terminal"
+        ));
+    }
+    Ok((pid, device))
 }
 
 /// How long close waits for a child to end after SIGHUP before it sends SIGKILL.
