@@ -34,7 +34,9 @@ pub fn home_directory() -> Result<String, String> {
         .to_str()
         .map_err(|_| "terminal home directory: the home directory is not UTF-8".to_string())?;
     if home.is_empty() {
-        return Err("terminal home directory: the user database entry has no home directory".into());
+        return Err(
+            "terminal home directory: the user database entry has no home directory".into(),
+        );
     }
     Ok(home.to_string())
 }

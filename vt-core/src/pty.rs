@@ -45,7 +45,10 @@ pub fn resolve_shell(request: &str) -> Result<String, String> {
 /// The executable that `program` names (docs/spec/agent-roles.md#launch-parameters): a relative path that contains a separator
 /// resolves from `working_directory`, the directory the session starts in, and a name without a separator is found through the
 /// PATH of the environment of the service. A program that is not found is an error that names it.
-pub fn resolve_program(program: &str, working_directory: &std::path::Path) -> Result<std::path::PathBuf, String> {
+pub fn resolve_program(
+    program: &str,
+    working_directory: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
     let found = if program.contains('/') {
         which::which(working_directory.join(program))
     } else {
