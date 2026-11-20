@@ -256,18 +256,39 @@ async fn viewed_session() -> Vec<Value> {
     let task = tokio::spawn(async move {
         let _ = serve(engine_factory, serve_in, serve_out, factory, handle).await;
     });
+    // The frame requests of the surface, which `step` answers with a tick as the host does at a display frame.
+    let (wanted, mut wants) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let reader = tokio::spawn(async move {
+        let mut lines = BufReader::new(from_serve).lines();
+        while let Some(line) = lines.next_line().await.unwrap() {
+            let value: Value = serde_json::from_str(&line).unwrap();
+            if value["body"]["image"].get("want").is_some() {
+                let _ = wanted.send(());
+            }
+        }
+    });
     let mut answered = 0u64;
-    // Sends `step`, then answers the frames until `done` holds for the events and a frame includes the last input.
+    // Sends `step`, then answers the frames and the frame requests until `done` holds for the events and a frame includes the
+    // last input.
     async fn step(
         log: &EventLog,
         to_serve: &mut tokio::io::DuplexStream,
+        wants: &mut tokio::sync::mpsc::UnboundedReceiver<()>,
         answered: &mut u64,
         send: &str,
         done: impl Fn(&[Value]) -> bool,
     ) {
         to_serve.write_all(send.as_bytes()).await.unwrap();
         tokio::time::timeout(Duration::from_secs(30), async {
+            let mut ticks = 0u64;
             loop {
+                while wants.try_recv().is_ok() {
+                    ticks += 1;
+                    let tick = format!(
+                        "{{\"surface\":\"s1\",\"body\":{{\"image\":{{\"tick\":{{\"name\":\"view\",\"generation\":1,\"sequence\":{ticks},\"refreshRate\":120}}}}}}}}\n"
+                    );
+                    to_serve.write_all(tick.as_bytes()).await.unwrap();
+                }
                 log.flush(Duration::from_secs(10))
                     .expect("flush the writer");
                 let lines = read_run_lines(log.path()).expect("read the events");
@@ -300,53 +321,85 @@ async fn viewed_session() -> Vec<Value> {
     let opening = r#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/cat","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 "#;
-    step(&log, &mut to_serve, &mut answered, opening, |lines| {
-        lines.iter().any(|line| line["event"] == "sidecar.vt.frame")
-    })
+    step(
+        &log,
+        &mut to_serve,
+        &mut wants,
+        &mut answered,
+        opening,
+        |lines| lines.iter().any(|line| line["event"] == "sidecar.vt.frame"),
+    )
     .await;
     let output = format!("{WRITE_LINE}\n").repeat(40);
-    step(&log, &mut to_serve, &mut answered, &output, |lines| {
-        lines
-            .iter()
-            .filter(|line| line["event"] == "sidecar.vt.pty_write")
-            .count()
-            == 40
-            && lines.iter().any(|line| {
-                line["event"] == "sidecar.vt.pty_read"
-                    && line["fields"]["hex"].as_str().unwrap().ends_with("0d0a")
-            })
-    })
+    step(
+        &log,
+        &mut to_serve,
+        &mut wants,
+        &mut answered,
+        &output,
+        |lines| {
+            lines
+                .iter()
+                .filter(|line| line["event"] == "sidecar.vt.pty_write")
+                .count()
+                == 40
+                && lines.iter().any(|line| {
+                    line["event"] == "sidecar.vt.pty_read"
+                        && line["fields"]["hex"].as_str().unwrap().ends_with("0d0a")
+                })
+        },
+    )
     .await;
     let scroll = "{\"surface\":\"s1\",\"body\":{\"operation\":\"scroll\",\"lines\":5,\"col\":0,\"row\":0}}\n";
-    step(&log, &mut to_serve, &mut answered, scroll, |lines| {
-        lines
-            .iter()
-            .any(|line| line["event"] == "sidecar.vt.viewport")
-    })
+    step(
+        &log,
+        &mut to_serve,
+        &mut wants,
+        &mut answered,
+        scroll,
+        |lines| {
+            lines
+                .iter()
+                .any(|line| line["event"] == "sidecar.vt.viewport")
+        },
+    )
     .await;
     let select = r#"{"surface":"s1","body":{"operation":"selection.start","x":10.0,"y":20.0}}
 {"surface":"s1","body":{"operation":"selection.update","x":90.0,"y":40.0}}
 {"surface":"s1","body":{"operation":"selection.end"}}
 "#;
-    step(&log, &mut to_serve, &mut answered, select, |lines| {
-        lines.iter().any(|line| {
-            line["event"] == "sidecar.vt.selection" && line["fields"]["action"] == "end"
-        })
-    })
+    step(
+        &log,
+        &mut to_serve,
+        &mut wants,
+        &mut answered,
+        select,
+        |lines| {
+            lines.iter().any(|line| {
+                line["event"] == "sidecar.vt.selection" && line["fields"]["action"] == "end"
+            })
+        },
+    )
     .await;
     let theme = r##"{"surface":"s1","body":{"operation":"theme","mode":"light","background":"#f7f7f5","foreground":"#242424","cursor":"#242424","selection":"#c8ccd8"}}
 "##;
-    step(&log, &mut to_serve, &mut answered, theme, |lines| {
-        lines
-            .iter()
-            .filter(|line| line["event"] == "sidecar.vt.theme")
-            .count()
-            == 2
-    })
+    step(
+        &log,
+        &mut to_serve,
+        &mut wants,
+        &mut answered,
+        theme,
+        |lines| {
+            lines
+                .iter()
+                .filter(|line| line["event"] == "sidecar.vt.theme")
+                .count()
+                == 2
+        },
+    )
     .await;
     drop(to_serve);
-    let mut lines = BufReader::new(from_serve).lines();
-    while lines.next_line().await.unwrap().is_some() {}
+    reader.await.unwrap();
     task.await.unwrap();
     log.flush(Duration::from_secs(10))
         .expect("flush the writer");

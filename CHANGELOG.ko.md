@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S226: viewport 경로의 `scroll` 과 `viewport` 요청은 즉시 그리지 않고 frame 요청의 tick 에 그리므로, 두 display frame 사이의 wheel event 는 frame 하나를 그리고 한 줄도 옮기지 않는 요청은 아무것도 그리지 않는다(`docs/spec/vt-core.md#frame-requests`).
 - S221: engine 은 tag `alacritty_terminal_v0.26.0-soksak.2` 의 `alacritty_terminal` fork 가 부르는 listener 호출(`alt_screen_line_leaving`, `alt_screen_entering`, `alt_screen_leaving`, `docs/spec/vt-core.md#kept-rows-of-the-alternate-screen`)에서 alternate screen 의 위를 떠나는 행을 보존한다. alternate grid 는 history 를 두지 않으며, alternate screen 에서 입력의 slice 마다 주던 history 한도, `keep_alternate_rows`, `CSI ? 1049 h/l` 과 full reset 에서 입력을 나누는 일을 지운다. Red: tag `alacritty_terminal_v0.26.0-soksak.1` 에서 listener 가 compile 되지 않았다. Green: package 의 test 217 개가 바뀌지 않고 통과한다.
 - S224: process list 가 `top` 같은 terminal 의 setuid program 을 member 로 이름한다. member 를 사용자를 검사하지 않는 `PROC_PIDT_SHORTBSDINFO` 로 읽고, 그 process 의 거절된 읽기는 실패한 list 대신 그 entry 의 `error` 다.
 - S222: sidecar 가 core `docs/spec/process-list.md` 의 terminal 의 process list 를 보낸다. 이벤트 `processes {foreground, background}` 가 foreground program 과 background job 을 이름하며, 각각 `{group, pid, command, arguments, cwd, started}` 이고 job 은 `state` 를 가진다. 각 출력 뒤와 job 의 각 끝, 실행, signal 에 보내고, 실패한 읽기에는 `processes {error}` 를 한 번 보낸다. `process.list` 는 같은 list 로 답한다. 이벤트 `foreground` 는 없어졌다.
