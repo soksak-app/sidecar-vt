@@ -7725,15 +7725,25 @@ impl SessionPort for LocalSessionPort {
         let service = Arc::clone(&self.service);
         let owner = self.owner.clone();
         let surface = request.surface.clone();
-        let launch = match &request.program {
-            Some(program) => Launch::Program(crate::pty::resolve_program(program)?, request.args.clone()),
-            None => Launch::Shell(crate::pty::resolve_shell(&request.shell)?),
-        };
         let directory = request
             .directory
             .as_deref()
             .map(crate::pty::resolve_directory)
             .transpose()?;
+        let launch = match &request.program {
+            Some(program) => {
+                // The session starts in its directory, or in the home directory when the open names none.
+                let working_directory = match &directory {
+                    Some(directory) => std::path::PathBuf::from(directory),
+                    None => std::path::PathBuf::from(crate::platform::darwin::account::home_directory()?),
+                };
+                Launch::Program(
+                    crate::pty::resolve_program(program, &working_directory)?,
+                    request.args.clone(),
+                )
+            }
+            None => Launch::Shell(crate::pty::resolve_shell(&request.shell)?),
+        };
         let events = self.events_tx.clone();
         tokio::task::spawn_blocking(move || {
             let owner = crate::pty::ShellOwner {
