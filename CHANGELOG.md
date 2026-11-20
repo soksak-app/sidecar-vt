@@ -1,5 +1,6 @@
 # Changelog
 
+- S237: The version is 0.0.30, and the kit pin is the kit release 0.0.16, so the release run publishes the commits after the tag v0.0.29 as v0.0.30.
 - S236: `make check-push`, which the pre-push hook runs, runs `cargo fmt --all --check`, so a push of an unformatted Rust source is refused before it reaches main. Verification: Red of the `make check-push` test of `tests/make-targets.test.mjs` and a passing `make check-push` on a commit with an unformatted line, then Green of the test, a failing `make check-push` on that commit and a passing one after its revert.
 - S235: The lib test target of `soksak-sidecar-vt-core` builds: the lifecycle test session names `surface_process: None`, because its child belongs to no surface.
 - S234: A persistent service with a live session exits after `shutdown` once its client has left: the connection no longer waits for the monitors of its sessions, and the sessions drop the sender of the connection that ended (core `docs/spec/persistent-services.md#service-transport`).

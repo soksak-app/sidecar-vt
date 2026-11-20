@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S237: version은 0.0.30이고 kit pin은 kit release 0.0.16이므로, tag v0.0.29 이후의 commit을 release run이 v0.0.30으로 게시한다.
 - S236: pre-push hook이 돌리는 `make check-push`가 `cargo fmt --all --check`를 돌리므로, format되지 않은 Rust source의 push는 main에 닿기 전에 거부된다. 검증: `tests/make-targets.test.mjs`의 `make check-push` test의 Red와 format되지 않은 줄을 둔 commit에서 통과한 `make check-push`, 그 뒤 test의 Green, 그 commit에서 실패한 `make check-push`, 되돌린 뒤 통과한 `make check-push`.
 - S235: `soksak-sidecar-vt-core`의 lib test target이 빌드된다. lifecycle test session이 `surface_process: None`을 명시한다. 이 child는 어떤 surface에도 속하지 않기 때문이다.
 - S234: live session이 있는 상주 service는 client가 떠난 뒤 `shutdown`으로 끝난다. 연결은 session의 monitor를 기다리지 않고, 끝난 연결의 sender는 session이 보관하지 않는다(core `docs/spec/persistent-services.md#service-transport`).
