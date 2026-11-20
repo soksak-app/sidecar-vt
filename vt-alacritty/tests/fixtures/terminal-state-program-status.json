@@ -556,7 +556,7 @@
           "to": "idle",
           "source": "osc133",
           "sequence": 3,
-          "exit": null
+          "exit": 0
         }
       ],
       "read": {
@@ -635,7 +635,7 @@
           "to": "idle",
           "source": "osc133",
           "sequence": 3,
-          "exit": null
+          "exit": 1
         },
         {
           "event": "shell.state",
@@ -1573,7 +1573,7 @@
           "to": "idle",
           "source": "osc133",
           "sequence": 3,
-          "exit": null
+          "exit": 0
         }
       ],
       "read": {
@@ -1701,7 +1701,7 @@
           "to": "idle",
           "source": "osc133",
           "sequence": 3,
-          "exit": null
+          "exit": 1
         }
       ],
       "read": {
@@ -1742,7 +1742,7 @@
           "to": "idle",
           "source": "osc133",
           "sequence": 3,
-          "exit": null
+          "exit": 1
         },
         {
           "event": "shell.state",

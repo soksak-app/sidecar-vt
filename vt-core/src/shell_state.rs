@@ -1,7 +1,8 @@
 //! The terminal state of a session, from the OSC 133 marks that the shell sends (core docs/spec/terminal-state.md).
 //!
 //! The marks map to three states: `idle` after the prompt start (`A`) or the prompt end (`B`), `running` after the command start
-//! (`C`), and `exited` after the command finished (`D`) with the exit code of its first parameter. [`ShellStateTracker::apply`]
+//! (`C`), and `exited` after the command finished (`D`) with the exit code of its first parameter, which the next `idle` keeps
+//! until the next `running`. [`ShellStateTracker::apply`]
 //! returns a [`Transition`] only when the state changes, so a repeated mark gives no change. The tracker depends on no engine:
 //! each engine gives the marks as [`ShellMarker`] with their parameters, and calls [`exit_code`] to reject a malformed `D`.
 
@@ -49,7 +50,8 @@ pub fn exit_code(params: &[String]) -> Result<Option<u8>, String> {
         .map_err(|_| format!("OSC 133 exit code is not a decimal integer from 0 to 255: {first}"))
 }
 
-/// A change of the state. `from` is None for the first change of the session; `exit` is the exit code of `exited`.
+/// A change of the state. `from` is None for the first change of the session; `exit` is the exit code of the last finished
+/// command, held by `exited` and by the `idle` that follows it until the next `running`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Transition {
     pub from: Option<ShellState>,
@@ -87,7 +89,9 @@ impl ShellStateTracker {
     ) -> Result<Option<Transition>, String> {
         self.follow(session);
         let (to, exit) = match marker {
-            ShellMarker::PromptStart | ShellMarker::PromptEnd => (ShellState::Idle, None),
+            // The idle state after a finished command keeps its exit code until the next command starts, so that a page
+            // that attaches later reads the failure of the last command (core docs/spec/terminal-state.md#change-event).
+            ShellMarker::PromptStart | ShellMarker::PromptEnd => (ShellState::Idle, self.exit),
             ShellMarker::CommandStart => (ShellState::Running, None),
             ShellMarker::CommandFinished => (ShellState::Exited, exit_code(params)?),
         };

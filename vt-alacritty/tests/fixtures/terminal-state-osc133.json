@@ -9,19 +9,20 @@
         {"from": null, "to": "idle", "source": "osc133", "sequence": 1, "exit": null},
         {"from": "idle", "to": "running", "source": "osc133", "sequence": 2, "exit": null},
         {"from": "running", "to": "exited", "source": "osc133", "sequence": 3, "exit": 0},
-        {"from": "exited", "to": "idle", "source": "osc133", "sequence": 4, "exit": null}
+        {"from": "exited", "to": "idle", "source": "osc133", "sequence": 4, "exit": 0}
       ],
-      "read": {"state": "idle", "source": "osc133", "sequence": 4, "exit": null}
+      "read": {"state": "idle", "source": "osc133", "sequence": 4, "exit": 0}
     },
     {
-      "name": "a failed command keeps its exit code until the next prompt",
-      "output": "\u001b]133;C\u001b\\\u001b]133;D;127\u001b\\",
+      "name": "a failed command keeps its exit code at the next prompt until the next command",
+      "output": "\u001b]133;C\u001b\\\u001b]133;D;127\u001b\\\u001b]133;A\u001b\\",
       "rejected": false,
       "events": [
         {"from": null, "to": "running", "source": "osc133", "sequence": 1, "exit": null},
-        {"from": "running", "to": "exited", "source": "osc133", "sequence": 2, "exit": 127}
+        {"from": "running", "to": "exited", "source": "osc133", "sequence": 2, "exit": 127},
+        {"from": "exited", "to": "idle", "source": "osc133", "sequence": 3, "exit": 127}
       ],
-      "read": {"state": "exited", "source": "osc133", "sequence": 2, "exit": 127}
+      "read": {"state": "idle", "source": "osc133", "sequence": 3, "exit": 127}
     },
     {
       "name": "a finished mark without an exit code",
@@ -59,9 +60,9 @@
       "events": [
         {"from": null, "to": "running", "source": "osc133", "sequence": 1, "exit": null},
         {"from": "running", "to": "exited", "source": "osc133", "sequence": 2, "exit": 0},
-        {"from": "exited", "to": "idle", "source": "osc133", "sequence": 3, "exit": null}
+        {"from": "exited", "to": "idle", "source": "osc133", "sequence": 3, "exit": 0}
       ],
-      "read": {"state": "idle", "source": "osc133", "sequence": 3, "exit": null}
+      "read": {"state": "idle", "source": "osc133", "sequence": 3, "exit": 0}
     },
     {
       "name": "a prompt kind that is not defined is a malformed mark",
