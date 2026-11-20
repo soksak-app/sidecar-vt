@@ -685,6 +685,15 @@ impl PersistentRegistry {
         close_surface_actor(&entry.tx, Some(entry.actor), "close").await
     }
 
+    /// Detaches the output of every session from the connection that ended. Each session keeps its own output, which holds the
+    /// sender of the connection that attached it, so the output of the connection does not close while a session lives.
+    async fn detach_connection(&self, previous: &Option<Connection>) {
+        let entries = self.entries.lock().await;
+        for entry in entries.values() {
+            entry.output.detach_connection(previous).await;
+        }
+    }
+
     async fn close_owner(&self, owner: &str) -> Result<(), String> {
         let entries = {
             let mut registry = self.entries.lock().await;
@@ -1384,10 +1393,7 @@ pub trait SessionPort: Send + Sync {
     fn processes(&self, session_id: &str) -> Result<Processes, String>;
     /// The surface and the start time of the process `pid` when a session started it for a surface and has not reaped it, or
     /// None (core docs/spec/sidecars.md#process-identity). A port that does not provide it fails explicitly.
-    fn process_surface(
-        &self,
-        _pid: u32,
-    ) -> Result<Option<crate::pty::SurfaceProcess>, String> {
+    fn process_surface(&self, _pid: u32) -> Result<Option<crate::pty::SurfaceProcess>, String> {
         Err("process queries are not supported".to_string())
     }
 }
@@ -6117,7 +6123,9 @@ fn process_query_answer(port: &dyn SessionPort, value: &Value, log: &Events) -> 
         return json!({"surface": "", "body": {"error": "invalidParams", "reason": reason}});
     };
     match port.process_surface(process) {
-        Ok(Some(found)) => json!({"process": process, "request": request, "surface": found.surface, "started": found.started}),
+        Ok(Some(found)) => {
+            json!({"process": process, "request": request, "surface": found.surface, "started": found.started})
+        }
         Ok(None) => json!({"process": process, "request": request, "surface": null}),
         Err(error) => {
             log.record_error("process query", &error);
@@ -6160,7 +6168,11 @@ fn open_launch(body: &Value) -> Result<(String, Option<String>, Vec<String>), St
             if body.get("args").is_some() {
                 return Err("open args require program".to_string());
             }
-            match body.get("shell").and_then(Value::as_str).filter(|shell| !shell.is_empty()) {
+            match body
+                .get("shell")
+                .and_then(Value::as_str)
+                .filter(|shell| !shell.is_empty())
+            {
                 Some(shell) => Ok((shell.to_string(), None, Vec::new())),
                 None => Err("open requires a shell".to_string()),
             }
@@ -6249,8 +6261,6 @@ where
                             ended_surfaces.push(key.clone());
                         }
                     }
-                } else {
-                    output_tx.detach_connection(&connection_output).await;
                 }
                 break;
             }
@@ -7427,8 +7437,21 @@ where
         }
     }
 
-    // Waits until every monitor task completes
-    while tasks.join_next().await.is_some() {}
+    // A persistent connection ends with its input, on every exit of the input loop. The sessions keep their outputs, which no
+    // longer carry the sender of this connection, so the output of the connection can end.
+    if let Some(registry) = registry.as_ref() {
+        output_tx.detach_connection(&connection_output).await;
+        registry.detach_connection(&connection_output).await;
+    }
+    if registry.is_some() {
+        // A persistent session outlives its connection and reports through the output of the registry, which routes to the
+        // connection that is current. The monitors of its surfaces are detached, so a live session does not hold the end of
+        // the connection (core docs/spec/persistent-services.md#service-transport).
+        tasks.detach_all();
+    } else {
+        // Waits until every monitor task completes
+        while tasks.join_next().await.is_some() {}
+    }
     if !ended_surfaces.is_empty() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::BrokenPipe,
@@ -7735,7 +7758,9 @@ impl SessionPort for LocalSessionPort {
                 // The session starts in its directory, or in the home directory when the open names none.
                 let working_directory = match &directory {
                     Some(directory) => std::path::PathBuf::from(directory),
-                    None => std::path::PathBuf::from(crate::platform::darwin::account::home_directory()?),
+                    None => {
+                        std::path::PathBuf::from(crate::platform::darwin::account::home_directory()?)
+                    }
                 };
                 Launch::Program(
                     crate::pty::resolve_program(program, &working_directory)?,
@@ -7751,14 +7776,9 @@ impl SessionPort for LocalSessionPort {
                 surface: &surface,
             };
             match launch {
-                Launch::Shell(shell) => service.open_shell(
-                    owner,
-                    &shell,
-                    directory.as_deref(),
-                    cols,
-                    rows,
-                    events,
-                ),
+                Launch::Shell(shell) => {
+                    service.open_shell(owner, &shell, directory.as_deref(), cols, rows, events)
+                }
                 Launch::Program(program, args) => service.open_program(
                     owner,
                     &program,
@@ -7806,10 +7826,7 @@ impl SessionPort for LocalSessionPort {
         self.service.processes(session_id)
     }
 
-    fn process_surface(
-        &self,
-        pid: u32,
-    ) -> Result<Option<crate::pty::SurfaceProcess>, String> {
+    fn process_surface(&self, pid: u32) -> Result<Option<crate::pty::SurfaceProcess>, String> {
         Ok(self.service.process_surface(pid))
     }
 

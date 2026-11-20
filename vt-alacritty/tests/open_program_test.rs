@@ -220,6 +220,20 @@ impl ChildService {
         );
     }
 
+    /// Drops the connection of the client without a close-owner, so the service sees no client, and returns the service process.
+    fn close_client(self) -> tokio::process::Child {
+        let ChildService {
+            child,
+            stdout,
+            lines,
+            writer,
+        } = self;
+        drop(writer);
+        drop(lines);
+        drop(stdout);
+        child
+    }
+
     /// Closes the owner and shuts the service down, as the host stops a persistent service, then waits for the service process to
     /// end with success (core docs/spec/host-contract.md, sidecars-transport.stop.close-owner-then-shutdown).
     async fn end(mut self) {
@@ -419,4 +433,33 @@ async fn a_relative_program_without_directory_resolves_from_home() {
         "the relative path names the program of HOME: {answer}"
     );
     service.end().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shutdown_with_a_live_session_ends_the_service_once_the_client_leaves() {
+    // The service stays running with the session of the client, and the shutdown request is sent without close-owner. The
+    // service exits once no client remains, so the disconnect of the client ends the service, and its live session does not
+    // hold the connection (core docs/spec/persistent-services.md#service-transport).
+    let root = tempfile::tempdir().expect("create the folder of the test");
+    let home = root.path().join("home");
+    std::fs::create_dir(&home).expect("create the home folder");
+    argument_program(&home);
+    let mut service = start_child_service(&home, root.path()).await;
+    service
+        .send(&open_lines(
+            json!({"program": "./argument-program", "args": ["one"]}),
+        ))
+        .await;
+    assert_eq!(
+        notice(&service.next_answer().await),
+        "argv-1-one",
+        "the session starts its program"
+    );
+    service.request_ok("shutdown", "shutdown").await;
+    let mut child = service.close_client();
+    let status = tokio::time::timeout(STEP_LIMIT, child.wait())
+        .await
+        .expect("the service exits within the time limit of a step once its client has left")
+        .expect("wait for the service process");
+    assert!(status.success(), "the service process ends with {status}");
 }
