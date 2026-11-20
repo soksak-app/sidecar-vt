@@ -1760,19 +1760,15 @@ impl AlacrittyEngine {
                 } else {
                     at
                 };
+                // The library receives the output up to the end of the OSC first, so its answers to the queries before
+                // the OSC and its events of that output come before the answer and the events of the engine for the OSC.
+                self.advance(&input[from..end]);
                 if body.starts_with(b"1337;") {
-                    self.advance(&input[from..end]);
                     self.inline_image(&body[b"1337;".len()..]);
-                    return end;
+                } else if let Some(mark) = self.handle_osc(&body, bell) {
+                    self.apply_shell_mark(mark);
                 }
-                match self.handle_osc(&body, bell) {
-                    Some(mark) => {
-                        self.advance(&input[from..end]);
-                        self.apply_shell_mark(mark);
-                        end
-                    }
-                    None => from,
-                }
+                end
             }
             Sequence::Dcs(selector) => {
                 self.events

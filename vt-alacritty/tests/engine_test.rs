@@ -2745,3 +2745,37 @@ fn decrqm_answers_the_state_of_the_color_scheme_mode() {
         ]
     );
 }
+
+// An OSC query that the engine answers (S209) is answered after the answers to the queries before it in the same output,
+// which the library answers when it receives that output, as docs/spec/terminal-protocols.md states.
+#[test]
+fn the_answer_of_an_osc_query_follows_the_answers_to_the_output_before_it() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b[c\x1b]17;?\x1b\\\x1b[6n\x1b]19;?\x07");
+    let answers = replies(&mut engine);
+    assert_eq!(answers.len(), 4, "{answers:?}");
+    assert_eq!(answers[0], "\x1b[?6c", "{answers:?}");
+    assert!(answers[1].starts_with("\x1b]17;rgb:"), "{answers:?}");
+    assert_eq!(answers[2], "\x1b[1;1R", "{answers:?}");
+    assert!(
+        answers[3].starts_with("\x1b]19;rgb:") && answers[3].ends_with('\x07'),
+        "{answers:?}"
+    );
+}
+
+// Another event of an OSC that the engine handles follows the events of the output before it (S209).
+#[test]
+fn an_osc_event_of_the_engine_follows_the_events_of_the_output_before_it() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b]0;first\x07\x1b]22;text\x07");
+    let events: Vec<String> = engine
+        .drain_events()
+        .into_iter()
+        .filter_map(|event| match event {
+            EngineEvent::Title(title) => Some(format!("title {title}")),
+            EngineEvent::PointerShape(shape) => Some(format!("pointer {shape}")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(events, ["title first", "pointer text"]);
+}
