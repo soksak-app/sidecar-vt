@@ -143,6 +143,23 @@ async fn a_program_named_by_its_name_resolves_through_path() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_relative_program_path_resolves_from_the_directory_of_the_session() {
+    let mut service = start_service();
+    // The program exists only in the directory of the session, which is not the working directory of the sidecar.
+    let directory = tempfile::tempdir().expect("create the directory of the session");
+    argument_program(directory.path());
+    let open = json!({
+        "program": "./argument-program",
+        "args": ["one"],
+        "directory": directory.path().to_string_lossy(),
+    });
+    service.send(&open_lines(open)).await;
+    let answer = service.next_answer().await;
+    assert_eq!(notice(&answer), "argv-1-one", "the relative path names the program of the directory: {answer}");
+    service.end().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_program_that_the_path_does_not_contain_fails_the_open_with_its_name() {
     let mut service = start_service();
     let open = json!({"program": "no-such-program-of-the-sidecar-test"});
