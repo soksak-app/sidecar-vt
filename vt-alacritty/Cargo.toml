@@ -21,8 +21,9 @@ diagnostics = ["soksak-sidecar-vt-core/diagnostics"]
 [dependencies]
 # The fork of alacritty_terminal 0.26.0 adds `Term::inactive_grid`: the crates.io release holds the grid of the screen
 # that is not shown in a private field without an accessor, so it cannot read the primary rows while the alternate
-# screen is active (core docs/spec/terminal-read.md#primary-rows).
-alacritty_terminal = { git = "https://github.com/min-0-max/alacritty", tag = "alacritty_terminal_v0.26.0-soksak.1" }
+# screen is active (core docs/spec/terminal-read.md#primary-rows). Its listener calls hand over the lines that leave
+# the top of the alternate screen, which keeps no history (docs/spec/vt-core.md#kept-rows-of-the-alternate-screen).
+alacritty_terminal = { git = "https://github.com/min-0-max/alacritty", tag = "alacritty_terminal_v0.26.0-soksak.2" }
 base64 = "0.22"
 serde_json = "1"
 soksak-sidecar-vt-core = { path = "../vt-core" }

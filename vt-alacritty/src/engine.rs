@@ -1,5 +1,5 @@
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
-use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::grid::{Dimensions, Grid, Row, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::{Cell as GridCell, Flags};
@@ -776,6 +776,19 @@ impl Dimensions for TermSize {
 /// as neutral events.
 struct EventQueue {
     events: Mutex<VecDeque<QueuedEvent>>,
+    /// The calls of the library about the alternate screen since the engine last applied them, in
+    /// the order of the input. The engine applies them after each call of the parser.
+    alternate: Mutex<Vec<AlternateCall>>,
+}
+
+/// A call of the library about the alternate screen, with copies of the rows that it lent.
+enum AlternateCall {
+    /// A line is about to scroll off the top of the alternate screen.
+    LineLeaving(Row<GridCell>),
+    /// The terminal is about to enter the alternate screen.
+    Entering,
+    /// The terminal is about to leave the alternate screen, which had these rows.
+    Leaving(Vec<Row<GridCell>>),
 }
 
 enum QueuedEvent {
@@ -787,7 +800,22 @@ impl EventQueue {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             events: Mutex::new(VecDeque::new()),
+            alternate: Mutex::new(Vec::new()),
         })
+    }
+
+    fn alternate_calls(&self) -> MutexGuard<'_, Vec<AlternateCall>> {
+        self.alternate
+            .lock()
+            // default: poison retains a valid Vec; report recovery before clearing the flag.
+            .unwrap_or_else(|error| {
+                let calls = error.into_inner();
+                self.push(QueuedEvent::Neutral(EngineEvent::RuntimeError(
+                    "engine alternate screen lock was poisoned; calls retained".to_string(),
+                )));
+                self.alternate.clear_poison();
+                calls
+            })
     }
 
     fn entries(&self) -> MutexGuard<'_, VecDeque<QueuedEvent>> {
@@ -819,6 +847,23 @@ struct EventSink(Arc<EventQueue>);
 impl EventListener for EventSink {
     fn send_event(&self, event: Event) {
         self.0.push(QueuedEvent::Alacritty(event));
+    }
+
+    fn alt_screen_line_leaving(&self, line: &Row<GridCell>) {
+        self.0
+            .alternate_calls()
+            .push(AlternateCall::LineLeaving(line.clone()));
+    }
+
+    fn alt_screen_entering(&self) {
+        self.0.alternate_calls().push(AlternateCall::Entering);
+    }
+
+    fn alt_screen_leaving(&self, screen: &Grid<GridCell>) {
+        let rows = (0..screen.screen_lines() as i32)
+            .map(|line| screen[Line(line)].clone())
+            .collect();
+        self.0.alternate_calls().push(AlternateCall::Leaving(rows));
     }
 }
 
@@ -877,13 +922,13 @@ pub struct AlacrittyEngine {
     releasing: bool,
     /// The rows that left the top of the alternate screen by a scroll since the alternate screen was
     /// entered, oldest first, at most `history_limit` of them (core docs/spec/terminal-read.md). The
-    /// library keeps no history for the alternate screen, so the engine lets the alternate grid keep
-    /// the rows that one slice of input pushes up and moves them here after the slice.
+    /// library keeps no history for the alternate screen and hands each such row to the listener
+    /// of the engine, which keeps it here (docs/spec/vt-core.md#kept-rows-of-the-alternate-screen).
     alternate_kept: VecDeque<Vec<Cell>>,
     /// The number of kept rows of the alternate screen that the bound dropped.
     alternate_dropped: u64,
     /// The rows of the alternate screen when the program left it; empty while the alternate screen is
-    /// active. The library keeps the grid of the screen that is not shown out of reach.
+    /// active. The library hands the screen to the listener before it leaves it.
     alternate_left: Vec<Vec<Cell>>,
 }
 
@@ -1453,68 +1498,60 @@ impl AlacrittyEngine {
     /// and counted. Without this, the library drops the rows at the limit silently, and the absolute
     /// numbers of the screen rows and the scroll generation of inline images stop moving. One byte
     /// cannot push up more rows than the screen has. Only the primary screen keeps history: the
-    /// library creates the alternate grid without history, and the engine reaches only the grid of
-    /// the active screen, so it changes the limit only while the primary screen is active. A slice
-    /// that leaves the primary screen leaves its limit raised until the next count on it.
-    /// On the alternate screen the grid keeps the rows that a slice pushes up, and the engine moves
-    /// them to its kept rows after the slice (core docs/spec/terminal-read.md). The alternate grid
-    /// has a history limit only during a slice, so a resize treats it as the library treats a grid
-    /// without history. A sequence that enters or leaves the alternate screen ends a slice, so each
-    /// slice runs on one screen.
+    /// library creates the alternate grid without history, so the engine changes the limit only
+    /// while the primary screen is active. A slice that leaves the primary screen leaves its limit
+    /// raised until the next count on it. After each slice the engine applies the calls of the
+    /// library about the alternate screen.
     fn advance(&mut self, bytes: &[u8]) {
         for slice in bytes.chunks(ADVANCE_SLICE_BYTES) {
             if self.primary_screen() {
                 self.term
                     .grid_mut()
                     .update_history(self.history_limit + COUNTED_ROWS);
-                self.processor.advance(&mut self.term, slice);
-                self.count_pushed_rows();
-            } else {
-                self.term.grid_mut().update_history(COUNTED_ROWS);
-                self.processor.advance(&mut self.term, slice);
-                self.keep_alternate_rows();
             }
+            self.processor.advance(&mut self.term, slice);
+            self.count_pushed_rows();
+            self.apply_alternate_calls();
         }
     }
 
-    /// Moves the rows that the last slice pushed above the alternate screen to the kept rows, drops
-    /// the oldest kept rows past the history limit and reports the drop, and leaves the alternate
-    /// grid without history, so that its viewport and its scrollbar stay as the library keeps them.
-    fn keep_alternate_rows(&mut self) {
-        if self.primary_screen() {
-            return;
+    /// Applies the calls of the library about the alternate screen in their order: a line that
+    /// leaves the top becomes a kept row, an entry removes the kept rows, and an exit keeps the rows
+    /// of the screen that the program left. The oldest kept rows past the history limit are dropped,
+    /// and one record reports the drops of the slice (docs/spec/vt-core.md#kept-rows-of-the-alternate-screen).
+    fn apply_alternate_calls(&mut self) {
+        let calls = std::mem::take(&mut *self.events.alternate_calls());
+        let (mut rows, mut bytes) = (0usize, 0usize);
+        for call in calls {
+            match call {
+                AlternateCall::LineLeaving(line) => {
+                    let row = self.row_cells(&line);
+                    self.alternate_kept.push_back(row);
+                    if self.alternate_kept.len() > self.history_limit
+                        && let Some(dropped) = self.alternate_kept.pop_front()
+                    {
+                        rows += 1;
+                        bytes += dropped
+                            .iter()
+                            .map(|cell| cell.ch.as_ref().map_or(0, |ch| ch.len()))
+                            .sum::<usize>();
+                        self.alternate_dropped += 1;
+                    }
+                }
+                AlternateCall::Entering => {
+                    self.alternate_kept.clear();
+                    self.alternate_dropped = 0;
+                    self.alternate_left.clear();
+                }
+                AlternateCall::Leaving(screen) => {
+                    self.alternate_left = screen.iter().map(|row| self.row_cells(row)).collect();
+                }
+            }
         }
-        let history = self.term.grid().history_size();
-        if history >= COUNTED_ROWS {
-            self.events.push(QueuedEvent::Neutral(EngineEvent::Error(format!(
-                "one input pushed {COUNTED_ROWS} or more rows above the alternate screen, so kept rows may be missing"
-            ))));
-        }
-        let rows: Vec<Vec<Cell>> = (1..=history as i32)
-            .rev()
-            .map(|above| self.grid_row(Line(-above)))
-            .collect();
-        // The limit returns to zero also after a slice that pushed no row: a resize of an alternate
-        // grid with a history limit moves the rows that a smaller height cuts off into its history
-        // and a larger height moves them back onto the screen, which a terminal without alternate
-        // history does not do (S215).
-        self.term.grid_mut().update_history(0);
-        if history == 0 {
-            return;
-        }
-        self.alternate_kept.extend(rows);
-        let excess = self.alternate_kept.len().saturating_sub(self.history_limit);
-        if excess > 0 {
-            let bytes = self
-                .alternate_kept
-                .drain(..excess)
-                .flatten()
-                .map(|cell| cell.ch.as_ref().map_or(0, |ch| ch.len()))
-                .sum();
-            self.alternate_dropped += excess as u64;
+        if rows > 0 {
             self.events
                 .push(QueuedEvent::Neutral(EngineEvent::AlternateRowsDropped {
-                    rows: excess,
+                    rows,
                     bytes,
                 }));
         }
@@ -1522,10 +1559,14 @@ impl AlacrittyEngine {
 
     /// The cells of one row of the grid of the active screen, without its trailing blank cells.
     fn grid_row(&self, line: Line) -> Vec<Cell> {
-        let grid = self.term.grid();
+        self.row_cells(&self.term.grid()[line])
+    }
+
+    /// The cells of a row of the library, without its trailing blank cells.
+    fn row_cells(&self, line: &Row<GridCell>) -> Vec<Cell> {
         let colors = self.term.colors();
-        let mut row: Vec<Cell> = (0..grid.columns())
-            .map(|col| self.cell(&grid[line][Column(col)], colors))
+        let mut row: Vec<Cell> = (0..line.len())
+            .map(|col| self.cell(&line[Column(col)], colors))
             .collect();
         self.trim_row(&mut row);
         row
@@ -1538,36 +1579,6 @@ impl AlacrittyEngine {
             history: self.alternate_kept.len(),
             dropped: self.alternate_dropped,
         }
-    }
-
-    /// Runs a sequence that enters or leaves the alternate screen after the output before it: the
-    /// rows of the alternate screen are taken when the program leaves it, and the kept rows are
-    /// removed when the program enters it again (core docs/spec/terminal-read.md).
-    fn switch_screen(&mut self, input: &[u8], from: usize, at: usize) -> usize {
-        let start = input[from..at]
-            .iter()
-            .rposition(|byte| *byte == 0x1b)
-            .expect("a sequence starts at an escape byte that the terminal has not received");
-        self.advance(&input[from..from + start]);
-        let primary = self.primary_screen();
-        if primary {
-            self.advance(&input[from + start..at]);
-        } else {
-            self.alternate_left = self.alternate_screen_rows();
-            // The sequence that leaves the alternate screen scrolls no row, so the alternate grid
-            // receives it without a history limit and keeps none while it is hidden: a resize of
-            // the hidden grid cuts its rows off as the library does without the limit (S215).
-            self.processor
-                .advance(&mut self.term, &input[from + start..at]);
-        }
-        if primary && !self.primary_screen() {
-            self.alternate_kept.clear();
-            self.alternate_dropped = 0;
-            self.alternate_left.clear();
-        } else if !self.primary_screen() {
-            self.alternate_left.clear();
-        }
-        at
     }
 
     /// The rows of the screen of the active grid, from the top.
@@ -1701,13 +1712,6 @@ impl AlacrittyEngine {
                     _ => None,
                 };
                 if !ignored
-                    && matches!(action, 'h' | 'l')
-                    && intermediates.as_slice() == b"?"
-                    && params.iter().any(|param| param.first() == Some(&1049))
-                {
-                    return self.switch_screen(input, from, at);
-                }
-                if !ignored
                     && action == 'h'
                     && intermediates.as_slice() == b"?"
                     && params.iter().any(|param| param.first() == Some(&2026))
@@ -1802,13 +1806,9 @@ impl AlacrittyEngine {
                 intermediates,
                 byte,
             } => {
-                // A full reset (RIS) resets mode 2031 and leaves the alternate screen; the library
-                // resets its own state.
+                // A full reset (RIS) resets mode 2031; the library resets its own state.
                 if byte == b'c' && intermediates.is_empty() {
                     self.color_scheme_reports = false;
-                    if !self.primary_screen() {
-                        return self.switch_screen(input, from, at);
-                    }
                 }
                 if !esc_executed(&intermediates, byte) {
                     let intermediates = String::from_utf8_lossy(&intermediates);
