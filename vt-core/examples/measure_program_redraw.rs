@@ -4,7 +4,7 @@
 //! 2000 lines (`less` and `vim`), and then `--repeats` times sends `--by` cursor keys at once, as the program scroll sends them, upward
 //! and downward in turn (`htop` starts at its first process, so its first scroll goes downward). The cursor keys follow the cursor key mode that the program set (`CSI ? 1 h` gives `ESC O A`). Each read of
 //! the PTY is one output; after each scroll it records the time from the keys to the first output and the gaps between the outputs,
-//! until no output came for `--observe-ms`, which bounds the observation and is no judgment. With `--load` it runs one `yes` process
+//! until `poll` reported no output for `--observe-ms`, which bounds the observation and is no judgment. With `--load` it runs one `yes` process
 //! for each processor of the system during the repeats and ends them before it reports.
 //!
 //! It prints, per program and load, the largest time to the first output, the largest gap between two outputs of one redraw and the
@@ -19,7 +19,6 @@
 
 use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
@@ -174,7 +173,7 @@ fn measure(program: &str, options: &Options) -> Result<Vec<Redraw>, String> {
         .spawn_command(command)
         .map_err(|error| format!("spawn: {error}"))?;
     drop(pair.slave);
-    let mut reader = pair
+    let reader = pair
         .master
         .try_clone_reader()
         .map_err(|error| format!("reader: {error}"))?;
@@ -182,33 +181,21 @@ fn measure(program: &str, options: &Options) -> Result<Vec<Redraw>, String> {
         .master
         .take_writer()
         .map_err(|error| format!("writer: {error}"))?;
-    let (sender, outputs) = channel::<(Instant, Vec<u8>)>();
-    let reading = std::thread::spawn(move || {
-        let mut buffer = [0u8; 65536];
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(0) | Err(_) => return,
-                Ok(count) => {
-                    if sender
-                        .send((Instant::now(), buffer[..count].to_vec()))
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-            }
-        }
-    });
+    let fd = pair
+        .master
+        .as_raw_fd()
+        .ok_or("the PTY has no file descriptor")?;
+    let mut outputs = Outputs { reader, fd };
 
     let mut cursor_keys = CursorKeys::default();
     let result = (|| {
-        let start = settle(&outputs, options.observe, &mut cursor_keys)?;
+        let start = settle(&mut outputs, options.observe, &mut cursor_keys)?;
         if start.outputs == 0 {
             return Err("the program wrote no screen".to_string());
         }
         if program != "htop" {
             send(&mut writer, b"G")?;
-            settle(&outputs, options.observe, &mut cursor_keys)?;
+            settle(&mut outputs, options.observe, &mut cursor_keys)?;
         }
         let load = if options.load {
             Load::start()?
@@ -228,7 +215,7 @@ fn measure(program: &str, options: &Options) -> Result<Vec<Redraw>, String> {
             let keys = key.repeat(options.by);
             send(&mut writer, &keys)?;
             let sent = Instant::now();
-            let redraw = settle_after(&outputs, sent, options.observe, &mut cursor_keys)?;
+            let redraw = settle_after(&mut outputs, sent, options.observe, &mut cursor_keys)?;
             if redraw.outputs == 0 {
                 return Err(format!(
                     "scroll {} of {} gave no output within {:?}",
@@ -248,11 +235,12 @@ fn measure(program: &str, options: &Options) -> Result<Vec<Redraw>, String> {
     };
     let quit_sent = send(&mut writer, quit);
     drop(writer);
+    // The program writes its last screen when it quits and blocks while the PTY is full, so the output is read until the PTY
+    // closes, which ends the read with zero bytes or with the error of a closed terminal.
+    let mut buffer = [0u8; 65536];
+    while matches!(outputs.reader.read(&mut buffer), Ok(count) if count > 0) {}
     let ended = child.wait().map_err(|error| format!("wait: {error}"));
     drop(pair.master);
-    reading
-        .join()
-        .map_err(|_| "the reading thread panicked".to_string())?;
     let redraws = result?;
     quit_sent?;
     let status = ended?;
@@ -271,7 +259,7 @@ fn send(writer: &mut Box<dyn Write + Send>, bytes: &[u8]) -> Result<(), String> 
 
 /// Reads outputs until none came for `observe`, and returns them as one redraw from the first output.
 fn settle(
-    outputs: &Receiver<(Instant, Vec<u8>)>,
+    outputs: &mut Outputs,
     observe: Duration,
     keys: &mut CursorKeys,
 ) -> Result<Redraw, String> {
@@ -280,21 +268,24 @@ fn settle(
 
 /// Reads outputs after `sent` until none came for `observe`, and returns the time to the first output and the gaps between them.
 fn settle_after(
-    outputs: &Receiver<(Instant, Vec<u8>)>,
+    outputs: &mut Outputs,
     sent: Instant,
     observe: Duration,
     keys: &mut CursorKeys,
 ) -> Result<Redraw, String> {
     let mut times = Vec::new();
-    loop {
-        match outputs.recv_timeout(observe) {
-            Ok((at, bytes)) => {
-                keys.scan(&bytes);
-                times.push(at);
-            }
-            Err(RecvTimeoutError::Timeout) => break,
-            Err(RecvTimeoutError::Disconnected) => return Err("the PTY closed".into()),
+    let mut buffer = [0u8; 65536];
+    while outputs.readable(observe)? {
+        let at = Instant::now();
+        let count = outputs
+            .reader
+            .read(&mut buffer)
+            .map_err(|error| format!("read the PTY: {error}"))?;
+        if count == 0 {
+            return Err("the PTY closed".into());
         }
+        keys.scan(&buffer[..count]);
+        times.push(at);
     }
     let first = times
         .first()
@@ -305,6 +296,32 @@ fn settle_after(
         gaps,
         outputs: times.len(),
     })
+}
+
+/// The output side of the PTY: each read is one output, and the time of an output is the time at which `poll` reported it.
+struct Outputs {
+    reader: Box<dyn Read + Send>,
+    fd: std::os::fd::RawFd,
+}
+
+impl Outputs {
+    /// Whether output is ready within `observe`.
+    fn readable(&self, observe: Duration) -> Result<bool, String> {
+        let mut descriptors = [libc::pollfd {
+            fd: self.fd,
+            events: libc::POLLIN,
+            revents: 0,
+        }];
+        let limit = i32::try_from(observe.as_millis())
+            .map_err(|_| format!("the observation bound {observe:?} is too long"))?;
+        // SAFETY: the descriptor array is valid for one element during the call, and the PTY descriptor stays open while the
+        // master is alive.
+        let ready = unsafe { libc::poll(descriptors.as_mut_ptr(), 1, limit) };
+        if ready < 0 {
+            return Err(format!("poll the PTY: {}", std::io::Error::last_os_error()));
+        }
+        Ok(ready > 0)
+    }
 }
 
 /// The cursor key mode (DECCKM) that the output of the program set.
@@ -400,11 +417,13 @@ fn report(program: &str, options: &Options, redraws: &[Redraw]) {
         .iter()
         .map(|redraw| redraw.first)
         .max()
+        // default: a run has at least one scroll, whose time to its first output is the largest when it is the only one.
         .unwrap_or_default();
     let gap = redraws
         .iter()
         .flat_map(|redraw| redraw.gaps.iter().copied())
         .max()
+        // default: a redraw of one output has no gap, so the largest gap of the run is zero.
         .unwrap_or_default();
     let outputs: Vec<usize> = redraws.iter().map(|redraw| redraw.outputs).collect();
     let largest = first.max(gap);
