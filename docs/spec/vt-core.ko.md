@@ -190,6 +190,18 @@ surface는 core의 [copy path frames](https://github.com/soksak-app/core/blob/ma
 
 cursor의 깜빡임은 어떤 event도 알리지 않는 변경이므로, surface는 그것을 깜빡임 보임이 다음에 바뀌는 때의 timer로 예약한다. 그때는 cursor의 마지막 활동 뒤 cursor 설정의 깜빡임 간격의 다음 배수이고, 그때 cursor가 숨어 있으면 idle timeout이다. 간격은 설정의 시간 길이이며 frame 시간이 아니다. 그때 깜빡임은 위와 같은 변경이다. focus가 없거나 숨은 cursor, policy가 `Never`인 cursor, 깜빡이는 program 없이 policy가 `Off`인 cursor, idle timeout이 지난 cursor는 깜빡이지 않으므로 timer가 없다.
 
+### Alternate screen 의 보존된 행
+
+engine 은 core [terminal read](https://github.com/soksak-app/core/blob/main/docs/spec/terminal-read.ko.md#alternate-rows) 가 정하는 대로 alternate screen 의 위를 떠나는 행을 보존한다. `alacritty_terminal` fork 가 tag `alacritty_terminal_v0.26.0-soksak.2` 부터 engine 의 listener 에 하는 세 호출을 쓴다. `alt_screen_line_leaving` 은 scroll region 이 맨 위에서 시작하는 동안 bottom margin 의 line feed, `IND`, `NEL` 또는 자동 줄바꿈, 또는 `CSI S` 가 alternate screen 의 위로 밀어낼 각 줄을 받는다. `alt_screen_entering` 은 terminal 이 alternate screen 에 들어가기 전에, `alt_screen_leaving` 은 terminal 이 `CSI ? 1049 l` 이나 full reset 으로 그것을 떠나기 전에 alternate screen 을 받는다. 호출은 입력의 순서로 온다. alternate grid 는 history 를 가지지 않으므로 resize 는 그것을 history 없는 grid 로 바꾼다. 작은 높이는 행을 지우고 큰 높이는 빈 행을 더한다. engine 은 보존된 행을 history 한도로 묶고 버림 기록을 쓴다.
+
+결정과 이유. library 는 행을 listener 에 넘기고 상태를 가지지 않는다. 네 차례의 adversarial review 가 이것을 다른 두 설계와 비교했고 각 반론에 답했다.
+
+- engine 이 처음 쓴, 입력의 slice 마다 alternate grid 에 주는 history 한도는 library 가 grid 를 resize 하는 방식을 바꾼다. grid 에 남은 한도가 resize 때 이전 render 의 행을 화면으로 되돌렸다(S215). engine 은 각 slice 가 한 screen 에서 실행되도록 screen 전환마다 입력을 나누어야 했다.
+- library 안의 행의 유한 ring 과 그 한도의 설정, 버려진 행마다의 `Event` 는 받아들이지 않았다. `Event` 는 user interface 에 대한 알림으로 문서화되어 있고 grid data 가 아니다. 그 설계는 client 에게 행을 읽는 경로와 버림의 경로를 따로 주고, 한도가 지우기 전에 행을 복제하고, 버려진 행마다 event 를 보내고, 버림을 두 번 세었다. library 의 terminal application 이 쓰지 않는 match arm 도 더했다.
+- 진입 호출 없이 event 로 보내는 행은 받아들이지 않았다. client 가 행과 alternate screen 진입의 순서를 정할 수 없기 때문이다.
+
+review 는 다음도 정했다. Delete Lines 가 지우는 줄은 scroll 이 아니므로 아무것도 호출하지 않는다. resize 는 아무것도 호출하지 않는다. library 의 parser 가 1049 만 전환에 연결하므로 mode 1049 만 screen 을 바꾼다. hook 은 입력을 처리하는 동안 동기적으로 실행되고 막혀서는 안 된다. 줄은 호출 동안만 빌려지므로 engine 은 보존할 것을 복사한다. 색은 engine 이 parser 의 각 호출 뒤에 복사한 행을 변환할 때 정해지며, engine 이 각 slice 뒤에 history 를 읽던 때와 같다. library 가 한도를 위해 아무것도 보존하지 않으므로 engine 은 전처럼 각 slice 뒤에 버림을 세고 기록한다. fork 의 test 는 각 경로, 화면을 넘는 scroll 의 clamp, region 의 끝을 넘는 scroll 의 clamp, 각 screen 의 full reset 과 반복된 진입을 다룬다.
+
 ### Program scroll read
 
 `screen.scroll.read {by, quiet}` 는 core [terminal read](https://github.com/soksak-app/core/blob/main/docs/spec/terminal-read.ko.md#program-scroll) 의 program scroll 의 sidecar 부분이다. surface 는 자기 screen 의 글을 읽고, Shift 없는 wheel 경로(screen 의 가운데 cell 에서 program 의 mouse report, alternate scroll 의 cursor key, 또는 viewport)로 scroll 을 보내고, 기다리고, 읽고, 같은 경로로 `-by` 의 scroll 을 보내고, 기다리고, 읽어 이벤트 `screen.scroll` 로 답한다. 각 기다림은 단계가 기다리는 동안 한 번에 하나씩 보내는 읽기 frame 요청 `{"image":{"want":{"name","generation","purpose":"read"}}}` 의 tick 을 세고, core [program scroll 의 그리기](https://github.com/soksak-app/core/blob/main/docs/spec/terminal-read.ko.md#program-scroll-의-그리기) 의 규칙으로 끝난다. 마지막 출력이 그 단계의 입력 뒤에 열린 동기 update 의 reset 으로 끝났으면 첫 tick 에서 `sync` 로(engine 은 출력이 연 update 와 마지막 출력을 끝낸 reset 의 update 를 알린다), 그 밖에는 마지막 출력이나 입력 뒤에 `quiet` 개의 tick 이 오면 `quiet` 로 끝난다. viewport 경로는 곧바로 답한다. 읽기 동안의 surface 의 `input`, `paste`, mouse 누름, `scroll`, `viewport` 요청은 읽기를 `scrollReadInterrupted` 로 끝내고 실행된다. 읽기 frame 요청의 거절, image region 의 떨어짐, session 의 끝은 읽기를 `scrollReadFailed` 로 끝낸다. 읽기의 모든 답은 그 요청에 답하고 요청의 `cids` 를 담는다. `vt-alacritty` 의 `tests/scroll_read_test.rs` 가 실제 engine, 실제 PTY, `less`, mouse tracking 을 켠 program, 동기 출력을 쓰는 program, 간격 뒤에 쓰는 program 으로 그것을 확인한다.
