@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S239: 버전이 0.0.31이므로 release run이 tag v0.0.30 뒤의 커밋을 v0.0.31로 낸다. S238(`messages.notice`)과 S223의 process list 행을 담는다.
 - S223: release 행이 완료되었다. release v0.0.30 이 S222 와 S224 의 process list 를 담는다.
 - S238: `messages.notice`가 받는 surface의 완료 notice를 보낸 쪽 folder에 `<surface>.notice-<answers>.txt`로 쓴다. Text는 core docs/spec/messaging.md#completion-notice의 것이며, message의 쓰기 규칙을 따른다. 잘못된 parameter, 보낸 쪽 folder가 없는 경우, 등록되지 않은 surface는 파일 없이 거부한다. 영수증 file은 받는 folder의 일반 message로 읽히므로 sidecar 변경이 필요 없다. 검증: `vt-core/tests/serve_contract.rs`의 `messages_notice_*` 계약 test에서 Red 뒤 Green.
 - S237: version은 0.0.30이고 kit pin은 kit release 0.0.16이므로, tag v0.0.29 이후의 commit을 release run이 v0.0.30으로 게시한다.

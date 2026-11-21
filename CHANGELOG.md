@@ -147,6 +147,7 @@
 
 ## Unreleased
 
+- S239: The version is 0.0.31, so the release run publishes the commits after the tag v0.0.30 as v0.0.31, which hold S238 (`messages.notice`) and the process list rows of S223.
 - S178: The `screen.read` request takes `from` and `count` and returns retained rows above the viewport, numbered by the absolute line numbers; the reply is the event `screen.rows`.
 - S175: A dim cell draws its foreground blended toward its background, and the screen hash covers the dim attribute.
 - F460-vt: `.gitignore` names the local output folder `/build/`.
