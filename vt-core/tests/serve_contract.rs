@@ -155,6 +155,11 @@ impl Engine for MockEngine {
         Err("screen.read rows are not served by this test engine".to_string())
     }
 
+    fn primary_retained(&self) -> std::ops::Range<u64> {
+        // The test engine serves no rows.
+        0..0
+    }
+
     fn set_theme(&mut self, theme: TerminalTheme) {
         if self.follows_default_background {
             let [r, g, b] = theme.background;
@@ -5413,6 +5418,11 @@ async fn test_panicking_surface_reports_error() {
             _count: u32,
         ) -> Result<Vec<Vec<Cell>>, String> {
             Err("screen.read rows are not served by this test engine".to_string())
+        }
+
+        fn primary_retained(&self) -> std::ops::Range<u64> {
+            // The test engine serves no rows.
+            0..0
         }
 
         fn set_theme(&mut self, _theme: soksak_sidecar_vt_core::TerminalTheme) {}

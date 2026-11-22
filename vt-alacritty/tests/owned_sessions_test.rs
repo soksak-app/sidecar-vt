@@ -1143,3 +1143,35 @@ async fn a_session_resized_through_a_surface_of_another_font_reads_the_rows_that
         "the session wrapped the row of {cols} columns: {body}"
     );
 }
+
+/// A surface that attaches to a session shows the screen that the engine of the session holds before the program writes
+/// again, also when the session wrote more output than the session keeps as bytes since the screen was drawn: the program
+/// draws a prompt on the alternate screen, writes more than 1 MiB of window titles, which change no cell, and draws END.
+#[tokio::test]
+async fn an_attached_surface_shows_the_screen_of_the_session_before_new_output() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service
+        .open_session(
+            "o1",
+            "c1",
+            shell_params("printf '\\033[?1049h\\033[2J\\033[5;3HPROMPT READY'; i=0; while [ $i -lt 40000 ]; do printf '\\033]0;title of the conversation %s\\007' $i; i=$((i+1)); done; printf '\\033[6;3HEND'; exec sleep 600"),
+        )
+        .await;
+    let body = service.read_until("o1", &session, "PROMPT READY").await;
+    assert!(
+        body.to_string().contains("PROMPT READY"),
+        "the session drew no prompt: {body}"
+    );
+    // The program draws END after the titles, so the session holds every title once its screen shows END.
+    let body = service.read_until("o1", &session, "END").await;
+    assert!(
+        body.to_string().contains("END"),
+        "the program did not finish its titles: {body}"
+    );
+    assert_eq!(service.attach("t1", "a1", &session).await["attached"], true);
+    let screen = service.screen_text("t1").await;
+    assert!(
+        screen.contains("PROMPT READY"),
+        "the attached surface shows no rows of the session: {screen:?}"
+    );
+}

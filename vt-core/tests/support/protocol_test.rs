@@ -54,6 +54,11 @@ impl Engine for FakeEngine {
         Err("screen.read rows are not served by this test engine".to_string())
     }
 
+    fn primary_retained(&self) -> std::ops::Range<u64> {
+        // The test engine serves no rows.
+        0..0
+    }
+
     fn set_theme(&mut self, _theme: crate::palette::TerminalTheme) {}
 
     fn drain_events(&mut self) -> Vec<EngineEvent> {

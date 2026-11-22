@@ -2267,14 +2267,25 @@ impl AlacrittyEngine {
 
     /// The rows of the primary screen and its history; while the alternate screen is active, the
     /// primary grid is the inactive grid of the terminal, read by a borrow.
-    fn primary_rows(&self, from: u64, count: u32) -> Result<Vec<Vec<Cell>>, String> {
+    /// The absolute numbers of the retained rows of the primary screen, from the oldest kept history row to the last row of
+    /// its screen.
+    pub fn primary_retained(&self) -> std::ops::Range<u64> {
         let grid = if self.primary_screen() {
             self.term.grid()
         } else {
             self.term.inactive_grid()
         };
         let first = self.dropped as u64;
-        let end = first + (grid.history_size() + grid.screen_lines()) as u64;
+        first..first + (grid.history_size() + grid.screen_lines()) as u64
+    }
+
+    fn primary_rows(&self, from: u64, count: u32) -> Result<Vec<Vec<Cell>>, String> {
+        let grid = if self.primary_screen() {
+            self.term.grid()
+        } else {
+            self.term.inactive_grid()
+        };
+        let std::ops::Range { start: first, end } = self.primary_retained();
         let stop = from.checked_add(u64::from(count));
         if from < first || stop.is_none_or(|stop| stop > end) {
             return Err(format!(
@@ -2643,6 +2654,10 @@ impl Engine for AlacrittyEngine {
         count: u32,
     ) -> Result<Vec<Vec<Cell>>, String> {
         AlacrittyEngine::screen_rows(self, screen, from, count)
+    }
+
+    fn primary_retained(&self) -> std::ops::Range<u64> {
+        AlacrittyEngine::primary_retained(self)
     }
 
     fn alternate_rows(&self) -> AlternateRows {

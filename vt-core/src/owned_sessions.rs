@@ -1,20 +1,20 @@
 // The owned sessions of the persistent service (core docs/spec/persistent-services.md#owned-sessions, sidecar
 // docs/spec/vt-core.md#owned-session-operations). An owned session is a PTY session of its owner surface. Its output feeds an
-// engine of its own and a buffer of the latest output, so a tab that attaches replays the screen the session held. While a
-// tab shows the session, the surface of the tab draws it and its configure sets the grid.
+// engine of its own, so a tab that attaches receives the bytes that draw the screen of that engine. While a tab shows the
+// session, the surface of the tab draws it and its configure sets the grid.
 use crate::encoding;
 use crate::events::{Events, Level, Subject};
 use crate::guard::{self, LineInput};
 use crate::platform::{Metrics, default_font, metrics_for};
 use crate::program_status::{MAX_RECORDS, ProgramStatusTracker, program_state};
 use crate::protocol::{
-    DEFAULT_FONT_SIZE, DaemonEvent, Dispatch, Engine, EngineEvent, OutputSink, Processes,
-    RowScreen, SCREEN_ROWS_COUNT_MAX, SessionPort, ShellRequest, open_launch, screen_text,
-    session_resize,
+    CursorShape, DEFAULT_FONT_SIZE, DaemonEvent, Dispatch, Engine, EngineEvent, OutputSink,
+    Processes, RowScreen, SCREEN_ROWS_COUNT_MAX, SessionPort, ShellRequest, open_launch,
+    screen_text, session_resize,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{mpsc, oneshot};
@@ -23,10 +23,6 @@ use tokio::sync::{mpsc, oneshot};
 pub type EngineFactory = Arc<dyn Fn() -> Box<dyn Engine> + Send + Sync>;
 /// The factory of the session port of an owned session.
 pub type SessionPortFactory = Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync>;
-
-/// The bytes of the latest output that an owned session keeps for a replay at an attach. When the buffer is full, the oldest
-/// bytes are dropped and the drop is written to the service log.
-pub const REPLAY_LIMIT: usize = 1024 * 1024;
 
 /// The size of the card of an owned session: its width and height in points and the backing scale of the window.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -95,8 +91,8 @@ enum Control {
         range: Option<(u64, u32)>,
         reply: oneshot::Sender<Result<Value, String>>,
     },
-    /// The attachment of a surface: the engine takes the grid, the buffer replays into `forward`, and later output goes to
-    /// `forward` until the surface ends.
+    /// The attachment of a surface: the engine takes the grid, the bytes that draw the screen of the engine go to `forward`,
+    /// and later output goes to `forward` until the surface ends.
     Attach {
         columns: u16,
         rows: u16,
@@ -736,10 +732,129 @@ fn row_text(row: &[crate::protocol::Cell]) -> String {
     text.trim_end().to_string()
 }
 
-/// Feeds the output of one PTY session to its engine and to the replay buffer until the session ends, and forwards it to
-/// the attached surface while one is attached. The engine of the session answers the queries of its program while no
-/// surface is attached, and its events give the program status of the session; the buffer is replayed to a surface that
-/// attaches as `DaemonEvent::Replay`, which that surface shows without answering.
+/// The bytes that draw the screen of `engine` in an engine of the same grid that has received no output: the retained rows
+/// of the primary screen, the kept rows and the screen of the alternate screen while it is active, the cursor and the modes
+/// of the engine (docs/spec/vt-core.md#owned-session-operations). A row is written as its cells with their colors,
+/// attributes and links, so the receiving engine holds the cells of the session; the wrap of a row into the next row, the
+/// scroll region, the character sets, the tab stops and the attributes of the next output of the program are not part of
+/// the cells and are not written.
+pub fn screen_bytes(engine: &mut dyn Engine) -> Result<Vec<u8>, String> {
+    let screen = engine.screen();
+    let modes = engine.modes();
+    let mut out = Vec::new();
+    let primary = engine.primary_retained();
+    let count = u32::try_from(primary.end - primary.start).map_err(|_| {
+        format!(
+            "the primary screen retains {} rows",
+            primary.end - primary.start
+        )
+    })?;
+    let rows = if count == 0 {
+        Vec::new()
+    } else {
+        engine.screen_rows(RowScreen::Primary, primary.start, count)?
+    };
+    write_rows(&mut out, &rows);
+    if screen.alternate.active {
+        out.extend_from_slice(b"\x1b[?1049h");
+        let kept = screen.alternate.history as u64;
+        let count = u32::try_from(kept + u64::from(screen.rows))
+            .map_err(|_| format!("the alternate screen keeps {kept} rows"))?;
+        let rows = engine.screen_rows(RowScreen::Alternate, screen.alternate.dropped, count)?;
+        write_rows(&mut out, &rows);
+    }
+    let cursor = &screen.cursor;
+    out.extend_from_slice(format!("\x1b[{};{}H", cursor.row + 1, cursor.col + 1).as_bytes());
+    let shape = match (cursor.shape, cursor.blinking) {
+        (CursorShape::Underline, true) => Some(3),
+        (CursorShape::Underline, false) => Some(4),
+        (CursorShape::Beam, true) => Some(5),
+        (CursorShape::Beam, false) => Some(6),
+        (CursorShape::Block | CursorShape::HollowBlock, true) => Some(1),
+        (CursorShape::Block | CursorShape::HollowBlock, false) => Some(2),
+        // A hidden cursor is written as the reset of the visible cursor mode below.
+        (CursorShape::Hidden, _) => None,
+    };
+    if let Some(shape) = shape {
+        out.extend_from_slice(format!("\x1b[{shape} q").as_bytes());
+    }
+    let visible = cursor.visible && cursor.shape != CursorShape::Hidden;
+    for (mode, on) in [
+        (25, visible),
+        (1, modes.app_cursor),
+        (2004, modes.bracketed_paste),
+        (1000, modes.mouse_click),
+        (1002, modes.mouse_drag),
+        (1003, modes.mouse_motion),
+        (1004, modes.focus_in_out),
+        (1005, modes.utf8_mouse),
+        (1006, modes.sgr_mouse),
+        (1007, modes.alternate_scroll),
+    ] {
+        out.extend_from_slice(format!("\x1b[?{mode}{}", if on { 'h' } else { 'l' }).as_bytes());
+    }
+    out.extend_from_slice(if modes.app_keypad { b"\x1b=" } else { b"\x1b>" });
+    Ok(out)
+}
+
+/// Writes rows from the top of a screen: each row as its cells, the rows separated by a carriage return and a line feed, so
+/// that the rows past the last row of the screen move into the history.
+fn write_rows(out: &mut Vec<u8>, rows: &[Vec<crate::protocol::Cell>]) {
+    for (index, row) in rows.iter().enumerate() {
+        if index > 0 {
+            out.extend_from_slice(b"\r\n");
+        }
+        let mut pen: Option<String> = None;
+        let mut link: Option<&str> = None;
+        for cell in row.iter().filter(|cell| cell.width != 0) {
+            let sgr = cell_sgr(cell);
+            if pen.as_deref() != Some(sgr.as_str()) {
+                out.extend_from_slice(sgr.as_bytes());
+                pen = Some(sgr);
+            }
+            if link != cell.link.as_deref() {
+                link = cell.link.as_deref();
+                // default: a cell without a link ends the link of the cells before it with an empty URI.
+                out.extend_from_slice(format!("\x1b]8;;{}\x1b\\", link.unwrap_or("")).as_bytes());
+            }
+            // default: a cell without a character is blank, as screen_text reads it.
+            out.extend_from_slice(cell.ch.as_deref().unwrap_or(" ").as_bytes());
+        }
+        if link.is_some() {
+            out.extend_from_slice(b"\x1b]8;;\x1b\\");
+        }
+        out.extend_from_slice(b"\x1b[0m");
+    }
+}
+
+/// The select graphic rendition sequence that sets the colors and attributes of a cell from the default rendition.
+fn cell_sgr(cell: &crate::protocol::Cell) -> String {
+    let mut sgr = String::from("\x1b[0");
+    for (on, code) in [
+        (cell.bold, ";1"),
+        (cell.dim, ";2"),
+        (cell.italic, ";3"),
+        (cell.underline, ";4"),
+        (cell.inverse, ";7"),
+    ] {
+        if on {
+            sgr.push_str(code);
+        }
+    }
+    if let Some(crate::protocol::Rgb([red, green, blue])) = cell.fg {
+        sgr.push_str(&format!(";38;2;{red};{green};{blue}"));
+    }
+    if let Some(crate::protocol::Rgb([red, green, blue])) = cell.bg {
+        sgr.push_str(&format!(";48;2;{red};{green};{blue}"));
+    }
+    sgr.push('m');
+    sgr
+}
+
+/// Feeds the output of one PTY session to its engine until the session ends, and forwards it to the attached surface while
+/// one is attached. The engine of the session answers the queries of its program while no surface is attached, and its
+/// events give the program status of the session; a surface that attaches receives the bytes that draw the screen of the
+/// engine (`screen_bytes`) as `DaemonEvent::Replay`, which that surface shows without answering.
 async fn feed_engine(
     mut events: mpsc::Receiver<DaemonEvent>,
     mut engine: Box<dyn Engine>,
@@ -750,7 +865,6 @@ async fn feed_engine(
     context: FeedContext,
 ) {
     let table = Arc::clone(&context.table);
-    let mut replay: VecDeque<u8> = VecDeque::new();
     let mut forward: Option<mpsc::Sender<DaemonEvent>> = None;
     let mut program = ProgramStatusTracker::default();
     let mut program_state_sent: Option<&'static str> = None;
@@ -775,12 +889,6 @@ async fn feed_engine(
                         answer_program(&events, &context, &pty, &log).await;
                     }
                     follow_program(events, &mut program, &mut program_state_sent, &context, &pty, &log).await;
-                    replay.extend(data.iter().copied());
-                    let excess = replay.len().saturating_sub(REPLAY_LIMIT);
-                    if excess > 0 {
-                        replay.drain(..excess);
-                        log.record_info("owned session", format!("session {pty}: the replay buffer dropped {excess} bytes"));
-                    }
                     if let Some(sender) = &forward
                         && sender.send(DaemonEvent::Output { session_id, data }).await.is_err()
                     {
@@ -841,15 +949,17 @@ async fn feed_engine(
                 }
                 Some(Control::Attach { columns, rows, forward: sender, reply }) => {
                     engine.resize(columns, rows);
-                    let snapshot = DaemonEvent::Replay {
-                        session_id: pty.clone(),
-                        data: replay.iter().copied().collect(),
-                    };
-                    let result = if sender.send(snapshot).await.is_ok() {
-                        forward = Some(sender);
-                        Ok(())
-                    } else {
-                        Err("the attached surface ended before the replay".to_string())
+                    let result = match screen_bytes(engine.as_mut()) {
+                        Ok(data) => {
+                            let snapshot = DaemonEvent::Replay { session_id: pty.clone(), data };
+                            if sender.send(snapshot).await.is_ok() {
+                                forward = Some(sender);
+                                Ok(())
+                            } else {
+                                Err("the attached surface ended before the screen of the session".to_string())
+                            }
+                        }
+                        Err(reason) => Err(format!("the screen of session {pty} was not read: {reason}")),
                     };
                     let _ = reply.send(result);
                 }

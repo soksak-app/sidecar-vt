@@ -60,6 +60,11 @@ impl Engine for TraceEngine {
         Err("screen.read rows are not served by this test engine".to_string())
     }
 
+    fn primary_retained(&self) -> std::ops::Range<u64> {
+        // The test engine serves no rows.
+        0..0
+    }
+
     fn set_theme(&mut self, _theme: soksak_sidecar_vt_core::TerminalTheme) {}
     fn resize(&mut self, cols: u16, rows: u16) {
         self.cols = cols;
@@ -535,6 +540,11 @@ impl Engine for InlineImageEngine {
         _count: u32,
     ) -> Result<Vec<Vec<Cell>>, String> {
         Err("screen.read rows are not served by this test engine".to_string())
+    }
+
+    fn primary_retained(&self) -> std::ops::Range<u64> {
+        // The test engine serves no rows.
+        0..0
     }
 
     fn set_theme(&mut self, theme: soksak_sidecar_vt_core::TerminalTheme) {

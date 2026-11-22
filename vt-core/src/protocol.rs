@@ -868,6 +868,9 @@ pub trait Engine: Send + 'static {
         from: u64,
         count: u32,
     ) -> Result<Vec<Vec<Cell>>, String>;
+    /// The absolute numbers of the retained rows of the primary screen, its history rows and the rows of its screen, also
+    /// while the alternate screen is active: `screen_rows` of the primary screen reads each number of the range.
+    fn primary_retained(&self) -> std::ops::Range<u64>;
     /// The kept rows of the alternate screen. An engine without an alternate screen keeps none.
     fn alternate_rows(&self) -> AlternateRows {
         AlternateRows::default()
@@ -1353,8 +1356,8 @@ pub enum DaemonEvent {
         queued: usize,
         held: bool,
     },
-    /// The output that an owned session held before a surface attached, which the attached surface shows and does not
-    /// answer, because the engine of the session answered it (owned_sessions.rs).
+    /// The bytes that draw the screen of the engine of an owned session when a surface attaches (owned_sessions::screen_bytes),
+    /// which the attached surface shows and does not answer, because the engine of the session answered the output.
     Replay {
         session_id: String,
         data: Vec<u8>,
