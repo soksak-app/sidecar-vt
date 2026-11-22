@@ -243,7 +243,7 @@ core는 owned session 메시지를 [persistent services](https://github.com/soks
 
 거부는 오류 응답 `{error: <text>}`다. 알 수 없는 식별자에 대한 `resize`와 `end`는 `session <id> is not open`으로, 다른 owner의 session에 대한 요청은 `surface <id> does not own session <id>`로 거부한다. PTY 시작 실패는 `open failed: <reason>`으로, `width`, `height`, `scale` 중 양수가 아닌 값이 있는 `size`는 `size width, height and scale must be positive numbers`로 거부한다.
 
-owned session의 shell 또는 program이 끝나면 session은 끝난다. sidecar는 PTY를 닫고, 그 뒤의 `resize`, `end`, `attach`에는 `session <id> is not open`으로 응답한다. sidecar는 session의 출력을 1 MiB 버퍼에 보관하며, 가득 차면 가장 오래된 byte부터 버리고 버린 기록을 service log에 쓴다. 연결하는 tab은 그 버퍼를 재생한다.
+owned session의 shell 또는 program이 끝나면 session은 끝난다. sidecar는 PTY를 닫고, owner의 연결로 `{surface: <owner surface>, body: {event: "session.ended", session, reason: "ended"}}` 이벤트를 보내며(owner surface의 일반 surface 이벤트이고 core가 읽는다), 그 뒤의 `resize`, `end`, `attach`에는 `session <id> is not open`으로 응답한다. sidecar는 session의 출력을 1 MiB 버퍼에 보관하며, 가득 차면 가장 오래된 byte부터 버리고 버린 기록을 service log에 쓴다. 연결하는 tab은 그 버퍼를 재생한다.
 
 tab은 tab의 surface에서 `{operation: "attach", session}` 요청으로 owned session에 연결한다. attach에는 font가 필요 없다. view는 설정을 configure로 보내고, configure가 session의 격자를 다시 정한다. 응답은 `{session, attached: true}`다. session에는 연결된 surface가 하나만 있다. 다른 살아 있는 surface가 보이는 session에 대한 attach는 `session <id> is shown by surface <surface>`로 거부한다. 연결된 surface는 자체 session처럼 session의 출력을 받고 입력은 session으로 간다. 그 surface의 end나 close(`closed`)는 연결을 끊지만 session은 열린 채로 남는다. 연결된 session의 `resize`는 연결된 surface의 격자도 바꾼다. attach는 session의 버퍼를 재생하므로 surface는 attach 전에 session이 가진 화면을 보인다.
 

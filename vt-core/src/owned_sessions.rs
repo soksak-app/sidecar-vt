@@ -5,8 +5,8 @@
 use crate::events::Events;
 use crate::platform::{Metrics, default_font, metrics_for};
 use crate::protocol::{
-    DEFAULT_FONT_SIZE, DaemonEvent, Dispatch, Engine, SessionPort, ShellRequest, open_launch,
-    session_resize,
+    DEFAULT_FONT_SIZE, DaemonEvent, Dispatch, Engine, OutputSink, SessionPort, ShellRequest,
+    open_launch, session_resize,
 };
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
@@ -94,6 +94,8 @@ struct Entry {
     ended: bool,
     /// The surface that shows the session and its command channel, while that surface is attached.
     shown_by: Option<(String, mpsc::Sender<Dispatch>)>,
+    /// The connection of the owner that sent the last request of the session: the event of its end goes there.
+    sink: Option<OutputSink>,
 }
 
 /// The owned sessions of one persistent service. Its entries outlive each connection, so a restored owner reattaches.
@@ -124,13 +126,14 @@ pub fn is_request(body: &Value) -> bool {
 }
 
 /// Answers an owned-session request of `owner` and returns the reply body.
-pub async fn answer(
-    sessions: &tokio::sync::Mutex<OwnedSessions>,
+pub(crate) async fn answer(
+    sessions: &Arc<tokio::sync::Mutex<OwnedSessions>>,
     owner: &str,
     body: &Value,
     engine_factory: &EngineFactory,
     session_port_factory: &SessionPortFactory,
     log: &Events,
+    output: &OutputSink,
 ) -> Value {
     let result = match body.get("operation").and_then(Value::as_str) {
         Some("open") => {
@@ -141,11 +144,12 @@ pub async fn answer(
                 engine_factory,
                 session_port_factory,
                 log,
+                output,
             )
             .await
         }
-        Some("resize") => resize(sessions, owner, body, log).await,
-        Some("end") => end(sessions, owner, body, log).await,
+        Some("resize") => resize(sessions, owner, body, log, output).await,
+        Some("end") => end(sessions, owner, body, log, output).await,
         _ => Err("owned session request has no known operation".to_string()),
     };
     match result {
@@ -221,12 +225,13 @@ async fn open_entry<'a>(
 }
 
 async fn open(
-    sessions: &tokio::sync::Mutex<OwnedSessions>,
+    sessions: &Arc<tokio::sync::Mutex<OwnedSessions>>,
     owner: &str,
     body: &Value,
     engine_factory: &EngineFactory,
     session_port_factory: &SessionPortFactory,
     log: &Events,
+    output: &OutputSink,
 ) -> Result<Value, String> {
     let creation = body
         .get("session")
@@ -238,11 +243,16 @@ async fn open(
     let size = parse_size(body.get("size"))?;
     let params = body.get("params").cloned().unwrap_or_else(|| json!({}));
     let request = launch_request(owner, &params)?;
+    let shared = Arc::clone(sessions);
     let mut table = sessions.lock().await;
     if let Some(session) = table
         .by_creation
         .get(&(owner.to_string(), creation.clone()))
+        .cloned()
     {
+        if let Some(entry) = table.entries.get_mut(&session) {
+            entry.sink = Some(output.clone());
+        }
         return Ok(json!({"session": session, "creation": creation}));
     }
     let metrics = default_cell_metrics(size.scale)?;
@@ -261,6 +271,7 @@ async fn open(
         .map_err(|error| format!("open failed: {error}"))?;
     let (control_tx, control_rx) = mpsc::unbounded_channel();
     let exited = Arc::new(AtomicBool::new(false));
+    let session = format!("owned-{}", table.next + 1);
     tokio::spawn(feed_engine(
         events,
         engine,
@@ -268,9 +279,9 @@ async fn open(
         control_rx,
         exited.clone(),
         log.clone(),
+        (shared, session.clone()),
     ));
     table.next += 1;
-    let session = format!("owned-{}", table.next);
     table.entries.insert(
         session.clone(),
         Entry {
@@ -282,6 +293,7 @@ async fn open(
             exited,
             ended: false,
             shown_by: None,
+            sink: Some(output.clone()),
         },
     );
     table
@@ -291,10 +303,11 @@ async fn open(
 }
 
 async fn resize(
-    sessions: &tokio::sync::Mutex<OwnedSessions>,
+    sessions: &Arc<tokio::sync::Mutex<OwnedSessions>>,
     owner: &str,
     body: &Value,
     log: &Events,
+    output: &OutputSink,
 ) -> Result<Value, String> {
     let session = session_member(body)?;
     let size_value = body.get("size").cloned().unwrap_or(Value::Null);
@@ -304,6 +317,7 @@ async fn resize(
     if entry.owner != owner {
         return Err(format!("surface {owner} does not own session {session}"));
     }
+    entry.sink = Some(output.clone());
     entry.size = size;
     if let Some((_, shown)) = entry.shown_by.clone() {
         // The attached surface holds the grid: it recomputes the grid from the size with its own metrics.
@@ -337,10 +351,11 @@ async fn resize(
 }
 
 async fn end(
-    sessions: &tokio::sync::Mutex<OwnedSessions>,
+    sessions: &Arc<tokio::sync::Mutex<OwnedSessions>>,
     owner: &str,
     body: &Value,
     log: &Events,
+    output: &OutputSink,
 ) -> Result<Value, String> {
     let session = session_member(body)?;
     let mut table = sessions.lock().await;
@@ -350,6 +365,7 @@ async fn end(
     if entry.owner != owner {
         return Err(format!("surface {owner} does not own session {session}"));
     }
+    entry.sink = Some(output.clone());
     settle(entry, log).await;
     if entry.ended {
         return Ok(json!({"session": session, "ended": true}));
@@ -431,7 +447,9 @@ async fn feed_engine(
     mut control: mpsc::UnboundedReceiver<Control>,
     exited: Arc<AtomicBool>,
     log: Events,
+    owner_of: (Arc<tokio::sync::Mutex<OwnedSessions>>, String),
 ) {
+    let (table, session) = owner_of;
     let mut replay: VecDeque<u8> = VecDeque::new();
     let mut forward: Option<mpsc::Sender<DaemonEvent>> = None;
     loop {
@@ -454,6 +472,7 @@ async fn feed_engine(
                 }
                 Some(DaemonEvent::Exit { session_id }) if session_id == pty => {
                     exited.store(true, Ordering::Release);
+                    tokio::spawn(notify_ended(table.clone(), session.clone(), log.clone()));
                     if let Some(sender) = &forward {
                         let _ = sender.send(DaemonEvent::Exit { session_id }).await;
                     }
@@ -473,6 +492,7 @@ async fn feed_engine(
                 Some(_) => {}
                 None => {
                     exited.store(true, Ordering::Release);
+                    tokio::spawn(notify_ended(table.clone(), session.clone(), log.clone()));
                     break;
                 }
             },
@@ -495,6 +515,40 @@ async fn feed_engine(
                 None => break,
             },
         }
+    }
+}
+
+/// Sends the event `session.ended` of an owned session to the connection of its owner, with the reason `ended`
+/// (core docs/spec/persistent-services.md#owned-sessions). It runs as its own task, so the task of the session never
+/// waits for the table while it holds a reply of an attach.
+async fn notify_ended(table: Arc<tokio::sync::Mutex<OwnedSessions>>, session: String, log: Events) {
+    let target = {
+        let table = table.lock().await;
+        table
+            .entries
+            .get(&session)
+            .map(|entry| (entry.owner.clone(), entry.sink.clone()))
+    };
+    let Some((owner, sink)) = target else {
+        log.record_error(
+            "owned session",
+            format!("session {session}: the end has no entry"),
+        );
+        return;
+    };
+    let Some(sink) = sink else {
+        log.record_error(
+            "owned session",
+            format!("session {session}: the owner has no connection for the end"),
+        );
+        return;
+    };
+    let line = json!({"surface": owner, "body": {"event": "session.ended", "session": session, "reason": "ended"}});
+    if sink.send(line.to_string()).await.is_err() {
+        log.record_error(
+            "owned session",
+            format!("session {session}: the session.ended event was not delivered"),
+        );
     }
 }
 

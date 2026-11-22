@@ -407,7 +407,7 @@ impl TransferStore {
 }
 
 #[derive(Clone)]
-struct OutputSink {
+pub(crate) struct OutputSink {
     connection: Arc<tokio::sync::Mutex<Option<Connection>>>,
     /// The connection of the persistent service. When the client's output closes, it is detached
     /// instead of reported as an error.
@@ -488,7 +488,7 @@ impl OutputSink {
         Ok(())
     }
 
-    async fn send(&self, message: String) -> Result<(), ()> {
+    pub(crate) async fn send(&self, message: String) -> Result<(), ()> {
         self.send_carried(message).await.map(|_| ())
     }
 
@@ -593,7 +593,7 @@ impl std::fmt::Debug for PersistentRegistry {
 pub struct PersistentRegistry {
     entries: tokio::sync::Mutex<HashMap<String, PersistentEntry>>,
     /// The owned sessions of the service, which outlive each connection (owned_sessions.rs).
-    pub(crate) owned: tokio::sync::Mutex<crate::owned_sessions::OwnedSessions>,
+    pub(crate) owned: Arc<tokio::sync::Mutex<crate::owned_sessions::OwnedSessions>>,
     next_epoch: std::sync::atomic::AtomicU64,
     shutdown: AtomicBool,
     detach_requests: Arc<ImageDetachRequestLedger>,
@@ -669,7 +669,9 @@ impl PersistentRegistry {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             entries: tokio::sync::Mutex::new(HashMap::new()),
-            owned: tokio::sync::Mutex::new(crate::owned_sessions::OwnedSessions::default()),
+            owned: Arc::new(tokio::sync::Mutex::new(
+                crate::owned_sessions::OwnedSessions::default(),
+            )),
             next_epoch: std::sync::atomic::AtomicU64::new(1),
             shutdown: AtomicBool::new(false),
             detach_requests: Arc::new(ImageDetachRequestLedger::default()),
@@ -6550,6 +6552,7 @@ where
                                 &engine_factory,
                                 &session_port_factory,
                                 &log,
+                                &output_tx,
                             )
                             .await
                         }

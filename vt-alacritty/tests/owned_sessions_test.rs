@@ -548,3 +548,19 @@ async fn the_end_of_the_shell_ends_the_session() {
     }
     assert_eq!(refusal, format!("session {session} is not open"));
 }
+
+#[tokio::test]
+async fn the_end_of_the_shell_sends_the_session_ended_event_to_the_owner() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service
+        .open_session("o1", "c1", shell_params("printf DONE"))
+        .await;
+    let event = service
+        .line_where("the session.ended event", |value| {
+            value["body"]["event"] == "session.ended"
+        })
+        .await;
+    assert_eq!(event["surface"], "o1");
+    assert_eq!(event["body"]["session"], session.as_str());
+    assert_eq!(event["body"]["reason"], "ended");
+}
