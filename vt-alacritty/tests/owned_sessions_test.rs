@@ -639,7 +639,9 @@ async fn input_writes_the_text_to_the_session_of_its_owner() {
 #[tokio::test]
 async fn input_judges_the_line_as_the_input_of_a_surface() {
     let mut service = start_service(PersistentRegistry::new(), "o1");
-    let session = service.open_session("o1", "c1", cat_params()).await;
+    let session = service
+        .open_session("o1", "c1", json!({"shell": "/bin/zsh"}))
+        .await;
     service
         .send(
             "o1",
@@ -651,6 +653,103 @@ async fn input_judges_the_line_as_the_input_of_a_surface() {
     assert_eq!(
         body["error"], "guardRefused",
         "the destructive line was not refused: {body}"
+    );
+}
+
+impl Service {
+    /// Sends `text` as the input of `session` and returns the reply.
+    async fn input(&mut self, cid: &str, session: &str, text: &str) -> Value {
+        self.send(
+            "o1",
+            cid,
+            json!({"operation": "input", "session": session, "text": text}),
+        )
+        .await;
+        self.reply(cid).await
+    }
+}
+
+#[tokio::test]
+async fn a_program_that_reads_keys_at_a_main_screen_prompt_accepts_an_arrow_then_a_return() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service
+        .open_session(
+            "o1",
+            "c1",
+            shell_params("printf 'TRUST? '; read -r answer; printf 'ANSWER%s' ED; exec cat"),
+        )
+        .await;
+    service.read_until("o1", &session, "TRUST?").await;
+    assert_eq!(
+        service.input("i1", &session, "\u{1b}[B").await,
+        json!({"session": session})
+    );
+    assert_eq!(
+        service.input("i2", &session, "\r").await,
+        json!({"session": session})
+    );
+    let body = service.read_until("o1", &session, "ANSWERED").await;
+    assert!(
+        body["rows"].as_array().is_some_and(|rows| rows
+            .iter()
+            .any(|row| row.as_str().is_some_and(|row| row.contains("ANSWERED")))),
+        "the return did not reach the program: {body}"
+    );
+}
+
+#[tokio::test]
+async fn a_command_that_runs_in_the_shell_accepts_an_arrow_then_a_return() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service
+        .open_session("o1", "c1", json!({"shell": "/bin/zsh"}))
+        .await;
+    let command = "printf 'RUN%s' NING; read -r answer; printf 'ANSWER%s' ED\r";
+    assert_eq!(
+        service.input("i1", &session, command).await,
+        json!({"session": session})
+    );
+    service.read_until("o1", &session, "RUNNING").await;
+    assert_eq!(
+        service.input("i2", &session, "\u{1b}[B").await,
+        json!({"session": session})
+    );
+    assert_eq!(
+        service.input("i3", &session, "\r").await,
+        json!({"session": session})
+    );
+    let body = service.read_until("o1", &session, "ANSWERED").await;
+    assert!(
+        body["rows"].as_array().is_some_and(|rows| rows
+            .iter()
+            .any(|row| row.as_str().is_some_and(|row| row.contains("ANSWERED")))),
+        "the return did not reach the program: {body}"
+    );
+}
+
+#[tokio::test]
+async fn an_attached_surface_of_a_program_sends_an_arrow_then_a_return() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service
+        .open_session(
+            "o1",
+            "c1",
+            shell_params("printf 'TRUST? '; read -r answer; printf 'ANSWER%s' ED; exec cat"),
+        )
+        .await;
+    service.read_until("o1", &session, "TRUST?").await;
+    assert_eq!(service.attach("t1", "a1", &session).await["attached"], true);
+    let keys = |key: &str| {
+        json!({"operation": "input", "actions": [{"type": "key", "key": key, "shift": false, "alt": false, "ctrl": false}],
+            "preedit": {"text": "", "markedRange": null, "selectedRange": null, "replacementRange": null, "attributed": false}})
+    };
+    service.send("t1", "k1", keys("Down")).await;
+    service.send("t1", "k2", keys("Enter")).await;
+    let body = service.read_until("o1", &session, "ANSWERED").await;
+    assert!(
+        body["rows"].as_array().is_some_and(|rows| rows
+            .iter()
+            .any(|row| row.as_str().is_some_and(|row| row.contains("ANSWERED")))),
+        "the return of the attached surface did not reach the program: {body}"
     );
 }
 

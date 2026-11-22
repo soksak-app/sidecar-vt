@@ -4351,6 +4351,8 @@ async fn surface_task(
     let mut open_requested = false;
     let mut requested_image: Option<String> = None;
     let mut requested_shell = ShellRequest::default();
+    // Whether the session of the surface started a shell rather than a program (guard::follows_shell_line).
+    let mut starts_shell = true;
     let mut headless = false;
     let mut pending_configuration: Option<ImageConfiguration> = None;
     // The drawing state that the host last sent for the image region of the surface. A surface
@@ -4574,6 +4576,7 @@ async fn surface_task(
                         }
                         open_requested = true;
                         requested_image = image;
+                        starts_shell = request.program.is_none();
                         requested_shell = request;
                         headless = requested_image.is_none();
                         record_surface_mode(&log, &surface_id, headless, "open");
@@ -5017,9 +5020,10 @@ async fn surface_task(
                             continue;
                         }
                         // A transaction that submits a refused command line writes nothing (guard.rs). The guard follows
-                        // only the line editing of the shell: an alternate screen or application keypad mode belongs to the
-                        // program that reads the keys, so the line is reset and the input is not judged.
-                        let shell_line = { let modes = engine.modes(); !modes.alt_screen && !modes.app_keypad };
+                        // only the line editing of a shell (guard::follows_shell_line): a program that the session started,
+                        // a running command, an alternate screen and an application keypad mode read the keys themselves, so
+                        // the line is reset and the input is not judged.
+                        let shell_line = guard::follows_shell_line(starts_shell, session_id.as_deref().and_then(|sid| status.shell.current(sid).state), &engine.modes());
                         if !shell_line {
                             line_guard = guard::LineGuard::default();
                         }
@@ -5098,7 +5102,7 @@ async fn surface_task(
                             }
                         }
                         if let Some(ref sid) = session_id {
-                            let shell_line = { let modes = engine.modes(); !modes.alt_screen && !modes.app_keypad };
+                            let shell_line = guard::follows_shell_line(starts_shell, session_id.as_deref().and_then(|sid| status.shell.current(sid).state), &engine.modes());
                             if !shell_line {
                                 line_guard = guard::LineGuard::default();
                             }
@@ -5716,6 +5720,7 @@ async fn surface_task(
                                 inputs.opened(&attachment.pty);
                                 session_port = attachment.port;
                                 session_id = Some(attachment.pty);
+                                starts_shell = attachment.starts_shell;
                                 attached = true;
                                 daemon_events_rx = attachment.events;
                                 let response = json!({"surface": surface_id, "body": {"session": session, "attached": true}});

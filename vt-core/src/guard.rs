@@ -652,6 +652,22 @@ fn disk_write_device(words: &[Word]) -> bool {
     dd_output || redirects_to_block_device(words)
 }
 
+/// Whether the input of a session edits a shell line that the guard follows. A shell line exists only when the session started
+/// a shell, the terminal state of its OSC 133 marks is not `running` (shell_state.rs), and no program holds an alternate
+/// screen or the application keypad mode. A program that the session started instead of a shell, and a command that runs
+/// after `C`, read the keys themselves, so the guard does not judge them. A shell that sends no marks has no state and is
+/// judged, so the guard stays fail-closed for a shell without integration.
+pub fn follows_shell_line(
+    starts_shell: bool,
+    state: Option<crate::shell_state::ShellState>,
+    modes: &crate::protocol::Modes,
+) -> bool {
+    starts_shell
+        && state != Some(crate::shell_state::ShellState::Running)
+        && !modes.alt_screen
+        && !modes.app_keypad
+}
+
 /// The lines of a surface as the input changes them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineInput<'a> {

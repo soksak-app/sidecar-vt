@@ -111,6 +111,8 @@ struct Entry {
     ended: bool,
     /// The surface that shows the session and its command channel, while that surface is attached.
     shown_by: Option<(String, mpsc::Sender<Dispatch>)>,
+    /// Whether the session started a shell rather than a program (guard::follows_shell_line).
+    starts_shell: bool,
     /// The connection of the owner that sent the last request of the session: the events of the session go there.
     sink: SinkCell,
 }
@@ -131,6 +133,8 @@ pub(crate) struct Attached {
     pub columns: u16,
     pub rows: u16,
     pub events: mpsc::Receiver<DaemonEvent>,
+    /// Whether the session started a shell rather than a program (guard::follows_shell_line).
+    pub starts_shell: bool,
 }
 
 /// Whether a request body is an owned-session request: an `open` with an object `session`, a `resize` or `end` with a
@@ -320,6 +324,7 @@ async fn open(
             session: session.clone(),
             owner: owner.to_string(),
             sink: Arc::clone(&sink),
+            starts_shell: request.program.is_none(),
         },
     ));
     table.next += 1;
@@ -335,6 +340,7 @@ async fn open(
             ended: false,
             shown_by: None,
             sink,
+            starts_shell: request.program.is_none(),
         },
     );
     table
@@ -574,6 +580,7 @@ pub(crate) async fn attach(
         columns,
         rows,
         events,
+        starts_shell: entry.starts_shell,
     })
 }
 
@@ -595,12 +602,20 @@ async fn feed_engine(
     let mut program = ProgramStatusTracker::default();
     let mut program_state_sent: Option<&'static str> = None;
     let mut line_guard = guard::LineGuard::default();
+    let mut shell_state = crate::shell_state::ShellStateTracker::default();
     loop {
         tokio::select! {
             event = events.recv() => match event {
                 Some(DaemonEvent::Output { session_id, data }) if session_id == pty => {
                     engine.feed(&data);
                     let events = engine.drain_events();
+                    for event in &events {
+                        if let EngineEvent::ShellState { marker, params } = event
+                            && let Err(reason) = shell_state.apply(&pty, *marker, params)
+                        {
+                            log.record_error("owned session", format!("session {pty}: {reason}"));
+                        }
+                    }
                     follow_program(events, &mut program, &mut program_state_sent, &context, &pty, &log).await;
                     replay.extend(data.iter().copied());
                     let excess = replay.len().saturating_sub(REPLAY_LIMIT);
@@ -643,7 +658,12 @@ async fn feed_engine(
             command = control.recv() => match command {
                 Some(Control::Resize(columns, rows)) => engine.resize(columns, rows),
                 Some(Control::Write { text, paste, cids, reply }) => {
-                    let judged = judge_input(&mut engine, &mut line_guard, &pty, &cids, &text, paste, &log);
+                    let shell_line = guard::follows_shell_line(
+                        context.starts_shell,
+                        shell_state.current(&pty).state,
+                        &engine.modes(),
+                    );
+                    let judged = judge_input(engine.as_ref(), shell_line, &mut line_guard, &pty, &cids, &text, paste, &log);
                     let _ = reply.send(judged);
                 }
                 Some(Control::Read { reply }) => {
@@ -716,13 +736,17 @@ struct FeedContext {
     session: String,
     owner: String,
     sink: SinkCell,
+    /// Whether the session started a shell rather than a program (guard::follows_shell_line).
+    starts_shell: bool,
 }
 
 /// Judges the text of an `input` or a `paste` as the input of a surface judges its own (guard.rs): on a shell line the guard
 /// follows the line and refuses a submission it does not allow, and the refusal writes nothing. A paste is encoded with the
 /// bracketed-paste mode of the engine; an input is written as given. Returns the bytes to write, or the error body.
+#[allow(clippy::too_many_arguments)]
 fn judge_input(
-    engine: &mut Box<dyn Engine>,
+    engine: &dyn Engine,
+    shell_line: bool,
     line: &mut guard::LineGuard,
     session: &str,
     cids: &[String],
@@ -730,11 +754,6 @@ fn judge_input(
     paste: bool,
     log: &Events,
 ) -> Result<Vec<u8>, Value> {
-    // An alternate screen or an application keypad belongs to the program that reads the keys, so the guard does not judge them.
-    let shell_line = {
-        let modes = engine.modes();
-        !modes.alt_screen && !modes.app_keypad
-    };
     if !shell_line {
         *line = guard::LineGuard::default();
     } else {
