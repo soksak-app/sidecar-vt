@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S254: 버전이 0.0.41이므로 release run이 저장소의 main을 v0.0.41로 낸다. S252-1의 보이는 session 반복 attach 응답이 들어 있다.
 - S253-1: owned session task가 버리는 각 send와 process query가 버리는 conversion error가 `default:` comment로 이유를 적으므로 `sok-check events`가 통과한다. 이전에는 8개 finding으로 실패했다. 검증: `sok-check events`의 Red(8개 finding), 그 뒤 Green(45개 source).
 - S252-1: 같은 owned session을 이미 보이는 surface의 attach가 `{session, attached: true}`로 응답하고 아무것도 바꾸지 않는다. 그래서 service가 남긴 surface에서 view가 다시 시작하거나 session 시작을 두 번 실행한 tab이 session을 보인다. 이전에는 sidecar가 `surface already holds a session`으로 거부해 tab이 빈 채로 남았다. 다른 session의 attach는 계속 거부한다. 검증: `a_repeated_attach_of_the_shown_session_answers_it_as_attached`의 Red, 이어서 Green(`owned_sessions_test` 43개 중 43개).
 - S251-2: 버전이 0.0.40이므로 release run이 저장소의 main을 v0.0.40으로 낸다. S251-1의 `sessions` 항목별 program state가 들어 있다.

@@ -1,5 +1,6 @@
 # Changelog
 
+- S254: The version is 0.0.41, so the release run publishes the main of the repository as v0.0.41; it holds the answer to a repeated attach of the shown session of S252-1.
 - S253-1: Each discarded send of the task of an owned session and the discarded conversion error of the process query state their reason in a `default:` comment, so `sok-check events` passes; before, it failed with 8 findings. Verification: Red of `sok-check events` (8 findings), then Green (45 sources).
 - S252-1: An attach on a surface that already shows the same owned session answers `{session, attached: true}` and changes nothing, so a tab whose view starts again on a surface that the service kept, or runs its session start twice, shows its session; before, the sidecar refused it with `surface already holds a session` and the tab stayed blank. An attach of another session is still refused. Verification: Red of `a_repeated_attach_of_the_shown_session_answers_it_as_attached`, then Green (`owned_sessions_test` 43 of 43).
 - S251-2: The version is 0.0.40, so the release run publishes the main of the repository as v0.0.40; it holds the program state of each `sessions` entry of S251-1.
