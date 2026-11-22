@@ -72,6 +72,11 @@ pub fn default_cell_metrics(scale: f64) -> Result<Metrics, String> {
 /// request of the owner replaces it, so an owner that connects again receives the events on its new connection.
 type SinkCell = Arc<tokio::sync::Mutex<Option<OutputSink>>>;
 
+/// The last program state of a session, shared by the entry and the task of the session: the task sets it with each
+/// `session.program` event, and the `sessions` answer lists it, so an owner that adopts the session after a restart
+/// receives the state that the program reported only once.
+type ProgramCell = Arc<std::sync::Mutex<Option<&'static str>>>;
+
 /// The commands that the task of a session receives from the service.
 enum Control {
     /// The grid of the engine of the session: each resize of the PTY of the session sets it, so the engine wraps the output at
@@ -124,6 +129,8 @@ struct Entry {
     starts_shell: bool,
     /// The connection of the owner that sent the last request of the session: the events of the session go there.
     sink: SinkCell,
+    /// The last program state of the session, which the `sessions` answer lists.
+    program: ProgramCell,
 }
 
 /// The owned sessions of one persistent service. Its entries outlive each connection, so a restored owner reattaches.
@@ -134,7 +141,7 @@ pub struct OwnedSessions {
 }
 
 impl OwnedSessions {
-    /// The open sessions as the entries of the `sessions` answer, `{session, surface, root, creation, size, plugin}`, ordered by
+    /// The open sessions as the entries of the `sessions` answer, `{session, surface, root, creation, size, plugin, program}`, ordered by
     /// session (core docs/spec/persistent-services.md#owned-sessions). A session whose shell or program ended is not listed.
     pub(crate) async fn list(&mut self, log: &Events) -> Vec<Value> {
         let mut listed = Vec::new();
@@ -150,6 +157,12 @@ impl OwnedSessions {
                 "creation": entry.creation,
                 "size": {"width": entry.size.width, "height": entry.size.height, "scale": entry.size.scale},
                 "plugin": entry.plugin,
+                "program": *entry
+                    .program
+                    .lock()
+                    // default: the state is one value that each holder replaces whole, so a panic of another holder
+                    // leaves it consistent.
+                    .unwrap_or_else(|error| error.into_inner()),
             }));
         }
         listed.sort_by(|a, b| a["session"].as_str().cmp(&b["session"].as_str()));
@@ -363,6 +376,7 @@ async fn open(
     // one, which a stored layout may still name (core docs/spec/persistent-services.md#owned-session-messages).
     let session = format!("owned-{}", uuid::Uuid::new_v4());
     let sink: SinkCell = Arc::new(tokio::sync::Mutex::new(Some(output.clone())));
+    let program: ProgramCell = Arc::default();
     tokio::spawn(feed_engine(
         events,
         engine,
@@ -376,6 +390,7 @@ async fn open(
             session: session.clone(),
             owner: owner.to_string(),
             sink: Arc::clone(&sink),
+            program: Arc::clone(&program),
             starts_shell: request.program.is_none(),
         },
     ));
@@ -394,6 +409,7 @@ async fn open(
             ended: false,
             shown_by: None,
             sink,
+            program,
             starts_shell: request.program.is_none(),
         },
     );
@@ -868,7 +884,6 @@ async fn feed_engine(
     let table = Arc::clone(&context.table);
     let mut forward: Option<mpsc::Sender<DaemonEvent>> = None;
     let mut program = ProgramStatusTracker::default();
-    let mut program_state_sent: Option<&'static str> = None;
     let mut line_guard = guard::LineGuard::default();
     let mut shell_state = crate::shell_state::ShellStateTracker::default();
     loop {
@@ -889,7 +904,7 @@ async fn feed_engine(
                     if !forward.as_ref().is_some_and(|sender| !sender.is_closed()) {
                         answer_program(&events, &context, &pty, &log).await;
                     }
-                    follow_program(events, &mut program, &mut program_state_sent, &context, &pty, &log).await;
+                    follow_program(events, &mut program, &context, &pty, &log).await;
                     if let Some(sender) = &forward
                         && sender.send(DaemonEvent::Output { session_id, data }).await.is_err()
                     {
@@ -1023,6 +1038,8 @@ struct FeedContext {
     session: String,
     owner: String,
     sink: SinkCell,
+    /// The last program state of the session, which the task sets before it sends `session.program`.
+    program: ProgramCell,
     /// Whether the session started a shell rather than a program (guard::follows_shell_line).
     starts_shell: bool,
 }
@@ -1131,12 +1148,11 @@ async fn answer_program(events: &[EngineEvent], context: &FeedContext, pty: &str
 
 /// Applies the engine events of one output to the program status of the session. When the records change, the state that
 /// the records give is sent to the owner as `session.program` if it differs from the state sent last (core
-/// docs/spec/persistent-services.md#owned-sessions). The status is read from the records only, so a session whose records
+/// docs/spec/persistent-services.md#owned-sessions), and is kept for the `sessions` answer. The status is read from the records only, so a session whose records
 /// give no state sends nothing.
 async fn follow_program(
     events: Vec<EngineEvent>,
     program: &mut ProgramStatusTracker,
-    state_sent: &mut Option<&'static str>,
     context: &FeedContext,
     pty: &str,
     log: &Events,
@@ -1145,6 +1161,7 @@ async fn follow_program(
         session,
         owner,
         sink,
+        program: state_sent,
         ..
     } = context;
     for event in events {
@@ -1172,10 +1189,17 @@ async fn follow_program(
         let Some(state) = program_state(&change.current.records) else {
             continue;
         };
-        if *state_sent == Some(state) {
-            continue;
+        {
+            let mut sent = state_sent
+                .lock()
+                // default: the state is one value that each holder replaces whole, so a panic of another holder leaves it
+                // consistent.
+                .unwrap_or_else(|error| error.into_inner());
+            if *sent == Some(state) {
+                continue;
+            }
+            *sent = Some(state);
         }
-        *state_sent = Some(state);
         let line = json!({"surface": owner, "body": {"event": "session.program", "session": session, "state": state}});
         let connection = sink.lock().await.clone();
         let Some(connection) = connection else {

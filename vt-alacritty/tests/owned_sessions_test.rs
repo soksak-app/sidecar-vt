@@ -812,6 +812,24 @@ async fn the_program_state_of_an_owned_session_goes_to_its_owner() {
     );
 }
 
+#[tokio::test]
+async fn sessions_lists_the_last_program_state_of_an_owned_session() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let script = "printf '\\033]7501;state=idle\\007'; exec cat";
+    let session = service.open_session("o1", "c1", shell_params(script)).await;
+    service
+        .line_where("the session.program event", |value| {
+            value["body"]["event"] == "session.program"
+        })
+        .await;
+    let answer = service.sessions("r1").await;
+    let listed = answer["sessions"]
+        .as_array()
+        .and_then(|entries| entries.iter().find(|entry| entry["session"] == session))
+        .unwrap_or_else(|| panic!("the session is not listed: {answer}"));
+    assert_eq!(listed["program"], "idle", "{answer}");
+}
+
 /// The hexadecimal bytes of the answer `ESC ] 7501 ; ? BEL` to the status query.
 const QUERY_ANSWER_HEX: &str = "1b5d373530313b3f07";
 
@@ -910,7 +928,7 @@ async fn sessions_lists_each_open_owned_session_with_its_owner_root_creation_siz
     assert_eq!(
         service.sessions("r1").await,
         json!({"operation": "sessions", "request": "r1", "ok": true, "sessions": [
-            {"session": kept, "surface": "o1", "root": "/project", "creation": "k1", "size": size(400.0, 200.0, 2.0), "plugin": "terminal"}
+            {"session": kept, "surface": "o1", "root": "/project", "creation": "k1", "size": size(400.0, 200.0, 2.0), "plugin": "terminal", "program": null}
         ]})
     );
 }
