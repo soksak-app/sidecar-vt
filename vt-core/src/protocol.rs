@@ -581,6 +581,8 @@ struct PersistentEntry {
 
 pub struct PersistentRegistry {
     entries: tokio::sync::Mutex<HashMap<String, PersistentEntry>>,
+    /// The owned sessions of the service, which outlive each connection (owned_sessions.rs).
+    pub(crate) owned: tokio::sync::Mutex<crate::owned_sessions::OwnedSessions>,
     next_epoch: std::sync::atomic::AtomicU64,
     shutdown: AtomicBool,
     detach_requests: Arc<ImageDetachRequestLedger>,
@@ -656,6 +658,7 @@ impl PersistentRegistry {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             entries: tokio::sync::Mutex::new(HashMap::new()),
+            owned: tokio::sync::Mutex::new(crate::owned_sessions::OwnedSessions::default()),
             next_epoch: std::sync::atomic::AtomicU64::new(1),
             shutdown: AtomicBool::new(false),
             detach_requests: Arc::new(ImageDetachRequestLedger::default()),
@@ -2080,7 +2083,7 @@ pub use crate::platform::ImageState;
 /// false. The default and the range of the font size (points). The default size multiplied by the
 /// text scale of the frame and of the card (each at most 3) stays within the range
 /// (docs/spec/text-size.md).
-const DEFAULT_FONT_SIZE: f32 = 13.0;
+pub(crate) const DEFAULT_FONT_SIZE: f32 = 13.0;
 const FONT_SIZE_MIN: f64 = 4.0;
 const FONT_SIZE_MAX: f64 = 128.0;
 
@@ -6156,7 +6159,7 @@ enum Launch {
 
 /// The launch of an `open` request (docs/spec/agent-roles.md#launch-parameters): the shell, or the program with its arguments
 /// when `program` is present. Each invalid value is refused with its reason, and no launch is chosen from it.
-fn open_launch(body: &Value) -> Result<(String, Option<String>, Vec<String>), String> {
+pub(crate) fn open_launch(body: &Value) -> Result<(String, Option<String>, Vec<String>), String> {
     let program = match body.get("program") {
         None => None,
         Some(Value::String(program)) if !program.is_empty() => Some(program.clone()),
@@ -6444,6 +6447,36 @@ where
             Ok(env) => {
                 let surface_id = env.surface.clone();
                 let cids = env.cids.clone();
+
+                // An owned-session request names its owner surface, and no surface task is started for it.
+                if let Some(body) = env
+                    .body
+                    .as_ref()
+                    .filter(|body| crate::owned_sessions::is_request(body))
+                {
+                    let reply = match registry.as_ref() {
+                        Some(registry) => {
+                            crate::owned_sessions::answer(
+                                &registry.owned,
+                                &surface_id,
+                                body,
+                                &engine_factory,
+                                &session_port_factory,
+                                &log,
+                            )
+                            .await
+                        }
+                        None => json!({"error": "owned sessions require the persistent service"}),
+                    };
+                    if reply_tx
+                        .reply(json!({"surface": surface_id, "body": reply}))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    continue;
+                }
 
                 if env.closed == Some(true) {
                     let registry_key =

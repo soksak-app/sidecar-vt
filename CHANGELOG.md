@@ -1,5 +1,6 @@
 # Changelog
 
+- S241-2: The sidecar answers the owned-session `open` with its size, `resize` and `end`: the session is a PTY of its owner that its engine is fed from, `open` and `end` are idempotent, and the grid comes from the device metrics of the default font. Verification: Red of `vt-alacritty/tests/owned_sessions_test.rs` (8 of 12 failed), then Green (12 of 12, 5 unit tests, `serve_contract` 161 of 161, clippy and fmt).
 - S241-1: The specification states the owned-session operations of the sidecar (`docs/spec/vt-core.md`): the body that selects `open` for an owned session, the size conversion to cells, the reply bodies, the refusals and the idempotency of `open` and `end`. Verification: document review only.
 - S240: The version is 0.0.32, so the release run publishes the main of the repository as v0.0.32; it holds the same sources as v0.0.31.
 - S223: The release row is complete: the release v0.0.30 contains the process list of S222 and S224.

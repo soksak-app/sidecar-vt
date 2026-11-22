@@ -9,6 +9,7 @@ pub mod handoff;
 pub mod inline_image;
 pub mod locale;
 pub mod messaging;
+pub mod owned_sessions;
 pub mod palette;
 pub mod platform;
 pub mod policy;
