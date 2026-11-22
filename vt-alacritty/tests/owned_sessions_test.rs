@@ -25,14 +25,26 @@ struct Service {
     to_serve: DuplexStream,
     lines: Lines<BufReader<DuplexStream>>,
     _task: tokio::task::JoinHandle<std::io::Result<()>>,
-    _logs: tempfile::TempDir,
+    /// The folder of the events that the service owns, or None when the caller keeps it.
+    _logs: Option<tempfile::TempDir>,
 }
 
 fn start_service(registry: Arc<PersistentRegistry>, owner: &str) -> Service {
     let logs = tempfile::tempdir().expect("create the folder of the events");
+    let mut service = start_service_logging(registry, owner, logs.path());
+    service._logs = Some(logs);
+    service
+}
+
+/// Starts the service of `start_service` with its events in `folder`, which the caller keeps.
+fn start_service_logging(
+    registry: Arc<PersistentRegistry>,
+    owner: &str,
+    folder: &std::path::Path,
+) -> Service {
     let events: Events = Arc::new(
         EventLog::start(Options::service(
-            logs.path().to_path_buf(),
+            folder.to_path_buf(),
             format!("owned-sessions-{}", std::process::id()),
         ))
         .expect("start the writer of the events"),
@@ -64,7 +76,7 @@ fn start_service(registry: Arc<PersistentRegistry>, owner: &str) -> Service {
         to_serve,
         lines: BufReader::new(from_serve).lines(),
         _task: task,
-        _logs: logs,
+        _logs: None,
     }
 }
 
@@ -1305,4 +1317,110 @@ async fn a_request_of_a_surface_whose_session_ended_is_refused_and_the_connectio
     );
     let screen = service.screen_text("t2").await;
     assert!(screen.lines().count() > 0, "t2 answered no screen");
+}
+
+#[tokio::test]
+async fn a_session_that_its_owner_ended_sends_no_session_ended_event() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let ended = service.open_session("o1", "c1", cat_params()).await;
+    service
+        .send("o1", "e1", json!({"operation": "end", "session": ended}))
+        .await;
+    assert_eq!(service.reply("e1").await["ended"], true);
+    // A second session whose program ends by itself sends its session.ended after the end of the first had its effect.
+    service
+        .send(
+            "o1",
+            "c2",
+            open_body(
+                "k-done",
+                size(400.0, 200.0, 2.0),
+                shell_params("printf DONE"),
+            ),
+        )
+        .await;
+    let event = service
+        .line_where("a session.ended event", |value| {
+            value["body"]["event"] == "session.ended"
+        })
+        .await;
+    assert_ne!(
+        event["body"]["session"],
+        ended.as_str(),
+        "the session that its owner ended sent session.ended: {event}"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_request_of_an_ended_surface_actor_records_its_operation() {
+    let logs = tempfile::tempdir().expect("create the folder of the events");
+    let mut service = start_service_logging(PersistentRegistry::new(), "o1", logs.path());
+    let session = service.open_session("o1", "c1", cat_params()).await;
+    assert_eq!(service.attach("t1", "a1", &session).await["attached"], true);
+    service
+        .send("o1", "e1", json!({"operation": "end", "session": session}))
+        .await;
+    assert_eq!(service.reply("e1").await["ended"], true);
+    let mut recorded = false;
+    for attempt in 0..50 {
+        service
+            .send(
+                "t1",
+                &format!("r{attempt}"),
+                json!({"operation": "screen.read"}),
+            )
+            .await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        recorded = std::fs::read_dir(logs.path())
+            .expect("read the folder of the events")
+            .flatten()
+            .any(|file| {
+                std::fs::read_to_string(file.path()).is_ok_and(|text| {
+                    text.contains("surface request screen.read")
+                        && text.contains("surface t1 has no live session")
+                })
+            });
+        if recorded {
+            break;
+        }
+    }
+    assert!(
+        recorded,
+        "no record names the operation of the refused request"
+    );
+}
+
+#[tokio::test]
+async fn the_close_of_a_surface_whose_session_ended_answers_closed_without_an_error() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service.open_session("o1", "c1", cat_params()).await;
+    assert_eq!(service.attach("t1", "a1", &session).await["attached"], true);
+    service
+        .send("o1", "e1", json!({"operation": "end", "session": session}))
+        .await;
+    // The actor of t1 ends after its session; its exit event states that end, before or after the reply of the end.
+    let (mut answered, mut exited) = (false, false);
+    while !(answered && exited) {
+        let line = service
+            .line_where("the reply of the end or the exit of t1", |value| {
+                value["cids"]
+                    .as_array()
+                    .is_some_and(|cids| cids.iter().any(|cid| cid == "e1"))
+                    || (value["surface"] == "t1" && value["body"]["event"] == "exit")
+            })
+            .await;
+        if line["body"]["event"] == "exit" {
+            exited = true;
+        } else {
+            assert_eq!(line["body"]["ended"], true);
+            answered = true;
+        }
+    }
+    service.close_surface("t1").await;
+    let closed = service
+        .line_where("the closed answer of t1", |value| {
+            value["surface"] == "t1" && value["closed"] == true
+        })
+        .await;
+    assert_eq!(closed, json!({"surface": "t1", "closed": true}));
 }

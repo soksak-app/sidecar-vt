@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S259: owner가 끝낸 session은 `session.ended`를 보내지 않으므로 window가 더 이상 `core.session.ended <id>: session <id> is not open`을 기록하지 않는다. actor가 session과 함께 끝난 surface의 close나 retain은 `surface actor closed before <operation>` 대신 닫힘으로 답하고, panic으로 끝난 actor는 여전히 실패로 보고한다. 끝난 surface actor의 거부된 요청 기록은 operation을 밝힌다(`surface request <operation>`). 검증: `a_session_that_its_owner_ended_sends_no_session_ended_event`, `the_close_of_a_surface_whose_session_ended_answers_closed_without_an_error`, `a_refused_request_of_an_ended_surface_actor_records_its_operation`의 Red, 이어 Green(`owned_sessions_test` 47개 중 47개, vt-core 테스트, clippy, fmt, `sok-check events`).
 - S258: 버전이 0.0.43이므로 release run이 저장소의 main을 v0.0.43으로 낸다. S257-1의 끝난 surface actor 요청 거부가 들어 있다.
 - S257-1: surface actor가 끝난 surface의 요청, 예를 들어 `end` 뒤 owned session에 attach한 tab의 요청은 그 surface에 `surface <id> has no live session: its surface actor has ended`로 답하고 연결은 유지된다. 이전에는 input loop가 연결 전체를 끝내서 그 연결의 다른 모든 surface가 sidecar를 잃었다. input loop가 surface actor로 보내는 모든 send는 이를 적용하는 `RequestSender::send`를 거친다. 검증: `a_request_of_a_surface_whose_session_ended_is_refused_and_the_connection_stays`의 Red(`the service closed its output`), 이어 Green(`owned_sessions_test` 44개 중 44개, clippy, fmt, `sok-check events`).
 - S256: 버전이 0.0.42이므로 release run이 저장소의 main을 v0.0.42로 낸다. S255-1의 scroll read 테스트가 들어 있다.

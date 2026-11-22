@@ -243,7 +243,10 @@ impl RequestSender {
                 "surface {} has no live session: its surface actor has ended",
                 self.surface
             );
-            self.request.log.record_error("surface request", &error);
+            self.request.log.record_error(
+                &format!("surface request {}", self.request.operation),
+                &error,
+            );
             return self
                 .reply
                 .reply(json!({"surface": self.surface, "body": {"error": error}}))
@@ -594,7 +597,7 @@ impl OutputSink {
 struct PersistentEntry {
     tx: mpsc::Sender<Dispatch>,
     output: OutputSink,
-    actor: tokio::task::JoinHandle<()>,
+    actor: tokio::task::JoinHandle<Result<(), String>>,
     epoch: u64,
     owner: String,
 }
@@ -624,7 +627,7 @@ const SURFACE_ACTOR_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 /// as already reaped (core docs/spec/sidecars.md#messages).
 async fn close_surface_actor(
     tx: &mpsc::Sender<Dispatch>,
-    actor: Option<tokio::task::JoinHandle<()>>,
+    actor: Option<tokio::task::JoinHandle<Result<(), String>>>,
     operation: &str,
 ) -> Result<(), String> {
     let (result, answer) = tokio::sync::oneshot::channel();
@@ -639,12 +642,15 @@ async fn close_surface_actor(
                     "surface actor ended before it answered {operation}"
                 )),
             },
-            Err(_) => Err(format!("surface actor closed before {operation}")),
+            // The actor ended before the close: after the end of the session of its surface it ended normally and the close
+            // has nothing left to do; an end by a panic is the failure that the join below reports.
+            Err(_) => Ok(()),
         };
         let joined = match actor {
             Some(actor) => actor
                 .await
-                .map_err(|error| format!("surface actor join failed: {error}")),
+                .map_err(|error| format!("surface actor join failed: {error}"))
+                .and_then(|ended| ended),
             None => Ok(()),
         };
         match (closed, joined) {
@@ -806,7 +812,7 @@ impl PersistentRegistry {
         owner: String,
         tx: mpsc::Sender<Dispatch>,
         output: OutputSink,
-        actor: tokio::task::JoinHandle<()>,
+        actor: tokio::task::JoinHandle<Result<(), String>>,
     ) -> Result<u64, String> {
         let mut entries = self.entries.lock().await;
         if entries.contains_key(&key) {
@@ -4265,9 +4271,9 @@ async fn report_surface_task_end(
     task: tokio::task::JoinHandle<()>,
     output: OutputSink,
     log: Events,
-) {
+) -> Result<(), String> {
     match task.await {
-        Ok(()) => {}
+        Ok(()) => Ok(()),
         Err(join_err) if join_err.is_panic() => {
             let panic = join_err.into_panic();
             let message = panic
@@ -4286,8 +4292,13 @@ async fn report_surface_task_end(
                     "the panic report was not delivered: the output has closed",
                 );
             }
+            Err(reason)
         }
-        Err(error) => log.record_error("surface task", format!("cancelled: {error}")),
+        Err(error) => {
+            let reason = format!("cancelled: {error}");
+            log.record_error("surface task", &reason);
+            Err(reason)
+        }
     }
 }
 

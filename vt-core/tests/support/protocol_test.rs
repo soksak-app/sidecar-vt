@@ -327,6 +327,7 @@ async fn persistent_registry_rejects_stale_owner_and_awaits_actor_close() {
                 break;
             }
         }
+        Ok(())
     });
     let (output_sender, _output_receiver) = mpsc::channel(4);
     registry.entries.lock().await.insert(
@@ -363,7 +364,10 @@ async fn persistent_registry_rejects_stale_owner_and_awaits_actor_close() {
     assert!(!registry.contains("root\0surface").await);
 }
 
-fn closing_actor() -> (mpsc::Sender<Dispatch>, tokio::task::JoinHandle<()>) {
+fn closing_actor() -> (
+    mpsc::Sender<Dispatch>,
+    tokio::task::JoinHandle<Result<(), String>>,
+) {
     let (tx, mut rx) = mpsc::channel(1);
     let actor = tokio::spawn(async move {
         while let Some(command) = rx.recv().await {
@@ -371,6 +375,7 @@ fn closing_actor() -> (mpsc::Sender<Dispatch>, tokio::task::JoinHandle<()>) {
                 break;
             }
         }
+        Ok(())
     });
     (tx, actor)
 }
@@ -419,6 +424,7 @@ async fn assert_cleanup_closes_remaining_actors(retain: bool) {
                     break;
                 }
             }
+            Ok(())
         });
         let (output, _events) = mpsc::channel(1);
         registry.entries.lock().await.insert(
@@ -432,14 +438,14 @@ async fn assert_cleanup_closes_remaining_actors(retain: bool) {
             },
         );
     }
-    // Leaves the HashMap order unchanged and makes only the actor of the first entry already ended.
+    // Leaves the HashMap order unchanged and makes only the actor of the first entry already ended by a panic.
     let (dead_tx, dead_rx) = mpsc::channel(1);
     drop(dead_rx);
     {
         let mut entries = registry.entries.lock().await;
         let entry = entries.values_mut().next().expect("first entry");
         entry.tx = dead_tx;
-        entry.actor = tokio::spawn(async {});
+        entry.actor = tokio::spawn(async { Err("surface task ended: a panic".to_string()) });
     }
     let result = if retain {
         registry
@@ -476,7 +482,7 @@ async fn cleanup_reports_each_failed_surface() {
                 key.to_string(),
                 PersistentEntry {
                     tx,
-                    actor: tokio::spawn(async {}),
+                    actor: tokio::spawn(async { Err("surface task ended: a panic".to_string()) }),
                     output: OutputSink::direct(test_connection(output)),
                     epoch: 1,
                     owner: "client".to_string(),
@@ -518,6 +524,7 @@ async fn persistent_registry_close_owner_keeps_other_client_sessions() {
                 break;
             }
         }
+        Ok(())
     });
     let (b_tx, mut b_rx) = mpsc::channel(1);
     let b_actor = tokio::spawn(async move {
@@ -526,6 +533,7 @@ async fn persistent_registry_close_owner_keeps_other_client_sessions() {
                 break;
             }
         }
+        Ok(())
     });
     let (a_output, _a_events) = mpsc::channel(1);
     let (b_output, _b_events) = mpsc::channel(1);
@@ -568,6 +576,7 @@ async fn persistent_surface_close_reports_an_actor_that_does_not_answer() {
         while let Some(_command) = rx.recv().await {
             std::future::pending::<()>().await;
         }
+        Ok(())
     });
     let (output, _events) = mpsc::channel(1);
     registry.entries.lock().await.insert(

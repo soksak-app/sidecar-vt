@@ -1013,9 +1013,15 @@ async fn notify_ended(table: Arc<tokio::sync::Mutex<OwnedSessions>>, session: St
         table
             .entries
             .get(&session)
-            .map(|entry| (entry.owner.clone(), Arc::clone(&entry.sink)))
+            .map(|entry| (entry.owner.clone(), Arc::clone(&entry.sink), entry.ended))
     };
-    let Some((owner, sink)) = target else {
+    // The owner ended the session with `end`, whose reply it already received; the end of the program that the end closed is no
+    // end of the program of its own, so no session.ended follows (core docs/spec/persistent-services.md#owned-sessions). `end`
+    // holds the table until it marks the entry, so this read sees the mark.
+    if let Some((_, _, true)) = target {
+        return;
+    }
+    let Some((owner, sink, _)) = target else {
         log.record_error(
             "owned session",
             format!("session {session}: the end has no entry"),
