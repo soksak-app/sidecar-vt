@@ -1,5 +1,6 @@
 # 기능
 
+- [o] S242 — P0, core F1062-5에 연결: 저장소의 main을 0.0.33으로 release한다(core 0.0.46 옆). 입력: 패키지는 0.0.32를 선언하고 그 tag v0.0.32가 있으므로, release gate는 그 뒤의 commit을 release한다. 변경: crate, Cargo.lock, 패키지가 0.0.33을 선언한다. release는 S241의 owned session 동작, attach, session.ended 이벤트(S241-4)를 담는다.
 - [o] S241 — P1, core F1062-4에 연결: sidecar가 core의 owned session 동작에 응답한다(`docs/spec/vt-core.ko.md#owned-session-동작`): 크기를 받는 `open`, `resize`, `end`, 그리고 tab에 열린 session의 출력, 입력, resize를 넘기는 `attach`. 완료: S241-1부터 S241-3까지.
   - [o] S241-1 — P1, core F1062-4에 연결: owned session 동작을 명세에 적었다. 동작을 고르는 body, 기본 font로 크기를 cell로 바꾸는 규칙, 응답 body, 거부, `open`과 `end`의 멱등성을 포함한다.
   - [o] S241-2 — P1, core F1062-4에 연결: sidecar가 명세대로 owned session을 열고, 크기를 바꾸고, 끝낸다. Red: `vt-alacritty/tests/owned_sessions_test.rs`가 12개 중 8개 case에서 실패했다. surface open은 `invalidParams`로, `resize`는 `Unknown operation: resize`로 응답했다. Green: 같은 파일이 12/12 통과하고, `cargo test -p soksak-sidecar-vt-core --lib owned_sessions`가 5/5 통과하며(격자 계산과 실제 기본 font metrics), `serve_contract`가 161/161 통과하고, `-D warnings`를 붙인 clippy와 `cargo fmt --check`가 통과한다.
