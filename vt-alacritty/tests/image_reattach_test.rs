@@ -1,7 +1,8 @@
 // An image configured after a detach draws the later program output of its surface (docs/spec/vt-core.md#terminal-sidecar-vt-core),
 // judged on the real engine, a real PTY and a real shell (S261-1). The test is the host of the image region: it answers each drawn
-// frame with `consumed` at once and each frame request with a tick at once. Every wait ends on an output line of the sidecar; the
-// limit of .config/nextest.toml bounds a hung test.
+// frame with `consumed` at once and each frame request with a tick at once. Every wait ends on an output line of the sidecar and
+// counts no reads or time; the limit of .config/nextest.toml bounds a hung test, and each changed screen goes to stderr so that the
+// output of a hung test shows the screen it waited on.
 #[allow(dead_code)]
 #[path = "../src/engine.rs"]
 mod engine;
@@ -18,9 +19,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, Lines};
 
 /// The line that the shell prints after a delay, once the second image is configured.
 const MARKER: &str = "after-reload-marker";
-
-/// The number of screen reads that the test waits for a frame of the output before it fails.
-const READ_LIMIT: usize = 200;
 
 /// The sidecar of the test and the frames that the test, as its host, has answered.
 struct Hosted {
@@ -101,7 +99,7 @@ impl Hosted {
     }
 
     /// Reads lines of the surface until one satisfies `matches`: it answers each frame request with a tick and each drawn frame
-    /// with `consumed`, and keeps each drawn frame.
+    /// with `consumed`, and keeps each drawn frame, which `matches` also sees.
     async fn until(&mut self, matches: impl Fn(&Value) -> bool) -> Value {
         loop {
             let line = self
@@ -124,6 +122,9 @@ impl Hosted {
                     "name": image["name"], "generation": image["generation"], "raster": image["raster"], "sequence": image["sequence"]}}}});
                 self.frames.push(image.clone());
                 self.write(consumed).await;
+                if matches(&value) {
+                    return value;
+                }
                 continue;
             }
             if value["body"]["error"].is_string() {
@@ -166,14 +167,30 @@ impl Hosted {
             .collect()
     }
 
-    /// Reads the screen until a row satisfies `matches`, within the read limit.
+    /// Waits for the next drawn frame.
+    async fn next_frame(&mut self) {
+        self.until(|value| value["body"]["image"]["sequence"].is_u64())
+            .await;
+    }
+
+    /// Reads the screen until a row satisfies `matches`. A read that does not match waits for the next drawn frame, which
+    /// follows any later output, unless a frame arrived during the read, whose output the read may not show.
     async fn screen_until(&mut self, matches: impl Fn(&str) -> bool) {
-        for _ in 0..READ_LIMIT {
-            if self.screen().await.iter().any(|row| matches(row)) {
+        let mut shown: Vec<String> = Vec::new();
+        loop {
+            let drawn = self.frames.len();
+            let rows = self.screen().await;
+            if rows.iter().any(|row| matches(row)) {
                 return;
             }
+            if rows != shown {
+                eprintln!("screen: {rows:?}");
+                shown = rows;
+            }
+            if self.frames.len() == drawn {
+                self.next_frame().await;
+            }
         }
-        panic!("no row of the screen matched within {READ_LIMIT} reads");
     }
 }
 
@@ -191,7 +208,7 @@ async fn an_image_configured_after_a_detach_draws_later_shell_output() {
         .send(json!({"image": {"configure": {"name": "view", "generation": 1, "raster": 1, "width": 800, "height": 384, "scale": 1.0}}}))
         .await;
     while !hosted.frames.iter().any(|frame| frame["generation"] == 1) {
-        hosted.screen().await;
+        hosted.next_frame().await;
     }
 
     hosted
@@ -210,7 +227,7 @@ async fn an_image_configured_after_a_detach_draws_later_shell_output() {
         .send(json!({"image": {"configure": {"name": "view", "generation": 2, "raster": 1, "width": 800, "height": 384, "scale": 1.0}}}))
         .await;
     while !hosted.frames.iter().any(|frame| frame["generation"] == 2) {
-        hosted.screen().await;
+        hosted.next_frame().await;
     }
 
     hosted.type_line(&format!("sleep 0.5; echo {MARKER}")).await;
@@ -220,14 +237,8 @@ async fn an_image_configured_after_a_detach_draws_later_shell_output() {
     hosted.screen().await;
     hosted.count_from();
     hosted.screen_until(|row| row == MARKER).await;
-    for _ in 0..READ_LIMIT {
-        if hosted.frames.iter().any(|frame| frame["generation"] == 2) {
-            return;
-        }
-        hosted.screen().await;
+    eprintln!("waiting for a frame of generation 2 after the shell output");
+    while !hosted.frames.iter().any(|frame| frame["generation"] == 2) {
+        hosted.next_frame().await;
     }
-    panic!(
-        "the shell output after the configure of generation 2 drew no frame: {:?}",
-        hosted.frames
-    );
 }
