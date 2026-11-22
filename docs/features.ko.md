@@ -1,5 +1,6 @@
 # 기능
 
+- [ ] S256 — P0, S255의 후속: 버전은 0.0.42이다. crate, Cargo.lock, 패키지가 0.0.42를 선언한다. release v0.0.42가 darwin-arm64 asset과 함께 게시된다.
 - [o] S255 — P1: `vt-alacritty/tests/scroll_read_test.rs`의 `a_scroll_read_in_less_shows_the_later_lines_and_restores_the_screen`가 `make test`의 부하에서 통과한다. 입력: 전체 `make test` 실행. 동작: 세 번 중 한 번, 같은 offset의 두 번째 read가 less가 다시 그리기 전에 quiet로 settle해 scroll 전 화면(`line 0051` 대신 `line 0001`)을 답했다. 테스트만 돌린 `make repeat`는 30번 중 30번 통과했다. 원인: 테스트가 read의 각 frame request에 즉시 tick으로 답해서, input 뒤 6개 quiet tick이 display frame 없이 지나가 부하 아래 less가 그리기 전에 step을 끝냈다. sidecar는 tick이 display frame마다 오는 core docs/spec/terminal-read.md#draw-of-the-program-scroll을 따른다. 기대: read가 어떤 부하에서도 scroll의 다시 그리기에서 settle한다. 완료: S255-1.
   - [o] S255-1 — P1: less read의 test host가 각 step의 tick을 program이 그 step에서 그린 뒤에만 보내고(`scroll_read_after_draws`), 테스트가 두 step 모두 `quiet`를 요구한다. Red: tick을 즉시 보낸 `a_scroll_read_paced_by_the_draws_reads_a_program_that_draws_late`가 `drawn` 대신 `ready`를 답했다. Green: 새 테스트와 less 테스트가 각각 10번 중 10번 통과한다.
 - [o] S254 — P0, S252의 후속: 버전은 0.0.41이다. crate, Cargo.lock, 패키지가 0.0.41을 선언한다. release v0.0.41이 darwin-arm64 asset과 함께 게시되었다.
