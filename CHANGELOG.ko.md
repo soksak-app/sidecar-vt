@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S246-2: 버전이 0.0.36이므로 release run이 저장소의 main을 v0.0.36으로 낸다. S246-1의 owned session 응답을 담는다.
 - S246-1: 연결된 surface가 없는 동안 owned session의 engine이 program의 query에 byte 순서대로 응답하고, 연결된 surface는 재생한 버퍼를 응답 없이 보인다. Claude Code 2.1.330처럼 `OSC 7501;?`의 응답을 받은 뒤에만 OSC 7501을 보고하는 program이 이제 보고하고, owner는 `session.program`을 받는다. 검증: `an_owned_session_answers_the_status_query_before_the_device_attributes`(5초 안에 이벤트 없음)와 `an_attached_surface_does_not_answer_the_queries_of_the_replay`(재생에 응답하면 응답 1개 대신 2개)의 Red, 이어서 Green(`owned_sessions_test` 31개 중 31개).
 - S245-2: 버전이 0.0.35이므로 release run이 저장소의 main을 v0.0.35로 낸다. S245-1의 guard shell 줄 판단을 담는다.
 - S245-1: guard는 shell 줄의 입력만 판단한다. session이 shell을 시작했고, 그 OSC 133 terminal state가 `running`이 아니며, 대체 화면과 application keypad mode가 설정되지 않은 경우다(`guard::follows_shell_line`). owned session과 표면에 모두 적용된다. main screen에서 질문하는 agent CLI처럼 session이 시작한 program은 이제 `untracked` 거부 없이 화살표 key와 return을 받는다. 검증: 새 `owned_sessions_test` 사례 3개의 Red(`untracked`로 거부), 이어서 Green(29개 중 29개, `serve_contract` 161개 중 161개, `guard_test` 33개 중 33개).
