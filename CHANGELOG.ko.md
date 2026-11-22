@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S251-2: 버전이 0.0.40이므로 release run이 저장소의 main을 v0.0.40으로 낸다. S251-1의 `sessions` 항목별 program state가 들어 있다.
 - S251-1: `sessions` 응답의 각 항목은 session의 마지막 `session.program` 이벤트의 상태인 `idle`, `working`, `blocked` 또는 보낸 이벤트가 없으면 `null`인 `program`을 적는다. 그래서 다시 시작한 application이 idle session을 그 상태와 함께 adopt한다. 이전에는 변화만 보고하는 program 때문에 adopt한 session에 상태가 없었다. 검증: `sessions_lists_the_last_program_state_of_an_owned_session`과 `sessions` 나열 사례의 Red, 그 뒤 Green(`owned_sessions_test` 41개 중 41개, clippy와 fmt).
 - S249-2: 버전이 0.0.39이므로 release run이 저장소의 main을 v0.0.39로 낸다. S249-1의 attach 때 owned session 화면과 S250-1의 read 첫 행 line이 들어 있다.
 - S250-1: 범위 없는 owned session의 `read`는 `{from, rows, cursor}`로 응답한다. `from`은 범위 read의 번호로 센 첫 행의 absolute line number이므로, owner는 찾은 행 아래의 행이 화면을 떠난 뒤 읽는다. 검증: `read_without_a_range_answers_the_absolute_line_of_its_first_row`의 Red(`from` 없음), 그 뒤 Green(`owned_sessions_test` 40개 중 40개).

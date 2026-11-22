@@ -1,5 +1,6 @@
 # Changelog
 
+- S251-2: The version is 0.0.40, so the release run publishes the main of the repository as v0.0.40; it holds the program state of each `sessions` entry of S251-1.
 - S251-1: Each entry of the `sessions` answer lists `program`, the state of the last `session.program` event of the session, `idle`, `working` or `blocked`, or `null` while it sent none, so a restarted application adopts an idle session with its state; before, a program that reports only a change left the adopted session without a state. Verification: Red of `sessions_lists_the_last_program_state_of_an_owned_session` and of the `sessions` listing case, then Green (`owned_sessions_test` 41 of 41, clippy and fmt).
 - S249-2: The version is 0.0.39, so the release run publishes the main of the repository as v0.0.39; it holds the screen of an owned session at attach of S249-1 and the line of the first row of a read of S250-1.
 - S250-1: `read` of an owned session without a range answers `{from, rows, cursor}`, where `from` is the absolute line number of the first row in the numbering of the ranged read, so the owner reads the rows below a row it found after they leave the screen. Verification: Red of `read_without_a_range_answers_the_absolute_line_of_its_first_row` (no `from`), then Green (`owned_sessions_test` 40 of 40).
