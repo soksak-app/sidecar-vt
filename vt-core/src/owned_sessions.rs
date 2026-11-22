@@ -571,6 +571,7 @@ fn read_range(body: &Value) -> Result<Option<(u64, u32)>, String> {
             let from = from.as_u64();
             let count = count
                 .and_then(Value::as_u64)
+                // silent: a count that does not fit is refused by the error that follows.
                 .and_then(|count| u32::try_from(count).ok())
                 .filter(|count| (1..=SCREEN_ROWS_COUNT_MAX).contains(count));
             match (from, count) {
