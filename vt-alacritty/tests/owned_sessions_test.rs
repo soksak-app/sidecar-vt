@@ -1029,3 +1029,90 @@ async fn read_refuses_an_invalid_range_with_an_explicit_error() {
     assert!(error.contains("outside"), "unexpected refusal: {error}");
     assert!(body.get("rows").is_none(), "a refusal carries rows: {body}");
 }
+
+/// A program that prints, at each line of its input, the columns of its terminal and a row of that many `x`.
+fn width_params() -> Value {
+    shell_params(
+        "while read line; do cols=$(stty size | cut -d' ' -f2); echo cols$cols; i=0; row=; while [ $i -lt $cols ]; do row=${row}x; i=$((i+1)); done; echo $row; done",
+    )
+}
+
+#[tokio::test]
+async fn a_session_resized_through_a_surface_of_another_font_reads_the_rows_that_its_program_drew()
+{
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service.open_session("o1", "c1", width_params()).await;
+    // The surface draws an image with a font smaller than the default font, so its grid holds more columns than the grid of
+    // the default font for the same size.
+    service
+        .send("t1", "g1", json!({"image": {"configure": {"name": "view", "generation": 1, "raster": 1, "width": 800, "height": 400, "scale": 2.0}}}))
+        .await;
+    service
+        .send(
+            "t1",
+            "f1",
+            json!({"operation": "font", "family": "Menlo", "size": 8}),
+        )
+        .await;
+    let font = service.reply("f1").await;
+    assert_eq!(font["event"], "font", "the font was refused: {font}");
+    assert_eq!(service.attach("t1", "a1", &session).await["attached"], true);
+    service
+        .send(
+            "o1",
+            "z1",
+            json!({"operation": "resize", "session": session, "size": size(600.0, 300.0, 2.0)}),
+        )
+        .await;
+    assert_eq!(service.reply("z1").await["session"], session.as_str());
+    let mut body = Value::Null;
+    let mut drawn = None;
+    for attempt in 0..50 {
+        service
+            .send(
+                "o1",
+                &format!("i{attempt}"),
+                json!({"operation": "input", "session": session, "text": "\r"}),
+            )
+            .await;
+        service.reply(&format!("i{attempt}")).await;
+        body = service.read_until("o1", &session, "cols").await;
+        let rows: Vec<String> = body["rows"]
+            .as_array()
+            .expect("the reply has rows")
+            .iter()
+            .map(|row| row.as_str().expect("a row is a text").to_string())
+            .collect();
+        // The width of the last report, once the resize reached the program (a report wider than the default grid).
+        let last = rows.iter().rposition(|row| row.starts_with("cols"));
+        if let Some(index) = last
+            && let Ok(cols) = rows[index][4..].parse::<usize>()
+            && index + 1 < rows.len()
+            && !rows[index + 1].is_empty()
+        {
+            drawn = Some((
+                cols,
+                rows[index + 1].clone(),
+                rows.get(index + 2).cloned().unwrap_or_default(),
+            ));
+            if cols > 60 {
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let (cols, row, next) = drawn.unwrap_or_else(|| panic!("the program drew no width: {body}"));
+    assert!(
+        cols > 60,
+        "the resize did not reach the program at the grid of the surface: {body}"
+    );
+    assert_eq!(
+        row,
+        "x".repeat(cols),
+        "the session wrapped the row of {cols} columns: {body}"
+    );
+    assert!(
+        !next.starts_with('x'),
+        "the session wrapped the row of {cols} columns: {body}"
+    );
+}

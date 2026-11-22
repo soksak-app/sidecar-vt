@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S248-2: owned session의 engine은 PTY의 격자를 가진다. attach는 surface의 cell metrics로 격자를 계산하고, 연결된 surface의 모든 PTY resize가 session의 engine도 resize하므로 `read`는 program이 그린 자리의 행을 답한다. 이전에는 작은 font의 surface가 PTY를 자기 격자로 정하는 동안 session의 engine은 기본 font의 격자를 유지했고, 120열의 행이 50, 50, 20열의 행으로 읽혔다. 검증: `a_session_resized_through_a_surface_of_another_font_reads_the_rows_that_its_program_drew`의 Red, 그 뒤 Green(37개 중 37개).
 - S248-1: `from`과 `count`를 가진 owned session의 `read`는 `screen.read`의 absolute line number로 센 primary screen의 retained rows 텍스트 `{from, count, rows}`로 응답한다. from 없는 count, count 없는 from, 1부터 200 밖의 count, retained rows 밖의 범위는 명시적인 오류로 거부한다. 이전에는 sidecar가 두 member를 무시하고 viewport로 응답했다. 검증: 새 read 사례 두 개의 Red(viewport 응답), 그 뒤 Green(`owned_sessions_test` 36개 중 36개).
 - S247-2: 버전이 0.0.37이므로 release run이 저장소의 main을 v0.0.37로 낸다. S247-1의 `sessions` 응답과 고유한 session 식별자가 들어 있다.
 - S247-1: service가 `{operation: "sessions", request}`에 열린 owned session마다 `{session, surface, root, creation, size}`로 응답하므로, 다시 시작한 application이 service가 유지한 session을 adopt한다. session 식별자는 무작위 version 4 UUID를 쓴 `owned-<uuid>`이므로, 새 service process가 이전 service process의 session 식별자를 갖지 않는다. 검증: `owned_sessions_test.rs`의 새 사례 세 개의 Red, 34개 중 34개 Green, clippy와 `sok-check events`.

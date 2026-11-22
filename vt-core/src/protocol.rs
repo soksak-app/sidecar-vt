@@ -5724,7 +5724,7 @@ async fn surface_task(
                             if output_tx.reply(response).await.is_err() { return; }
                             continue;
                         }
-                        match crate::owned_sessions::attach(&registry.owned, &session, &surface_id, own, &log).await {
+                        match crate::owned_sessions::attach(&registry.owned, &session, &surface_id, image_state.as_ref().map(|state| (state.metrics.cell_width, state.metrics.cell_height)), own, &log).await {
                             Ok(attachment) => {
                                 engine.resize(attachment.columns, attachment.rows);
                                 inputs.resized(Some(&attachment.pty), attachment.rows, attachment.columns);

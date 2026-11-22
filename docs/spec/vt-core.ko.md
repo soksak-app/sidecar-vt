@@ -253,7 +253,7 @@ owned session의 program 상태가 바뀌면 sidecar는 owner의 연결로 `{sur
 
 tab은 tab의 surface에서 `{operation: "attach", session}` 요청으로 owned session에 연결한다. attach에는 font가 필요 없다. view는 설정을 configure로 보내고, configure가 session의 격자를 다시 정한다. 응답은 `{session, attached: true}`다. session에는 연결된 surface가 하나만 있다. 다른 살아 있는 surface가 보이는 session에 대한 attach는 `session <id> is shown by surface <surface>`로 거부한다. 연결된 surface는 자체 session처럼 session의 출력을 받고 입력은 session으로 간다. 그 surface의 end나 close(`closed`)는 연결을 끊지만 session은 열린 채로 남는다. 연결된 session의 `resize`는 연결된 surface의 격자도 바꾼다. attach는 session의 버퍼를 재생하므로 surface는 attach 전에 session이 가진 화면을 보인다.
 
-attach 시점의 cell metrics는 surface가 설정을 configure하기 전까지 기본 font를 쓴다.
+session의 engine은 항상 session PTY의 격자를 가진다. 그래서 `read`가 답하는 행은 program이 그린 자리에서 줄바꿈된다. attach는 session의 마지막 크기와 surface의 cell metrics로 격자를 계산하고(surface가 image를 그리지 않으면 기본 font의 metrics), 그 격자를 PTY와 session의 engine에 정한다. surface가 연결된 동안 surface가 PTY를 resize할 때마다(owner의 `resize`, configure, font 변경) session engine의 격자도 같이 정한다.
 
 
 ### 터미널 검증

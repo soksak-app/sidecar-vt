@@ -251,7 +251,7 @@ When the program status of an owned session changes its state, the sidecar sends
 
 An owned session is attached by a tab with the request `{operation: "attach", session}` on the tab's surface. Attach needs no font: the view then sends its settings through its configure, and the configure resizes the session with its grid. The reply is `{session, attached: true}`. A session has at most one attached surface: an attach of a session that another live surface shows is refused with `session <id> is shown by surface <surface>`. The attached surface receives the output of the session as its own session does, and its input goes to the session. Its end or close (`closed`) detaches it and leaves the session open. A `resize` of an attached session also resizes the attached surface's grid. The attach replays the buffer of the session, so a surface shows the screen that the session held before the attach.
 
-Cell metrics at attach use the default font until the surface configures its settings.
+The engine of the session always holds the grid of the PTY of the session, so its rows, which `read` answers, wrap where the program drew them. The attach computes the grid from the last size of the session with the cell metrics of the surface, or of the default font when the surface draws no image, and sets it on the PTY and on the engine of the session. While a surface is attached, every resize of the PTY that the surface makes, at a `resize` of the owner, a configure or a font change, also sets the grid of the engine of the session.
 
 
 ### Terminal verification

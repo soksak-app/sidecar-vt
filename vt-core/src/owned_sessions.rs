@@ -8,9 +8,11 @@ use crate::guard::{self, LineInput};
 use crate::platform::{Metrics, default_font, metrics_for};
 use crate::program_status::{MAX_RECORDS, ProgramStatusTracker, program_state};
 use crate::protocol::{
-    DEFAULT_FONT_SIZE, DaemonEvent, Dispatch, Engine, EngineEvent, OutputSink, RowScreen,
-    SCREEN_ROWS_COUNT_MAX, SessionPort, ShellRequest, open_launch, screen_text, session_resize,
+    DEFAULT_FONT_SIZE, DaemonEvent, Dispatch, Engine, EngineEvent, OutputSink, Processes,
+    RowScreen, SCREEN_ROWS_COUNT_MAX, SessionPort, ShellRequest, open_launch, screen_text,
+    session_resize,
 };
+use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -76,7 +78,8 @@ type SinkCell = Arc<tokio::sync::Mutex<Option<OutputSink>>>;
 
 /// The commands that the task of a session receives from the service.
 enum Control {
-    /// The grid of the engine of the session, while no surface shows it.
+    /// The grid of the engine of the session: each resize of the PTY of the session sets it, so the engine wraps the output at
+    /// the width that the program draws for.
     Resize(u16, u16),
     /// The text of an `input` (`paste` false) or a `paste` of the owner. The task judges it with the line guard and the modes of
     /// the engine, and answers the bytes to write, or the error body of a refusal.
@@ -600,12 +603,15 @@ async fn read(
         .map_err(|_| format!("session {session} is not open"))?
 }
 
-/// Attaches a surface to an open session. The surface takes the output, the grid of the default font and the input of the
-/// session; `surface` is the name of the surface and `commands` its command channel, which receives the sizes of the owner.
+/// Attaches a surface to an open session. The surface takes the output, the grid and the input of the session; the grid is
+/// the size of the session in the cells of `metrics`, the cell size of the surface, or of the default font when the surface
+/// has none. `surface` is the name of the surface and `commands` its command channel, which receives the sizes of the owner.
+/// The port of the attachment applies each resize of the PTY to the engine of the session as well.
 pub(crate) async fn attach(
     sessions: &tokio::sync::Mutex<OwnedSessions>,
     session: &str,
     surface: &str,
+    metrics: Option<(f32, f32)>,
     commands: mpsc::Sender<Dispatch>,
     log: &Events,
 ) -> Result<Attached, String> {
@@ -616,8 +622,14 @@ pub(crate) async fn attach(
     {
         return Err(format!("session {session} is shown by surface {shown}"));
     }
-    let metrics = default_cell_metrics(entry.size.scale)?;
-    let (columns, rows) = grid(entry.size, metrics.cell_width, metrics.cell_height)?;
+    let (cell_width, cell_height) = match metrics {
+        Some(metrics) => metrics,
+        None => {
+            let metrics = default_cell_metrics(entry.size.scale)?;
+            (metrics.cell_width, metrics.cell_height)
+        }
+    };
+    let (columns, rows) = grid(entry.size, cell_width, cell_height)?;
     let port = entry
         .port
         .clone()
@@ -644,13 +656,62 @@ pub(crate) async fn attach(
         .map_err(|_| format!("session {session} is not open"))??;
     entry.shown_by = Some((surface.to_string(), commands));
     Ok(Attached {
-        port,
+        port: Arc::new(AttachedPort {
+            port,
+            control: control.clone(),
+        }),
         pty: entry.pty.clone(),
         columns,
         rows,
         events,
         starts_shell: entry.starts_shell,
     })
+}
+
+/// The port of an attached surface: the port of the session, whose resize also sets the grid of the engine of the session,
+/// so the engine of the session holds the grid of the PTY while a surface sets it.
+struct AttachedPort {
+    port: Arc<dyn SessionPort>,
+    control: mpsc::UnboundedSender<Control>,
+}
+
+#[async_trait]
+impl SessionPort for AttachedPort {
+    async fn open(&self, request: &ShellRequest, cols: u16, rows: u16) -> Result<String, String> {
+        self.port.open(request, cols, rows).await
+    }
+    async fn write(
+        &self,
+        session_id: &str,
+        origin: crate::pty::WriteOrigin,
+        data: Arc<[u8]>,
+    ) -> Result<crate::pty::WriteCompletion, String> {
+        self.port.write(session_id, origin, data).await
+    }
+    async fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
+        self.port.resize(session_id, cols, rows).await?;
+        self.control
+            .send(Control::Resize(cols, rows))
+            .map_err(|_| format!("the task of session {session_id} has ended"))
+    }
+    async fn close(&self, session_id: &str) -> Result<(), String> {
+        self.port.close(session_id).await
+    }
+    async fn pty_measurement(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::pty::PtyMeasurement, String> {
+        self.port.pty_measurement(session_id).await
+    }
+    async fn get_events(&self) -> mpsc::Receiver<DaemonEvent> {
+        self.port.get_events().await
+    }
+    fn processes(&self, session_id: &str) -> Result<Processes, String> {
+        self.port.processes(session_id)
+    }
+    fn process_surface(&self, pid: u32) -> Result<Option<crate::pty::SurfaceProcess>, String> {
+        self.port.process_surface(pid)
+    }
 }
 
 /// The plain text of a row of cells, as `screen_text` reads the rows of the viewport.
