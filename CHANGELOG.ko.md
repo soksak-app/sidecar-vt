@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S247-2: 버전이 0.0.37이므로 release run이 저장소의 main을 v0.0.37로 낸다. S247-1의 `sessions` 응답과 고유한 session 식별자가 들어 있다.
 - S247-1: service가 `{operation: "sessions", request}`에 열린 owned session마다 `{session, surface, root, creation, size}`로 응답하므로, 다시 시작한 application이 service가 유지한 session을 adopt한다. session 식별자는 무작위 version 4 UUID를 쓴 `owned-<uuid>`이므로, 새 service process가 이전 service process의 session 식별자를 갖지 않는다. 검증: `owned_sessions_test.rs`의 새 사례 세 개의 Red, 34개 중 34개 Green, clippy와 `sok-check events`.
 - S246-2: 버전이 0.0.36이므로 release run이 저장소의 main을 v0.0.36으로 낸다. S246-1의 owned session 응답을 담는다.
 - S246-1: 연결된 surface가 없는 동안 owned session의 engine이 program의 query에 byte 순서대로 응답하고, 연결된 surface는 재생한 버퍼를 응답 없이 보인다. Claude Code 2.1.330처럼 `OSC 7501;?`의 응답을 받은 뒤에만 OSC 7501을 보고하는 program이 이제 보고하고, owner는 `session.program`을 받는다. 검증: `an_owned_session_answers_the_status_query_before_the_device_attributes`(5초 안에 이벤트 없음)와 `an_attached_surface_does_not_answer_the_queries_of_the_replay`(재생에 응답하면 응답 1개 대신 2개)의 Red, 이어서 Green(`owned_sessions_test` 31개 중 31개).
