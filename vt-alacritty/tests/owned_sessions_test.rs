@@ -42,16 +42,28 @@ fn start_service_logging(
     owner: &str,
     folder: &std::path::Path,
 ) -> Service {
-    let events: Events = Arc::new(
-        EventLog::start(Options::service(
-            folder.to_path_buf(),
-            format!("owned-sessions-{}", std::process::id()),
-        ))
-        .expect("start the writer of the events"),
+    start_service_with(registry, owner, folder, None).0
+}
+
+/// Starts the service of `start_service` with its events in `folder` under the policy file `policy`, or the default policy, and returns
+/// the writer of its events, which the test flushes before it reads the files of `folder`.
+fn start_service_with(
+    registry: Arc<PersistentRegistry>,
+    owner: &str,
+    folder: &std::path::Path,
+    policy: Option<std::path::PathBuf>,
+) -> (Service, Events) {
+    let mut options = Options::service(
+        folder.to_path_buf(),
+        format!("owned-sessions-{}", std::process::id()),
     );
+    options.policy_file = policy;
+    let events: Events =
+        Arc::new(EventLog::start(options).expect("start the writer of the events"));
     let (to_serve, serve_in) = tokio::io::duplex(1 << 20);
     let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
     let engine_factory = Arc::new(|| Box::new(AlacrittyEngine::new()) as Box<dyn Engine>);
+    let writer = events.clone();
     let port_events = events.clone();
     let factory = Arc::new(move || {
         Arc::new(LocalSessionPort::new_with_owner(
@@ -72,12 +84,15 @@ fn start_service_logging(
         factory,
         owner,
     ));
-    Service {
-        to_serve,
-        lines: BufReader::new(from_serve).lines(),
-        _task: task,
-        _logs: None,
-    }
+    (
+        Service {
+            to_serve,
+            lines: BufReader::new(from_serve).lines(),
+            _task: task,
+            _logs: None,
+        },
+        writer,
+    )
 }
 
 impl Service {
@@ -1423,4 +1438,70 @@ async fn the_close_of_a_surface_whose_session_ended_answers_closed_without_an_er
         })
         .await;
     assert_eq!(closed, json!({"surface": "t1", "closed": true}));
+}
+
+// An input of a surface that shows an owned session is recorded with the surface, the terminal session that receives it, the owned
+// session and the correlation identifier of the request, and the attach of the surface is recorded with the surface and the sessions,
+// so a query names the session that each input of a view reached.
+#[tokio::test]
+async fn the_attach_and_each_input_of_a_surface_record_the_session_that_they_reach() {
+    let folder = tempfile::tempdir().expect("create the folder of the events");
+    let policy = folder.path().join("log-policy.json");
+    std::fs::write(
+        &policy,
+        json!({"schema": 1, "classes": {"lifecycle": "debug", "input": "debug", "call": "error", "io": "error", "frame": "error"}}).to_string(),
+    )
+    .expect("write the policy file");
+    let logs = folder.path().join("logs");
+    let (mut service, events) =
+        start_service_with(PersistentRegistry::new(), "o1", &logs, Some(policy));
+    let session = service.open_session("o1", "c1", cat_params()).await;
+    assert_eq!(service.attach("t1", "a1", &session).await["attached"], true);
+    service
+        .send(
+            "t1",
+            "i1",
+            json!({"operation": "input", "actions": [{"type": "insert", "text": "x", "replacementRange": null, "attributed": false}],
+                "preedit": {"text": "", "markedRange": null, "selectedRange": null, "replacementRange": null, "attributed": false}}),
+        )
+        .await;
+    // The actor handles the requests of a surface in order, so the reply of a repeated attach follows the handling of the input.
+    assert_eq!(service.attach("t1", "a2", &session).await["attached"], true);
+    events.flush(REPLY_TIMEOUT).expect("flush the events");
+    let records: Vec<Value> = std::fs::read_dir(&logs)
+        .expect("read the folder of the events")
+        .flatten()
+        .filter(|file| file.path().extension().is_some_and(|extension| extension == "jsonl"))
+        .flat_map(|file| {
+            std::fs::read_to_string(file.path())
+                .expect("read a file of the events")
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).expect("an event line is JSON"))
+                .collect::<Vec<_>>()
+        })
+        .filter(|event| event["event"] == "sidecar.vt.surface_attached" || event["event"] == "sidecar.vt.input_routed")
+        .map(|event| json!({"event": event["event"], "surface": event["surface"], "session": event["session"], "cids": event["cids"], "fields": event["fields"]}))
+        .collect();
+    let attached = records
+        .iter()
+        .find(|record| record["event"] == "sidecar.vt.surface_attached")
+        .expect("the attach was not recorded");
+    assert_eq!(attached["surface"], "t1");
+    assert_eq!(attached["fields"], json!({"owned": session}));
+    let terminal = attached["session"]
+        .as_str()
+        .expect("the attach names the terminal session")
+        .to_string();
+    let routed: Vec<&Value> = records
+        .iter()
+        .filter(|record| record["event"] == "sidecar.vt.input_routed")
+        .collect();
+    assert_eq!(routed.len(), 1, "{records:?}");
+    assert_eq!(routed[0]["surface"], "t1");
+    assert_eq!(routed[0]["session"], terminal.as_str());
+    assert_eq!(routed[0]["cids"], json!(["i1"]));
+    assert_eq!(
+        routed[0]["fields"],
+        json!({"kind": "input", "owned": session})
+    );
 }

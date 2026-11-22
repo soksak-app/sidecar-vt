@@ -5026,6 +5026,7 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::InputTransaction { actions, preedit: next_preedit, cids, request } => {
+                        record_input_route(&log, &surface_id, session_id.as_deref(), attached_session.as_deref(), "input", &cids);
                         if let Some(read) = scroll_read.take() {
                             let response = scroll_read_error(&surface_id, "scrollReadInterrupted", "the input request of the person reached the session during the scroll read".to_string());
                             if read.reply.reply(response).await.is_err() { return; }
@@ -5130,6 +5131,7 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::Paste { text, cids } => {
+                        record_input_route(&log, &surface_id, session_id.as_deref(), attached_session.as_deref(), "paste", &cids);
                         if let Some(read) = scroll_read.take() {
                             let response = scroll_read_error(&surface_id, "scrollReadInterrupted", "the paste request of the person reached the session during the scroll read".to_string());
                             if read.reply.reply(response).await.is_err() { return; }
@@ -5776,6 +5778,12 @@ async fn surface_task(
                                 attached = true;
                                 attached_session = Some(session.clone());
                                 daemon_events_rx = attachment.events;
+                                log.emit_for(
+                                    Level::Info,
+                                    "sidecar.vt.surface_attached",
+                                    Subject { surface: Some(&surface_id), session: session_id.as_deref(), cids: &[] },
+                                    &json!({"owned": session}),
+                                );
                                 let response = json!({"surface": surface_id, "body": {"session": session, "attached": true}});
                                 if output_tx.reply(response).await.is_err() { return; }
                             }
@@ -7910,6 +7918,29 @@ struct RequestFields<'a> {
     idle_us: u64,
     us: u64,
     body: &'a RequestBody<'a>,
+}
+
+/// Writes `sidecar.vt.input_routed` for an input or a paste of a surface with the session that receives it, the owned session that the
+/// surface shows when it shows one, and the correlation identifiers of the request, so a query joins each input of a view with the
+/// session that it reached.
+fn record_input_route(
+    log: &crate::events::Events,
+    surface: &str,
+    session: Option<&str>,
+    owned: Option<&str>,
+    kind: &str,
+    cids: &[String],
+) {
+    log.emit_for(
+        Level::Debug,
+        "sidecar.vt.input_routed",
+        Subject {
+            surface: Some(surface),
+            session,
+            cids,
+        },
+        &json!({"kind": kind, "owned": owned}),
+    );
 }
 
 impl Drop for RequestTrace<'_> {

@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S263: surface의 각 input과 paste가 surface, terminal session, cids, owned session과 함께 `sidecar.vt.input_routed`를 쓰고, owned session의 각 attach가 `sidecar.vt.surface_attached`를 쓰므로, view의 input이 들어간 session을 log에서 읽는다. Verification: `the_attach_and_each_input_of_a_surface_record_the_session_that_they_reach`의 Red(`the attach was not recorded`) 뒤 Green.
 - S261-2: S261-1의 image reattach 테스트의 각 wait가 screen read 200번 대신 sidecar의 그려진 frame에서 끝난다. CI machine에서는 shell이 그리기 전에 그 200번이 끝났다(`no row of the screen matched within 200 reads`). 검증: S261의 수정을 뺀 Red(`TIMEOUT [60.010s]`), 그 다음 Green(10번 중 10번, load에서 5번 중 5번).
 - S262: 버전이 0.0.45이므로 release run이 저장소의 main을 v0.0.45로 낸다. S261의 detach 뒤 configure가 만드는 image mode가 들어 있다.
 - S261-1: detach 뒤의 configure가 만드는 image mode를 real engine, real PTY, real shell에서 판정한다. `vt-alacritty/tests/image_reattach_test.rs`가 image를 detach하고 generation 2를 configure한 뒤 shell이 지연 후 한 줄을 출력하게 하고, 그 출력 뒤에 generation 2의 frame을 요구한다. 검증: S261의 `headless = false` 두 줄을 뺀 상태에서 `an_image_configured_after_a_detach_draws_later_shell_output`의 Red(`the shell output after the configure of generation 2 drew no frame: []`), 그 다음 Green.

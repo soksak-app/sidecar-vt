@@ -53,6 +53,53 @@
       },
       "description": "A client authenticated; owner is the name it gave."
     },
+    "sidecar.vt.input_routed": {
+      "layer": "sidecar",
+      "class": "input",
+      "level": "debug",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "input",
+              "paste"
+            ]
+          },
+          "owned": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "owned"
+        ]
+      },
+      "description": "An input or a paste request of a surface reached the surface actor; the line names the surface, the session that receives the bytes (none while the surface has no session) and the correlation identifiers of the request, and owned names the owned session that the surface shows, null for a session of its own."
+    },
+    "sidecar.vt.surface_attached": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "owned": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "owned"
+        ]
+      },
+      "description": "A surface attached the owned session owned; the line names the surface and the terminal session of the owned session, whose frames, inputs and size the surface then carries."
+    },
     "sidecar.vt.session_open": {
       "layer": "sidecar",
       "class": "lifecycle",
