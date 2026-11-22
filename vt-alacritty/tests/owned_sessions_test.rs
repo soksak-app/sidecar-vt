@@ -674,3 +674,41 @@ async fn paste_writes_the_text_to_the_session_of_its_owner() {
         "the paste did not reach the session: {body}"
     );
 }
+
+#[tokio::test]
+async fn the_program_state_of_an_owned_session_goes_to_its_owner() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let script = "printf '\\033]7501;state=working\\007'; sleep 1; printf '\\033]7501;state=blocked:kind=permission\\007'; sleep 1; printf '\\033]7501;state=blocked:kind=permission\\007'; exec cat";
+    let session = service.open_session("o1", "c1", shell_params(script)).await;
+    let first = service
+        .line_where("the first session.program event", |value| {
+            value["body"]["event"] == "session.program"
+        })
+        .await;
+    assert_eq!(first["surface"], "o1");
+    assert_eq!(
+        first["body"],
+        json!({"event": "session.program", "session": session, "state": "working"})
+    );
+    let second = service
+        .line_where("the second session.program event", |value| {
+            value["body"]["event"] == "session.program"
+        })
+        .await;
+    assert_eq!(
+        second["body"],
+        json!({"event": "session.program", "session": session, "state": "blocked"})
+    );
+    // The repeated blocked report leaves the state unchanged, so no further event arrives during the wait.
+    let repeated = tokio::time::timeout(
+        Duration::from_secs(2),
+        service.line_where("a repeated session.program event", |value| {
+            value["body"]["event"] == "session.program"
+        }),
+    )
+    .await;
+    assert!(
+        repeated.is_err(),
+        "a repeated state sent an event: {repeated:?}"
+    );
+}

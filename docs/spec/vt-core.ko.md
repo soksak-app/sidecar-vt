@@ -248,6 +248,8 @@ core는 owned session 메시지를 [persistent services](https://github.com/soks
 
 owned session의 shell 또는 program이 끝나면 session은 끝난다. sidecar는 PTY를 닫고, owner의 연결로 `{surface: <owner surface>, body: {event: "session.ended", session, reason: "ended"}}` 이벤트를 보내며(owner surface의 일반 surface 이벤트이고 core가 읽는다), 그 뒤의 `resize`, `end`, `attach`에는 `session <id> is not open`으로 응답한다. sidecar는 session의 출력을 1 MiB 버퍼에 보관하며, 가득 차면 가장 오래된 byte부터 버리고 버린 기록을 service log에 쓴다. 연결하는 tab은 그 버퍼를 재생한다.
 
+owned session의 program 상태가 바뀌면 sidecar는 owner의 연결로 `{surface: <owner surface>, body: {event: "session.program", session, state}}` 이벤트를 보낸다. `state`는 `idle`, `working`, `blocked` 중 하나다. 상태는 tab session과 같은 program 상태 추적에서 나온다. 즉 program이 보낸 OSC 7501 record와 notification이며([program state](https://github.com/soksak-app/core/blob/main/docs/spec/program-state.ko.md)), `blocked` record가 있으면 `blocked`, 그렇지 않고 `working` record가 있으면 `working`, 그렇지 않고 `idle` 또는 `done` record가 있고 `error` record가 없으면 `idle`이다. record가 없거나 실패한 record만 있는 session처럼 이 상태 중 어느 것도 주지 않으면 이벤트를 보내지 않고 마지막으로 보낸 상태를 유지한다. 상태는 마지막으로 보낸 상태와 다를 때만 보낸다. sidecar는 program 상태를 정하려고 출력, 제목, 화면을 읽지 않는다.
+
 tab은 tab의 surface에서 `{operation: "attach", session}` 요청으로 owned session에 연결한다. attach에는 font가 필요 없다. view는 설정을 configure로 보내고, configure가 session의 격자를 다시 정한다. 응답은 `{session, attached: true}`다. session에는 연결된 surface가 하나만 있다. 다른 살아 있는 surface가 보이는 session에 대한 attach는 `session <id> is shown by surface <surface>`로 거부한다. 연결된 surface는 자체 session처럼 session의 출력을 받고 입력은 session으로 간다. 그 surface의 end나 close(`closed`)는 연결을 끊지만 session은 열린 채로 남는다. 연결된 session의 `resize`는 연결된 surface의 격자도 바꾼다. attach는 session의 버퍼를 재생하므로 surface는 attach 전에 session이 가진 화면을 보인다.
 
 attach 시점의 cell metrics는 surface가 설정을 configure하기 전까지 기본 font를 쓴다.

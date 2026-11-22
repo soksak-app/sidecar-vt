@@ -1,5 +1,6 @@
 # Changelog
 
+- S244-2: The sidecar sends `session.program` with `idle`, `working` or `blocked` to the owner of an owned session on each change of the state of its records, from the OSC 7501 records and the notifications of the program, as a tab session tracks it; a session whose records give no such state sends nothing. Verification: Red of `the_program_state_of_an_owned_session_goes_to_its_owner` (no event within 5 s), then Green (26 of 26).
 - S244-1: The sidecar answers `input`, `paste` and `read` of an owned session: `input` and `paste` judge their text with the guard of the surface input and write it to the program, and `read` answers `{rows, cursor}`. Verification: Red of the new cases of `owned_sessions_test` (5 failed), then Green (25 of 25).
 - S243: The owned-session code passes `sok-check events`: the default of an absent `params` carries the reason that the spec states, and the `size` echo is an explicit error rather than a default. The release of 0.0.33 failed at this check, so no tag was made. Verification: `make test` exits 0 and `owned_sessions_test` passes 20 of 20.
 - S242: The version is 0.0.33, so the release run publishes the main of the repository as v0.0.33; it holds the owned-session operations, the attach request and the session.ended event of S241.

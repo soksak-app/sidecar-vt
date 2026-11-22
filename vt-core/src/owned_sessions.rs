@@ -3,12 +3,13 @@
 // engine of its own and a buffer of the latest output, so a tab that attaches replays the screen the session held. While a
 // tab shows the session, the surface of the tab draws it and its configure sets the grid.
 use crate::encoding;
-use crate::events::Events;
+use crate::events::{Events, Level, Subject};
 use crate::guard::{self, LineInput};
 use crate::platform::{Metrics, default_font, metrics_for};
+use crate::program_status::{MAX_RECORDS, ProgramStatusTracker, program_state};
 use crate::protocol::{
-    DEFAULT_FONT_SIZE, DaemonEvent, Dispatch, Engine, OutputSink, SessionPort, ShellRequest,
-    open_launch, screen_text, session_resize,
+    DEFAULT_FONT_SIZE, DaemonEvent, Dispatch, Engine, EngineEvent, OutputSink, SessionPort,
+    ShellRequest, open_launch, screen_text, session_resize,
 };
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
@@ -317,6 +318,8 @@ async fn open(
         FeedContext {
             table: shared,
             session: session.clone(),
+            owner: owner.to_string(),
+            sink: Arc::clone(&sink),
         },
     ));
     table.next += 1;
@@ -589,13 +592,16 @@ async fn feed_engine(
     let table = Arc::clone(&context.table);
     let mut replay: VecDeque<u8> = VecDeque::new();
     let mut forward: Option<mpsc::Sender<DaemonEvent>> = None;
+    let mut program = ProgramStatusTracker::default();
+    let mut program_state_sent: Option<&'static str> = None;
     let mut line_guard = guard::LineGuard::default();
     loop {
         tokio::select! {
             event = events.recv() => match event {
                 Some(DaemonEvent::Output { session_id, data }) if session_id == pty => {
                     engine.feed(&data);
-                    let _ = engine.drain_events();
+                    let events = engine.drain_events();
+                    follow_program(events, &mut program, &mut program_state_sent, &context, &pty, &log).await;
                     replay.extend(data.iter().copied());
                     let excess = replay.len().saturating_sub(REPLAY_LIMIT);
                     if excess > 0 {
@@ -708,6 +714,8 @@ async fn notify_ended(table: Arc<tokio::sync::Mutex<OwnedSessions>>, session: St
 struct FeedContext {
     table: Arc<tokio::sync::Mutex<OwnedSessions>>,
     session: String,
+    owner: String,
+    sink: SinkCell,
 }
 
 /// Judges the text of an `input` or a `paste` as the input of a surface judges its own (guard.rs): on a shell line the guard
@@ -773,6 +781,71 @@ fn line_inputs_of_text(text: &str) -> Vec<LineInput<'_>> {
         inputs.push(LineInput::Text(&text[start..]));
     }
     inputs
+}
+
+/// Applies the engine events of one output to the program status of the session. When the records change, the state that
+/// the records give is sent to the owner as `session.program` if it differs from the state sent last (core
+/// docs/spec/persistent-services.md#owned-sessions). The status is read from the records only, so a session whose records
+/// give no state sends nothing.
+async fn follow_program(
+    events: Vec<EngineEvent>,
+    program: &mut ProgramStatusTracker,
+    state_sent: &mut Option<&'static str>,
+    context: &FeedContext,
+    pty: &str,
+    log: &Events,
+) {
+    let FeedContext {
+        session,
+        owner,
+        sink,
+        ..
+    } = context;
+    for event in events {
+        let change = match &event {
+            EngineEvent::ShellState { marker, params } => program.mark(pty, *marker, params),
+            other => program.apply(pty, other),
+        };
+        let Some(change) = change else {
+            continue;
+        };
+        for id in &change.evicted {
+            log.emit_for(
+                Level::Warn,
+                "sidecar.vt.program.status.evicted",
+                Subject::session(pty, &[]),
+                &json!({"id": id, "records": MAX_RECORDS}),
+            );
+        }
+        log.emit_for(
+            Level::Info,
+            "sidecar.vt.program.status",
+            Subject::session(pty, &[]),
+            &change.current.to_log_json(),
+        );
+        let Some(state) = program_state(&change.current.records) else {
+            continue;
+        };
+        if *state_sent == Some(state) {
+            continue;
+        }
+        *state_sent = Some(state);
+        let line = json!({"surface": owner, "body": {"event": "session.program", "session": session, "state": state}});
+        let connection = sink.lock().await.clone();
+        let Some(connection) = connection else {
+            log.record_error(
+                "owned session",
+                format!("session {session}: the owner has no connection for the program state"),
+            );
+            continue;
+        };
+        if connection.send(line.to_string()).await.is_err() {
+            log.record_error(
+                "owned session",
+                format!("session {session}: the session.program event was not delivered"),
+            );
+        }
+    }
 }
 
 #[cfg(test)]

@@ -321,6 +321,23 @@ pub struct RecordView {
     pub app: Option<String>,
 }
 
+/// The program state that an owned session reports to its owner (core docs/spec/program-state.md#value): `blocked` while a
+/// record is blocked, else `working` while a record works, else `idle` while a record rests and none failed. The records
+/// that state none of the three, such as no record, a notice alone or a failed record, give None: the state is then not
+/// known, and the owner keeps the last state that it received, because the owner's states have no other value.
+pub fn program_state(records: &[RecordView]) -> Option<&'static str> {
+    let has = |state: ProgramState| records.iter().any(|view| view.record.state == state);
+    if has(ProgramState::Blocked) {
+        Some("blocked")
+    } else if has(ProgramState::Working) {
+        Some("working")
+    } else if !has(ProgramState::Error) && (has(ProgramState::Idle) || has(ProgramState::Done)) {
+        Some("idle")
+    } else {
+        None
+    }
+}
+
 impl RecordView {
     pub fn to_json(&self) -> Value {
         let record = &self.record;
