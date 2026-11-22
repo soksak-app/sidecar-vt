@@ -321,6 +321,7 @@ async fn open(
         log.clone(),
         FeedContext {
             table: shared,
+            port: Arc::clone(&port),
             session: session.clone(),
             owner: owner.to_string(),
             sink: Arc::clone(&sink),
@@ -585,8 +586,9 @@ pub(crate) async fn attach(
 }
 
 /// Feeds the output of one PTY session to its engine and to the replay buffer until the session ends, and forwards it to
-/// the attached surface while one is attached. The engine events of the session are discarded: the engine of the session
-/// is used only for the screen that a replay of the buffer restores in the surface.
+/// the attached surface while one is attached. The engine of the session answers the queries of its program while no
+/// surface is attached, and its events give the program status of the session; the buffer is replayed to a surface that
+/// attaches as `DaemonEvent::Replay`, which that surface shows without answering.
 async fn feed_engine(
     mut events: mpsc::Receiver<DaemonEvent>,
     mut engine: Box<dyn Engine>,
@@ -615,6 +617,11 @@ async fn feed_engine(
                         {
                             log.record_error("owned session", format!("session {pty}: {reason}"));
                         }
+                    }
+                    // The engine of the session answers the queries of its program while no surface shows it, in the order of
+                    // their bytes, as the engine of a surface does; an attached surface answers the output that it receives.
+                    if !forward.as_ref().is_some_and(|sender| !sender.is_closed()) {
+                        answer_program(&events, &context, &pty, &log).await;
                     }
                     follow_program(events, &mut program, &mut program_state_sent, &context, &pty, &log).await;
                     replay.extend(data.iter().copied());
@@ -676,7 +683,7 @@ async fn feed_engine(
                 }
                 Some(Control::Attach { columns, rows, forward: sender, reply }) => {
                     engine.resize(columns, rows);
-                    let snapshot = DaemonEvent::Output {
+                    let snapshot = DaemonEvent::Replay {
                         session_id: pty.clone(),
                         data: replay.iter().copied().collect(),
                     };
@@ -733,6 +740,8 @@ async fn notify_ended(table: Arc<tokio::sync::Mutex<OwnedSessions>>, session: St
 /// and the connection of the owner for the events.
 struct FeedContext {
     table: Arc<tokio::sync::Mutex<OwnedSessions>>,
+    /// The port of the PTY session, which takes the answers of the engine to the program.
+    port: Arc<dyn SessionPort>,
     session: String,
     owner: String,
     sink: SinkCell,
@@ -800,6 +809,46 @@ fn line_inputs_of_text(text: &str) -> Vec<LineInput<'_>> {
         inputs.push(LineInput::Text(&text[start..]));
     }
     inputs
+}
+
+/// Writes the answers of the engine to the queries of one output to the program, in the order of the output. A write that
+/// fails is reported in the log.
+async fn answer_program(events: &[EngineEvent], context: &FeedContext, pty: &str, log: &Events) {
+    for event in events {
+        let EngineEvent::PtyWrite(bytes) = event else {
+            continue;
+        };
+        let completion = match context
+            .port
+            .write(
+                pty,
+                crate::pty::WriteOrigin::Engine,
+                Arc::from(bytes.as_slice()),
+            )
+            .await
+        {
+            Ok(completion) => completion,
+            Err(error) => {
+                log.record_error(
+                    "owned session",
+                    format!("session {pty}: the answer to the program failed: {error}"),
+                );
+                continue;
+            }
+        };
+        let log = log.clone();
+        let pty = pty.to_string();
+        tokio::spawn(async move {
+            match completion.await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => log.record_error(
+                    "owned session",
+                    format!("session {pty}: the answer to the program failed: {error}"),
+                ),
+                Err(_) => log.record_error("owned session", format!("session {pty}: {WRITE_LOST}")),
+            }
+        });
+    }
 }
 
 /// Applies the engine events of one output to the program status of the session. When the records change, the state that

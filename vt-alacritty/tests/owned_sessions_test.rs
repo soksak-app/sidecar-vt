@@ -811,3 +811,53 @@ async fn the_program_state_of_an_owned_session_goes_to_its_owner() {
         "a repeated state sent an event: {repeated:?}"
     );
 }
+
+/// The hexadecimal bytes of the answer `ESC ] 7501 ; ? BEL` to the status query.
+const QUERY_ANSWER_HEX: &str = "1b5d373530313b3f07";
+
+#[tokio::test]
+async fn an_owned_session_answers_the_status_query_before_the_device_attributes() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    // The program sends the query and the primary device attributes request in one write, as Claude Code does, and reports
+    // only when the first bytes that it reads are the answer to the query.
+    let script = format!(
+        "stty raw -echo; printf '\\033]7501;?\\007\\033[c'; a=$(dd bs=1 count=9 2>/dev/null | od -An -tx1 | tr -d ' \\n'); \
+         if [ \"$a\" = {QUERY_ANSWER_HEX} ]; then printf '\\033]7501;state=working\\007'; else printf 'ANSWER %s' \"$a\"; fi; exec cat >/dev/null"
+    );
+    let session = service
+        .open_session("o1", "c1", shell_params(&script))
+        .await;
+    let event = service
+        .line_where("the session.program event", |value| {
+            value["body"]["event"] == "session.program"
+        })
+        .await;
+    assert_eq!(
+        event["body"],
+        json!({"event": "session.program", "session": session, "state": "working"})
+    );
+}
+
+#[tokio::test]
+async fn an_attached_surface_does_not_answer_the_queries_of_the_replay() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    // The program prints each byte that it reads as hexadecimal, so each answer that it receives is visible on the screen.
+    let script = "stty raw -echo; printf '\\033]7501;?\\007'; while :; do b=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n'); printf '%s' \"$b\"; done";
+    let session = service.open_session("o1", "c1", shell_params(script)).await;
+    let before = service.read_until("o1", &session, QUERY_ANSWER_HEX).await;
+    assert!(
+        before.to_string().contains(QUERY_ANSWER_HEX),
+        "the session answered no query before the attach: {before}"
+    );
+    assert_eq!(service.attach("t1", "a1", &session).await["attached"], true);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let after = service
+        .read_session("o1", "after", &session)
+        .await
+        .to_string();
+    assert_eq!(
+        after.matches(QUERY_ANSWER_HEX).count(),
+        1,
+        "the query was answered again after the attach: {after}"
+    );
+}

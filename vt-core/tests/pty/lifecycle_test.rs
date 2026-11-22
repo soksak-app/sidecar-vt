@@ -828,6 +828,7 @@ async fn output_that_the_consumer_reads_is_not_dropped() {
             DaemonEvent::Exit { .. } => break,
             DaemonEvent::Error { error, .. } => panic!("the session reported {error}"),
             DaemonEvent::InputHeld { .. } => panic!("no input was queued"),
+            DaemonEvent::Replay { .. } => panic!("a PTY session sends no replay"),
         }
     }
     assert_eq!(read, 100_000_000);

@@ -1353,6 +1353,12 @@ pub enum DaemonEvent {
         queued: usize,
         held: bool,
     },
+    /// The output that an owned session held before a surface attached, which the attached surface shows and does not
+    /// answer, because the engine of the session answered it (owned_sessions.rs).
+    Replay {
+        session_id: String,
+        data: Vec<u8>,
+    },
     Exit {
         session_id: String,
     },
@@ -3599,6 +3605,9 @@ struct SessionStatus {
 /// The result of a write whose sender ended without an answer: the session ended before it.
 const WRITE_RESULT_LOST: &str = "the session ended before the write completed";
 
+/// Sends the events of the engine of a surface. `answers` is false for the replayed buffer of an owned session, whose
+/// queries the engine of the session answered (owned_sessions.rs), so its replies are not written.
+#[allow(clippy::too_many_arguments)]
 async fn send_engine_events(
     ports: SurfacePorts<'_>,
     session_id: Option<&str>,
@@ -3607,6 +3616,7 @@ async fn send_engine_events(
     image_state: &mut Option<ImageState>,
     multipart: &mut Option<MultipartAssembly>,
     status: &mut SessionStatus,
+    answers: bool,
 ) -> bool {
     let SessionStatus {
         shell: shell_state,
@@ -3727,6 +3737,7 @@ async fn send_engine_events(
                     }
                 }
             }
+            EngineEvent::PtyWrite(_) if !answers => {}
             EngineEvent::PtyWrite(bytes) => {
                 let Some(session_id) = session_id else {
                     let response = json!({"surface": surface_id, "body": {"error": "engine response without session"}});
@@ -4453,7 +4464,7 @@ async fn surface_task(
                 // output of a feed: its events are sent, and a frame draws it.
                 engine.stop_sync();
                 sync_deadline = engine.sync_deadline();
-                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut status).await { return; }
+                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut status, true).await { return; }
                 record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
                 if headless || hold_while_presenting(&mut image_state) { continue; }
                 if let Some(img_state) = image_state.as_mut() {
@@ -5429,7 +5440,7 @@ async fn surface_task(
                         // The engine answers a theme change with the color scheme report of a
                         // program that set mode 2031, which reaches the program after the theme
                         // input (docs/spec/terminal-protocols.md#vendor-contracts).
-                        if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut status).await { return; }
+                        if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut status, true).await { return; }
                         if let Some(state) = image_state.as_mut() {
                             state.theme = theme;
                             if state.pending_draw {
@@ -5560,7 +5571,7 @@ async fn surface_task(
                         if let Err(error) = engine.resolve_clipboard(request_id, &text) {
                             let response = json!({"surface": surface_id, "body": {"error": error}});
                             if output_tx.reply(response).await.is_err() { return; }
-                        } else if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, true, &mut image_state, &mut multipart, &mut status).await {
+                        } else if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, true, &mut image_state, &mut multipart, &mut status, true).await {
                             return;
                         }
                     }
@@ -5985,14 +5996,17 @@ async fn surface_task(
             }
             Some(event) = daemon_events_rx.recv() => {
                 match event {
-                    DaemonEvent::Output { session_id: ref recv_sid, data } => {
+                    DaemonEvent::Output { session_id: ref recv_sid, ref data } | DaemonEvent::Replay { session_id: ref recv_sid, ref data } => {
+                        // The engine of an owned session answered the queries of its replay when they arrived, so the
+                        // surface answers only the output that arrives while it is attached (owned_sessions.rs).
+                        let answers = matches!(event, DaemonEvent::Output { .. });
                         if let Some(ref sid) = session_id
                             && recv_sid == sid {
                                 cursor_activity = Instant::now();
                                 last_cursor_frame = None;
-                                crate::engine_trace::record(&log, &surface_id, || format!("feed {}", base64_encode(&data)));
-                                inputs.output(sid, &data);
-                                engine.feed(&data);
+                                crate::engine_trace::record(&log, &surface_id, || format!("feed {}", base64_encode(data)));
+                                inputs.output(sid, data);
+                                engine.feed(data);
                                 if let Some(read) = scroll_read.as_mut() {
                                     read.quiet_ticks = 0;
                                     read.synced = engine.sync_deadline().is_none()
@@ -6007,7 +6021,7 @@ async fn surface_task(
                                 }
                                 sync_deadline = engine.sync_deadline();
                                 record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
-                                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut status).await { return; }
+                                if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart, &mut status, answers).await { return; }
                                 if !send_processes(&surface_id, session_port.as_ref(), sid, &mut processes_sent, &mut process_watch, &output_tx, &log).await { return; }
                                 if headless || hold_while_presenting(&mut image_state) { continue; }
                                 if let Some(ref mut img_state) = image_state {
