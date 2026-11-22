@@ -5003,6 +5003,9 @@ async fn surface_task(
                         }
                         image_state = Some(new_state);
                         image_owner_revision = image_owner_revision.saturating_add(1);
+                        // A configured image draws the session again, also after a detach made
+                        // the surface headless.
+                        headless = false;
                         record_surface_mode(&log, &surface_id, headless, "configure");
                         refresh_inline_image_positions(&mut engine, &mut image_state);
                         if let Some(sid) = session_id.as_ref() {
@@ -5994,6 +5997,7 @@ async fn surface_task(
                                     continue;
                                 }
                                 image_state = Some(new_state);
+                                headless = false;
                                 record_surface_mode(&log, &surface_id, headless, "configure");
                                 if let Some(sid) = session_id.as_ref() {
                                     if let Err(error) = session_port.resize(sid, cols, rows).await {

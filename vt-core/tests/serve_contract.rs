@@ -3022,6 +3022,67 @@ async fn detaching_an_image_keeps_the_session_for_headless_open_and_later_image_
 }
 
 #[tokio::test]
+async fn an_image_configured_after_a_detach_presents_later_program_output() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new(
+        "reattach-session".into(),
+        calls.clone(),
+    ));
+    let factory_port = port.clone();
+    let factory = Arc::new(move || factory_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let first = next_frame_answering_requests(&mut lines, &mut to_serve).await;
+    acknowledge_image(&mut to_serve, &first).await;
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"detach":{"request":"reload","name":"view","generation":1}}}}
+"#).await.unwrap();
+    let detached = next_image_detach_reply(&mut lines, "reload").await;
+    assert_eq!(
+        detached["body"]["image"]["detached"]["result"], "detached",
+        "{detached}"
+    );
+
+    to_serve.write_all(br#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":2,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    let configured = next_frame_answering_requests(&mut lines, &mut to_serve).await;
+    assert_eq!(configured["body"]["image"]["generation"], 2, "{configured}");
+    acknowledge_image(&mut to_serve, &configured).await;
+
+    port.push_event(DaemonEvent::Output {
+        session_id: "reattach-session".to_string(),
+        data: b"after reload".to_vec(),
+    });
+    let output_frame = next_frame_answering_requests(&mut lines, &mut to_serve).await;
+    assert_eq!(
+        output_frame["body"]["image"]["generation"], 2,
+        "{output_frame}"
+    );
+    assert!(
+        output_frame["body"]["image"]["sequence"].as_u64()
+            > configured["body"]["image"]["sequence"].as_u64(),
+        "program output after the configure was not presented: {output_frame}"
+    );
+
+    to_serve
+        .write_all(
+            br#"{"surface":"s1","body":{"operation":"close"}}
+"#,
+        )
+        .await
+        .unwrap();
+    wait_for_reply(&mut lines, LettingGo::Close).await;
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn an_image_response_with_wrong_frame_identity_does_not_release_a_newer_pending_draw() {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let port = Arc::new(FakeSessionPort::new(
