@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S255-1: less의 scroll read 테스트가 각 step의 tick을 program이 그 step에서 그린 뒤에만 보낸다. window가 display frame마다 보내는 것과 같아서, read가 `make test`의 부하에서도 less의 다시 그리기에서 settle한다. 이전에는 테스트가 각 frame request에 즉시 답해서, 세 번 중 한 번 6개 quiet tick이 less가 그리기 전에 step을 끝냈고 read가 `line 0051` 대신 `line 0001`을 답했다. 검증: tick을 즉시 보낸 `a_scroll_read_paced_by_the_draws_reads_a_program_that_draws_late`의 Red(`drawn` 대신 `ready`), 그 뒤 Green(그 테스트와 less 테스트 각각 10번 중 10번).
 - S254: 버전이 0.0.41이므로 release run이 저장소의 main을 v0.0.41로 낸다. S252-1의 보이는 session 반복 attach 응답이 들어 있다.
 - S253-1: owned session task가 버리는 각 send와 process query가 버리는 conversion error가 `default:` comment로 이유를 적으므로 `sok-check events`가 통과한다. 이전에는 8개 finding으로 실패했다. 검증: `sok-check events`의 Red(8개 finding), 그 뒤 Green(45개 source).
 - S252-1: 같은 owned session을 이미 보이는 surface의 attach가 `{session, attached: true}`로 응답하고 아무것도 바꾸지 않는다. 그래서 service가 남긴 surface에서 view가 다시 시작하거나 session 시작을 두 번 실행한 tab이 session을 보인다. 이전에는 sidecar가 `surface already holds a session`으로 거부해 tab이 빈 채로 남았다. 다른 session의 attach는 계속 거부한다. 검증: `a_repeated_attach_of_the_shown_session_answers_it_as_attached`의 Red, 이어서 Green(`owned_sessions_test` 43개 중 43개).

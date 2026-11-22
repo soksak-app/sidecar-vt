@@ -30,6 +30,12 @@ struct Sidecar {
     held: Vec<Value>,
     /// Whether a `screen.changed` event came since `screen_until` last read the screen.
     changed: bool,
+    /// The quiet interval of a read whose ticks follow the draws of the program, or `None` while the ticks do not.
+    paced: Option<u32>,
+    /// Whether the program drew since the last step of a paced read ended.
+    drawn: bool,
+    /// The ticks sent since the last draw of the program in a paced read.
+    since_draw: u32,
 }
 
 impl Sidecar {
@@ -76,6 +82,9 @@ impl Sidecar {
             answer_frames: true,
             held: Vec::new(),
             changed: false,
+            paced: None,
+            drawn: false,
+            since_draw: 0,
         }
     }
 
@@ -110,6 +119,35 @@ impl Sidecar {
         }
     }
 
+    /// Sends a tick of a paced read: after `quiet` ticks without a draw the step of the read ends, and the next step receives
+    /// ticks only after the program drew in it.
+    async fn paced_tick(&mut self, want: &Value, quiet: u32) {
+        self.tick(want).await;
+        self.since_draw += 1;
+        if self.since_draw >= quiet {
+            self.drawn = false;
+            self.since_draw = 0;
+        }
+    }
+
+    /// A scroll read by `by` whose ticks come only after the program drew in each step. A tick of this test comes at once and not
+    /// at a display frame, so `quiet` ticks right after the input could end a step before a program under load draws; the host
+    /// of a window spaces the ticks by its display frames (core docs/spec/terminal-read.md#draw-of-the-program-scroll). The
+    /// program must draw without synchronized output, so that each step ends after `quiet` ticks.
+    async fn scroll_read_after_draws(&mut self, by: i64) -> Value {
+        self.paced = Some(6);
+        self.drawn = false;
+        self.since_draw = 0;
+        self.send_read(by).await;
+        let reply = self.read_reply().await;
+        self.paced = None;
+        assert!(
+            self.held.is_empty(),
+            "a paced read left held ticks: {reply}"
+        );
+        reply
+    }
+
     /// Reads lines of the surface until one satisfies `matches`, answering or holding each frame request on the way.
     async fn until(&mut self, matches: impl Fn(&Value) -> bool) -> Value {
         loop {
@@ -121,7 +159,13 @@ impl Sidecar {
                 .expect("the sidecar closed its output");
             let value: Value = serde_json::from_str(&line).expect("the sidecar line is not JSON");
             if let Some(want) = value["body"]["image"].get("want").cloned() {
-                if self.answer_frames {
+                if let Some(quiet) = self.paced {
+                    if self.drawn {
+                        self.paced_tick(&want, quiet).await;
+                    } else {
+                        self.held.push(want);
+                    }
+                } else if self.answer_frames {
                     self.tick(&want).await;
                 } else {
                     self.held.push(want);
@@ -130,6 +174,13 @@ impl Sidecar {
             }
             if value["body"]["event"] == "screen.changed" {
                 self.changed = true;
+                if let Some(quiet) = self.paced {
+                    self.drawn = true;
+                    self.since_draw = 0;
+                    for want in std::mem::take(&mut self.held) {
+                        self.paced_tick(&want, quiet).await;
+                    }
+                }
             }
             if value["surface"] == "s1" && matches(&value) {
                 return value;
@@ -265,7 +316,7 @@ async fn a_scroll_read_in_less_shows_the_later_lines_and_restores_the_screen() {
         })
         .await;
 
-    let first = sidecar.scroll_read(-50).await;
+    let first = sidecar.scroll_read_after_draws(-50).await;
     let body = &first["body"];
     assert_eq!(body["event"], "screen.scroll", "{first}");
     assert_eq!(body["route"], "alternate_scroll", "{first}");
@@ -275,12 +326,11 @@ async fn a_scroll_read_in_less_shows_the_later_lines_and_restores_the_screen() {
     assert_eq!(body["refreshRate"], 120, "{first}");
     assert_eq!(body["text"][0], "line 0051", "{first}");
     for step in ["scroll", "restore"] {
-        let settled = body["settledBy"][step].as_str().unwrap_or_default();
-        assert!(settled == "sync" || settled == "quiet", "{step}: {first}");
+        assert_eq!(body["settledBy"][step], "quiet", "{step}: {first}");
     }
     assert_eq!(sidecar.screen().await, before, "the screen after the read");
 
-    let second = sidecar.scroll_read(-50).await;
+    let second = sidecar.scroll_read_after_draws(-50).await;
     assert_eq!(
         second["body"]["text"], body["text"],
         "a second read at the same offset: {second}"
@@ -291,6 +341,31 @@ async fn a_scroll_read_in_less_shows_the_later_lines_and_restores_the_screen() {
         before,
         "the screen after the second read"
     );
+    sidecar.type_text("q").await;
+}
+
+/// A program that draws later than the ticks of the test after each input is read at its draw when the ticks follow its draws,
+/// as at the display frames of a window: the program on the alternate screen draws `drawn` 0.2 s after the scroll and `ready`
+/// 0.2 s after the restore.
+#[tokio::test]
+async fn a_scroll_read_paced_by_the_draws_reads_a_program_that_draws_late() {
+    let mut sidecar = Sidecar::start();
+    sidecar.open().await;
+    sidecar
+        .type_text(concat!(
+            "printf '\\033[?1049h\\033[H%s%s' rea dy; stty raw -echo; ",
+            "dd bs=3 count=1 >/dev/null 2>&1; sleep 0.2; printf '\\033[H%s%s' dra wn; ",
+            "dd bs=3 count=1 >/dev/null 2>&1; sleep 0.2; printf '\\033[H%s%s' rea dy; dd bs=1 count=1 >/dev/null 2>&1\r"
+        ))
+        .await;
+    sidecar
+        .screen_until(|rows| rows.first().is_some_and(|row| row == "ready"))
+        .await;
+    let read = sidecar.scroll_read_after_draws(1).await;
+    let body = &read["body"];
+    assert_eq!(body["route"], "alternate_scroll", "{read}");
+    assert_eq!(body["text"][0], "drawn", "{read}");
+    assert_eq!(body["restored"], true, "{read}");
     sidecar.type_text("q").await;
 }
 
