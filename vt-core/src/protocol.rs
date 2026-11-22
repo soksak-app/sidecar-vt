@@ -6253,6 +6253,7 @@ const REQUEST_LINE_LIMIT: usize = 64 * 1024 * 1024;
 fn process_query_answer(port: &dyn SessionPort, value: &Value, log: &Events) -> Value {
     let process = value["process"]
         .as_u64()
+        // default: a process id outside u32 becomes None, which the next statement refuses with an error reason.
         .and_then(|pid| u32::try_from(pid).ok());
     let request = value["request"].as_u64().filter(|request| *request > 0);
     let (Some(process), Some(request)) = (process, request) else {

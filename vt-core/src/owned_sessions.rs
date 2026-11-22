@@ -915,6 +915,8 @@ async fn feed_engine(
                     exited.store(true, Ordering::Release);
                     tokio::spawn(notify_ended(table.clone(), context.session.clone(), log.clone()));
                     if let Some(sender) = &forward {
+                        // default: a send fails only after the attached surface ended, which detaches it, and an ended surface
+                        // has no use for the event.
                         let _ = sender.send(DaemonEvent::Exit { session_id }).await;
                     }
                     break;
@@ -922,11 +924,15 @@ async fn feed_engine(
                 Some(DaemonEvent::Error { session_id, error }) if session_id == pty => {
                     log.record_error("owned session", format!("session {pty}: {error}"));
                     if let Some(sender) = &forward {
+                        // default: a send fails only after the attached surface ended, which detaches it, and an ended surface
+                        // has no use for the event.
                         let _ = sender.send(DaemonEvent::Error { session_id, error }).await;
                     }
                 }
                 Some(DaemonEvent::InputHeld { session_id, queued, held }) if session_id == pty => {
                     if let Some(sender) = &forward {
+                        // default: a send fails only after the attached surface ended, which detaches it, and an ended surface
+                        // has no use for the event.
                         let _ = sender.send(DaemonEvent::InputHeld { session_id, queued, held }).await;
                     }
                 }
@@ -946,6 +952,7 @@ async fn feed_engine(
                         &engine.modes(),
                     );
                     let judged = judge_input(engine.as_ref(), shell_line, &mut line_guard, &pty, &cids, &text, paste, &log);
+                    // default: a reply fails only after the requester stopped waiting, and the requester reports its own end.
                     let _ = reply.send(judged);
                 }
                 Some(Control::Read { range: None, reply }) => {
@@ -963,6 +970,7 @@ async fn feed_engine(
                         "rows": screen_text(&screen),
                         "cursor": {"row": screen.cursor.row, "column": screen.cursor.col},
                     });
+                    // default: a reply fails only after the requester stopped waiting, and the requester reports its own end.
                     let _ = reply.send(Ok(body));
                 }
                 Some(Control::Read { range: Some((from, count)), reply }) => {
@@ -970,6 +978,7 @@ async fn feed_engine(
                         let rows: Vec<String> = rows.iter().map(|row| row_text(row)).collect();
                         json!({"from": from, "count": count, "rows": rows})
                     });
+                    // default: a reply fails only after the requester stopped waiting, and the requester reports its own end.
                     let _ = reply.send(body);
                 }
                 Some(Control::Attach { columns, rows, forward: sender, reply }) => {
@@ -986,6 +995,7 @@ async fn feed_engine(
                         }
                         Err(reason) => Err(format!("the screen of session {pty} was not read: {reason}")),
                     };
+                    // default: a reply fails only after the requester stopped waiting, and the requester reports its own end.
                     let _ = reply.send(result);
                 }
                 None => break,
