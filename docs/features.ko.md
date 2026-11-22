@@ -1,5 +1,6 @@
 # 기능
 
+- [o] S243 — P0, S242에 이어짐: owned session 코드가 `sok-check events` 검사를 통과한다. 사양이 정한 이유를 `params`의 기본값에 적고, `size` 에코는 기본값 대신 명시적 오류를 낸다. 입력: 0.0.33 release가 이 검사에서 실패해 tag가 만들어지지 않았다. 검증: `make test` 종료 코드 0, `owned_sessions_test` 20/20 통과.
 - [o] S242 — P0, core F1062-5에 연결: 저장소의 main을 0.0.33으로 release한다(core 0.0.46 옆). 입력: 패키지는 0.0.32를 선언하고 그 tag v0.0.32가 있으므로, release gate는 그 뒤의 commit을 release한다. 변경: crate, Cargo.lock, 패키지가 0.0.33을 선언한다. release는 S241의 owned session 동작, attach, session.ended 이벤트(S241-4)를 담는다.
 - [o] S241 — P1, core F1062-4에 연결: sidecar가 core의 owned session 동작에 응답한다(`docs/spec/vt-core.ko.md#owned-session-동작`): 크기를 받는 `open`, `resize`, `end`, 그리고 tab에 열린 session의 출력, 입력, resize를 넘기는 `attach`. 완료: S241-1부터 S241-3까지.
   - [o] S241-1 — P1, core F1062-4에 연결: owned session 동작을 명세에 적었다. 동작을 고르는 body, 기본 font로 크기를 cell로 바꾸는 규칙, 응답 body, 거부, `open`과 `end`의 멱등성을 포함한다.

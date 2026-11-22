@@ -241,6 +241,7 @@ async fn open(
         .ok_or_else(|| "open session requires a non-empty creation".to_string())?
         .to_string();
     let size = parse_size(body.get("size"))?;
+    // default: an absent params member is {} and starts the login shell, as the spec states.
     let params = body.get("params").cloned().unwrap_or_else(|| json!({}));
     let request = launch_request(owner, &params)?;
     let shared = Arc::clone(sessions);
@@ -310,8 +311,11 @@ async fn resize(
     output: &OutputSink,
 ) -> Result<Value, String> {
     let session = session_member(body)?;
-    let size_value = body.get("size").cloned().unwrap_or(Value::Null);
     let size = parse_size(body.get("size"))?;
+    let size_value = body
+        .get("size")
+        .cloned()
+        .ok_or_else(|| "size width, height and scale must be positive numbers".to_string())?;
     let mut table = sessions.lock().await;
     let entry = open_entry(&mut table, &session, log).await?;
     if entry.owner != owner {

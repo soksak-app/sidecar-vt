@@ -1,5 +1,6 @@
 # Features
 
+- [o] S243 — P0, follows S242: The owned-session code passes the `sok-check events` check. The default of an absent `params` carries the reason that the spec states, and the `size` echo is an explicit error rather than a default. Input: the release of 0.0.33 failed at this check, so no tag was made. Verification: `make test` exits 0 and `owned_sessions_test` passes 20 of 20.
 - [o] S242 — P0, linked to core F1062-5: Release the main of the repository as 0.0.33, beside core 0.0.46. Input: the package declares 0.0.32, whose tag v0.0.32 exists, so the release gate releases the commits after it. Change: the crates, Cargo.lock and the package declare 0.0.33; the release holds the S241 owned-session operations, attach, and the session.ended event (S241-4).
 - [o] S241 — P1, linked to core F1062-4: The sidecar answers the owned-session operations of core (`docs/spec/vt-core.md#owned-session-operations`): `open` with its size, `resize`, `end`, and `attach`, which gives a tab the output, the input and the resize of an open session. Complete: S241-1 to S241-3.
   - [o] S241-1 — P1, linked to core F1062-4: The specification states the owned-session operations: the body that selects them, the size conversion to cells with the default font, the reply bodies, the refusals and the idempotency of `open` and `end`.
