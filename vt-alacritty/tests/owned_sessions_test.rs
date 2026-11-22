@@ -963,3 +963,69 @@ async fn two_service_processes_name_their_first_sessions_differently() {
     );
     assert_ne!(a, b, "two service processes named the same session");
 }
+
+/// A program that prints the numbered lines 1 to 80 and then waits on its terminal input.
+fn numbered_params() -> Value {
+    shell_params("i=1; while [ $i -le 80 ]; do echo line$i; i=$((i+1)); done; exec cat")
+}
+
+#[tokio::test]
+async fn read_with_from_and_count_answers_the_retained_rows() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service.open_session("o1", "c1", numbered_params()).await;
+    service.read_until("o1", &session, "line80").await;
+    service
+        .send(
+            "o1",
+            "r1",
+            json!({"operation": "read", "session": session, "from": 0, "count": 3}),
+        )
+        .await;
+    assert_eq!(
+        service.reply("r1").await,
+        json!({"from": 0, "count": 3, "rows": ["line1", "line2", "line3"]})
+    );
+}
+
+#[tokio::test]
+async fn read_refuses_an_invalid_range_with_an_explicit_error() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service.open_session("o1", "c1", numbered_params()).await;
+    service.read_until("o1", &session, "line80").await;
+    let range = "read requires an integer from and a count from 1 to 200";
+    for (cid, members, error) in [
+        (
+            "r1",
+            json!({"count": 2}),
+            "read count requires from".to_string(),
+        ),
+        ("r2", json!({"from": 0}), range.to_string()),
+        ("r3", json!({"from": 0, "count": 0}), range.to_string()),
+        ("r4", json!({"from": 0, "count": 201}), range.to_string()),
+        ("r5", json!({"from": -1, "count": 2}), range.to_string()),
+    ] {
+        let mut body = json!({"operation": "read", "session": session});
+        for (key, value) in members.as_object().expect("the members are an object") {
+            body[key] = value.clone();
+        }
+        service.send("o1", cid, body).await;
+        assert_eq!(
+            service.reply(cid).await,
+            json!({"error": error}),
+            "the read {cid} was not refused"
+        );
+    }
+    service
+        .send(
+            "o1",
+            "r6",
+            json!({"operation": "read", "session": session, "from": 100000, "count": 2}),
+        )
+        .await;
+    let body = service.reply("r6").await;
+    let error = body["error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a range outside the rows was answered: {body}"));
+    assert!(error.contains("outside"), "unexpected refusal: {error}");
+    assert!(body.get("rows").is_none(), "a refusal carries rows: {body}");
+}

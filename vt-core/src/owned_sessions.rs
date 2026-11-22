@@ -8,8 +8,8 @@ use crate::guard::{self, LineInput};
 use crate::platform::{Metrics, default_font, metrics_for};
 use crate::program_status::{MAX_RECORDS, ProgramStatusTracker, program_state};
 use crate::protocol::{
-    DEFAULT_FONT_SIZE, DaemonEvent, Dispatch, Engine, EngineEvent, OutputSink, SessionPort,
-    ShellRequest, open_launch, screen_text, session_resize,
+    DEFAULT_FONT_SIZE, DaemonEvent, Dispatch, Engine, EngineEvent, OutputSink, RowScreen,
+    SCREEN_ROWS_COUNT_MAX, SessionPort, ShellRequest, open_launch, screen_text, session_resize,
 };
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
@@ -86,8 +86,12 @@ enum Control {
         cids: Vec<String>,
         reply: oneshot::Sender<Result<Vec<u8>, Value>>,
     },
-    /// The visible rows of the screen as text and the cursor of the screen.
-    Read { reply: oneshot::Sender<Value> },
+    /// The visible rows of the screen as text and the cursor of the screen, or with `range` the retained rows `(from, count)`
+    /// of the primary screen as text; a range outside the retained rows answers the error of the engine.
+    Read {
+        range: Option<(u64, u32)>,
+        reply: oneshot::Sender<Result<Value, String>>,
+    },
     /// The attachment of a surface: the engine takes the grid, the buffer replays into `forward`, and later output goes to
     /// `forward` until the surface ends.
     Attach {
@@ -544,7 +548,30 @@ async fn write_text(
 /// The result of a write whose session ended before the write completed.
 const WRITE_LOST: &str = "the session ended before the write completed";
 
-/// Answers a `read` of the owner: the visible rows of the screen as text and the cursor, zero-based, as `{row, column}`.
+/// The range of a `read` with `from` and `count`, bounded as the `from` and `count` of `screen.read`: both together, `from`
+/// an integer of 0 or more and `count` an integer from 1 to SCREEN_ROWS_COUNT_MAX; None without both.
+fn read_range(body: &Value) -> Result<Option<(u64, u32)>, String> {
+    match (body.get("from"), body.get("count")) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err("read count requires from".to_string()),
+        (Some(from), count) => {
+            let from = from.as_u64();
+            let count = count
+                .and_then(Value::as_u64)
+                .and_then(|count| u32::try_from(count).ok())
+                .filter(|count| (1..=SCREEN_ROWS_COUNT_MAX).contains(count));
+            match (from, count) {
+                (Some(from), Some(count)) => Ok(Some((from, count))),
+                _ => Err(format!(
+                    "read requires an integer from and a count from 1 to {SCREEN_ROWS_COUNT_MAX}"
+                )),
+            }
+        }
+    }
+}
+
+/// Answers a `read` of the owner: the visible rows of the screen as text and the cursor, zero-based, as `{row, column}`, or
+/// with `from` and `count` the retained rows `{from, count, rows}` of the primary screen as text.
 async fn read(
     sessions: &Arc<tokio::sync::Mutex<OwnedSessions>>,
     owner: &str,
@@ -552,6 +579,7 @@ async fn read(
     log: &Events,
 ) -> Result<Value, String> {
     let session = session_member(body)?;
+    let range = read_range(body)?;
     let control = {
         let mut table = sessions.lock().await;
         let entry = open_entry(&mut table, &session, log).await?;
@@ -565,11 +593,11 @@ async fn read(
     };
     let (reply, answer) = oneshot::channel();
     control
-        .send(Control::Read { reply })
+        .send(Control::Read { range, reply })
         .map_err(|_| format!("session {session} is not open"))?;
     answer
         .await
-        .map_err(|_| format!("session {session} is not open"))
+        .map_err(|_| format!("session {session} is not open"))?
 }
 
 /// Attaches a surface to an open session. The surface takes the output, the grid of the default font and the input of the
@@ -623,6 +651,17 @@ pub(crate) async fn attach(
         events,
         starts_shell: entry.starts_shell,
     })
+}
+
+/// The plain text of a row of cells, as `screen_text` reads the rows of the viewport.
+fn row_text(row: &[crate::protocol::Cell]) -> String {
+    let text: String = row
+        .iter()
+        .filter(|cell| cell.width != 0)
+        // default: a cell without a character is blank, as screen_text reads it.
+        .map(|cell| cell.ch.as_deref().unwrap_or(" "))
+        .collect();
+    text.trim_end().to_string()
 }
 
 /// Feeds the output of one PTY session to its engine and to the replay buffer until the session ends, and forwards it to
@@ -713,11 +752,18 @@ async fn feed_engine(
                     let judged = judge_input(engine.as_ref(), shell_line, &mut line_guard, &pty, &cids, &text, paste, &log);
                     let _ = reply.send(judged);
                 }
-                Some(Control::Read { reply }) => {
+                Some(Control::Read { range: None, reply }) => {
                     let screen = engine.screen();
                     let body = json!({
                         "rows": screen_text(&screen),
                         "cursor": {"row": screen.cursor.row, "column": screen.cursor.col},
+                    });
+                    let _ = reply.send(Ok(body));
+                }
+                Some(Control::Read { range: Some((from, count)), reply }) => {
+                    let body = engine.screen_rows(RowScreen::Primary, from, count).map(|rows| {
+                        let rows: Vec<String> = rows.iter().map(|row| row_text(row)).collect();
+                        json!({"from": from, "count": count, "rows": rows})
                     });
                     let _ = reply.send(body);
                 }

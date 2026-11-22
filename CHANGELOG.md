@@ -1,5 +1,6 @@
 # Changelog
 
+- S248-1: `read` of an owned session with `from` and `count` answers `{from, count, rows}`, the retained rows of the primary screen as text in the absolute line numbers of `screen.read`; a count without from, a from without count, a count outside 1 to 200 and a range outside the retained rows are refused with explicit errors. Before, the sidecar ignored both members and answered the viewport. Verification: Red of the two new read cases (the viewport answered), then Green (`owned_sessions_test` 36 of 36).
 - S247-2: The version is 0.0.37, so the release run publishes the main of the repository as v0.0.37; it holds the `sessions` answer and the unique session identifiers of S247-1.
 - S247-1: The service answers `{operation: "sessions", request}` with each open owned session as `{session, surface, root, creation, size}`, so a restarted application adopts the sessions that the service kept, and a session identifier is `owned-<uuid>` with a random version 4 UUID, so a new service process never takes the identifier of a session of an earlier one. Verification: Red of the three new cases of `owned_sessions_test.rs`, Green 34 of 34, clippy and `sok-check events`.
 - S246-2: The version is 0.0.36, so the release run publishes the main of the repository as v0.0.36; it holds the answers of owned sessions of S246-1.
