@@ -1,5 +1,6 @@
 # Changelog
 
+- S241-1: The specification states the owned-session operations of the sidecar (`docs/spec/vt-core.md`): the body that selects `open` for an owned session, the size conversion to cells, the reply bodies, the refusals and the idempotency of `open` and `end`. Verification: document review only.
 - S240: The version is 0.0.32, so the release run publishes the main of the repository as v0.0.32; it holds the same sources as v0.0.31.
 - S223: The release row is complete: the release v0.0.30 contains the process list of S222 and S224.
 - S238: `messages.notice` writes the completion notice of a receiving surface into the folder of its sender as `<surface>.notice-<answers>.txt`, with the text of core docs/spec/messaging.md#completion-notice, by the write rule of a message; invalid parameters, a missing sender folder and an unregistered surface are refused with no file. A receipt file of the receiving folder is read as an ordinary message, so the sidecar needs no change for it. Verification: Red then Green of the `messages_notice_*` contract tests in `vt-core/tests/serve_contract.rs`.

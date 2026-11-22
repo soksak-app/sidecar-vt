@@ -1,5 +1,9 @@
 # 기능
 
+- [~] S241 — P1, core F1062-4에 연결: sidecar가 core의 owned session 동작에 응답한다(`docs/spec/vt-core.ko.md#owned-session-동작`): 크기를 받는 `open`, `resize`, `end`. 남은 일: S241-2와 S241-3.
+  - [o] S241-1 — P1, core F1062-4에 연결: owned session 동작을 명세에 적었다. 동작을 고르는 body, 기본 font로 크기를 cell로 바꾸는 규칙, 응답 body, 거부, `open`과 `end`의 멱등성을 포함한다.
+  - [~] S241-2 — P1, core F1062-4에 연결: sidecar가 명세대로 owned session을 열고, 크기를 바꾸고, 끝낸다. 남은 일: S241-2의 test와 구현이 진행 중이다.
+  - [ ] S241-3 — P1, core F1062-4에 연결: tab이 열린 owned session에 연결한다. core와 이 명세가 아직 정의하지 않은 연결 요청을 기다린다.
 - [o] S238 — P1, core F1000-5.2와 연결: sidecar가 `messages.notice`(core docs/spec/messaging.md#completion-notice)를 제공하며, 받는 surface의 notice를 보낸 쪽의 folder에 쓴다. 검증: `vt-core/tests/serve_contract.rs`의 `messages_notice_*`에서 Red 뒤 Green, 전체 `soksak-sidecar-vt-core` suite. 영수증 file `<receiver>.receipt-<token>.txt`는 이름 규칙(`vt-core/src/messaging.rs` `name_rule`)이 일반 message로 읽으므로 변경이 필요 없다.
 - [o] S240 — P0: 저장소의 main을 core 0.0.46과 함께 0.0.32로 release한다. 입력: package가 0.0.31를 선언하고 그 tag v0.0.31가 있으며 그 tag 뒤 커밋이 없어 release gate가 아무것도 내지 않는다. 변경: crate들과 Cargo.lock, package가 0.0.32를 선언한다. release는 v0.0.31와 같은 source를 담는다.
 - [o] S239 — P0: tag v0.0.30 뒤의 커밋을 0.0.31로 release한다. kit 0.0.16으로 build·검사한다. 입력: vt-alacritty/package.json이 0.0.30을 선언하고 그 tag v0.0.30이 있어 release gate는 그 뒤 커밋을 내지 않는다. 변경: crate들과 Cargo.lock, vt-alacritty/package.json이 0.0.31을 선언한다. release는 S238(`messages.notice`)과 S223의 process list 행을 담는다.

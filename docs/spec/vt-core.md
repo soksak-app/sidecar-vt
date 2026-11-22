@@ -231,6 +231,18 @@ Reasons and the objections that an adversarial review raised and that this desig
 - A cache keyed by the background color of a cell grows with each color; strips are bounded by the rows of the screen.
 - A row placement objection was rejected: the CoreGraphics rectangle at `H - (r + 1) × cell height` is in bottom-left coordinates and covers the rows `r × cell height` to `(r + 1) × cell height` of the surface memory, which a test with a margin below the rows verifies.
 
+### Owned session operations
+
+Core sends the owned-session messages of [persistent services](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.md#owned-session-messages) to the service with the owner surface as `surface`. A body whose `operation` is `open` and whose `session` member is an object is an owned-session open. The surface `open` of the terminal page carries no `session` member, so the two never share a body. Owned sessions have no surface of their own, emit no `screen` or `state` message, and are not drawn; a tab that shows one attaches to it through a request that this specification does not define yet.
+
+- `open` with `{session: {creation}, size: {width, height, scale}, params}` creates a terminal session of the owner. `creation` is the identifier that core chose for the request, and `size` gives the points and the backing scale of the card. The sidecar computes the grid as `floor(width × scale / cellWidth)` columns and `floor(height × scale / cellHeight)` rows, where `cellWidth` and `cellHeight` are the device pixel metrics of the default font at its default size (13 points) and `scale`. A grid with no column or no row is refused with `size is smaller than one cell`. `params` takes the launch fields of the terminal `open` (`shell`, `program`, `args`, `directory`) and is validated with the same rules and errors; an absent `params` is `{}`, which starts the login shell. The sidecar allocates a new non-empty `session` identifier and answers `{session, creation}` with the `creation` of the request. A repeated open with the same owner and `creation` answers the same reply and starts no process.
+- `resize` with `{session, size}` sets the grid of an open session of the same owner with the rule of `open` and answers `{session, size}` with the size of the request.
+- `end` with `{session}` ends the session of the same owner: it ends the shell or program and releases the PTY, and answers `{session, ended: true}`. An `end` of a session that already ended answers the same reply and changes nothing.
+
+The refusals are error replies `{error: <text>}`. A `resize` or `end` of an unknown identifier is refused with `session <id> is not open`, and one of a session of another owner with `surface <id> does not own session <id>`. A failed PTY start is refused with `open failed: <reason>`, and a `size` whose `width`, `height` or `scale` is not a positive number is refused with `size width, height and scale must be positive numbers`.
+
+A shell that exits does not end its owned session in this version: the session stays open until its `end`.
+
 ### Terminal verification
 
 - Record a failing baseline before each correction and run the same assertion after correction.

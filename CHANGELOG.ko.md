@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S241-1: sidecar의 owned session 동작을 명세에 적었다(`docs/spec/vt-core.ko.md`): owned session `open`을 고르는 body, cell 크기 변환, 응답 body, 거부, `open`과 `end`의 멱등성. 검증: 문서 검토만 했다.
 - S240: 버전이 0.0.32이므로 release run이 저장소의 main을 v0.0.32로 낸다. v0.0.31와 같은 source를 담는다.
 - S239: 버전이 0.0.31이므로 release run이 tag v0.0.30 뒤의 커밋을 v0.0.31로 낸다. S238(`messages.notice`)과 S223의 process list 행을 담는다.
 - S223: release 행이 완료되었다. release v0.0.30 이 S222 와 S224 의 process list 를 담는다.
