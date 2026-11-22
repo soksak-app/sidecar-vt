@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S244-3: 버전이 0.0.34이므로 release run이 저장소의 main을 v0.0.34로 낸다. S244의 owned session input, paste, read와 session.program을 담는다. tag와 push는 이 변경이 하지 않는다.
 - S244-2: sidecar가 owned session의 records 상태가 바뀔 때마다 owner에게 `session.program`(`idle`, `working`, `blocked`)을 보낸다. 상태는 program의 OSC 7501 record와 notification에서 tab session과 같은 방식으로 얻고, 그런 상태를 주지 않는 session은 이벤트를 보내지 않는다. 검증: `the_program_state_of_an_owned_session_goes_to_its_owner`의 Red(5초 안에 이벤트 없음), 이어서 Green(26개 중 26개 통과).
 - S244-1: sidecar가 owned session의 `input`, `paste`, `read`에 응답한다. `input`과 `paste`는 text를 표면 입력의 guard로 판단한 뒤 program에 쓰고, `read`는 `{rows, cursor}`로 응답한다. 검증: `owned_sessions_test`의 새 사례 Red(5개 실패), 이어서 Green(25개 중 25개 통과).
 - S243: owned session 코드가 `sok-check events` 검사를 통과한다. 사양이 정한 이유를 `params`의 기본값에 적고, `size` 에코는 기본값 대신 명시적 오류를 낸다. 0.0.33 release가 이 검사에서 실패해 tag가 만들어지지 않았다. 검증: `make test` 종료 코드 0, `owned_sessions_test` 20/20 통과.
