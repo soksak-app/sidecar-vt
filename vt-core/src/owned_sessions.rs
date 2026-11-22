@@ -101,6 +101,10 @@ enum Control {
 /// One owned session.
 struct Entry {
     owner: String,
+    /// The project root of the owner window, from the envelope of the open.
+    root: String,
+    /// The creation identifier of the open.
+    creation: String,
     pty: String,
     /// The last size that the owner or the attached view set, which the grid of a new attachment uses.
     size: Size,
@@ -122,7 +126,29 @@ struct Entry {
 pub struct OwnedSessions {
     entries: HashMap<String, Entry>,
     by_creation: HashMap<(String, String), String>,
-    next: u64,
+}
+
+impl OwnedSessions {
+    /// The open sessions as the entries of the `sessions` answer, `{session, surface, root, creation, size}`, ordered by
+    /// session (core docs/spec/persistent-services.md#owned-sessions). A session whose shell or program ended is not listed.
+    pub(crate) async fn list(&mut self, log: &Events) -> Vec<Value> {
+        let mut listed = Vec::new();
+        for (session, entry) in &mut self.entries {
+            settle(entry, log).await;
+            if entry.ended {
+                continue;
+            }
+            listed.push(json!({
+                "session": session,
+                "surface": entry.owner,
+                "root": entry.root,
+                "creation": entry.creation,
+                "size": {"width": entry.size.width, "height": entry.size.height, "scale": entry.size.scale},
+            }));
+        }
+        listed.sort_by(|a, b| a["session"].as_str().cmp(&b["session"].as_str()));
+        listed
+    }
 }
 
 /// The result of an attachment: the PTY session, its grid, and the events that the attached surface receives.
@@ -152,6 +178,8 @@ pub fn is_request(body: &Value) -> bool {
 /// that its events go to.
 pub(crate) struct Request<'a> {
     pub owner: &'a str,
+    /// The project root of the envelope, which an `open` records for the `sessions` answer.
+    pub root: Option<&'a str>,
     pub cids: &'a [String],
     pub output: &'a OutputSink,
 }
@@ -169,17 +197,17 @@ pub(crate) async fn answer(
         owner,
         cids,
         output,
+        ..
     } = *request;
     let result = match body.get("operation").and_then(Value::as_str) {
         Some("open") => {
             open(
                 sessions,
-                owner,
+                request,
                 body,
                 engine_factory,
                 session_port_factory,
                 log,
-                output,
             )
             .await
         }
@@ -264,19 +292,28 @@ async fn open_entry<'a>(
 
 async fn open(
     sessions: &Arc<tokio::sync::Mutex<OwnedSessions>>,
-    owner: &str,
+    request: &Request<'_>,
     body: &Value,
     engine_factory: &EngineFactory,
     session_port_factory: &SessionPortFactory,
     log: &Events,
-    output: &OutputSink,
 ) -> Result<Value, String> {
+    let Request {
+        owner,
+        root,
+        output,
+        ..
+    } = *request;
     let creation = body
         .get("session")
         .and_then(|session| session.get("creation"))
         .and_then(Value::as_str)
         .filter(|creation| !creation.is_empty())
         .ok_or_else(|| "open session requires a non-empty creation".to_string())?
+        .to_string();
+    let root = root
+        .filter(|root| !root.is_empty())
+        .ok_or_else(|| "open session requires a non-empty root".to_string())?
         .to_string();
     let size = parse_size(body.get("size"))?;
     // default: an absent params member is {} and starts the login shell, as the spec states.
@@ -310,7 +347,9 @@ async fn open(
         .map_err(|error| format!("open failed: {error}"))?;
     let (control_tx, control_rx) = mpsc::unbounded_channel();
     let exited = Arc::new(AtomicBool::new(false));
-    let session = format!("owned-{}", table.next + 1);
+    // A random identifier: a later service process never names a session with the identifier of a session of an earlier
+    // one, which a stored layout may still name (core docs/spec/persistent-services.md#owned-session-messages).
+    let session = format!("owned-{}", uuid::Uuid::new_v4());
     let sink: SinkCell = Arc::new(tokio::sync::Mutex::new(Some(output.clone())));
     tokio::spawn(feed_engine(
         events,
@@ -328,11 +367,12 @@ async fn open(
             starts_shell: request.program.is_none(),
         },
     ));
-    table.next += 1;
     table.entries.insert(
         session.clone(),
         Entry {
             owner: owner.to_string(),
+            root,
+            creation: creation.clone(),
             pty,
             size,
             port: Some(port),

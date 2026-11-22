@@ -861,3 +861,105 @@ async fn an_attached_surface_does_not_answer_the_queries_of_the_replay() {
         "the query was answered again after the attach: {after}"
     );
 }
+
+impl Service {
+    /// Sends `{operation: "sessions", request}` and returns the answer that names the request.
+    async fn sessions(&mut self, request: &str) -> Value {
+        let line = json!({"operation": "sessions", "request": request});
+        self.to_serve
+            .write_all(format!("{line}\n").as_bytes())
+            .await
+            .expect("the sessions line was not written");
+        loop {
+            let line = tokio::time::timeout(REPLY_TIMEOUT, self.lines.next_line())
+                .await
+                .unwrap_or_else(|_| panic!("no sessions answer within {REPLY_TIMEOUT:?}"))
+                .expect("read a line of the service")
+                .expect("the service closed its output");
+            let value: Value = serde_json::from_str(&line).expect("the service writes JSON lines");
+            if value["operation"] == "sessions" && value["request"] == request {
+                return value;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn sessions_lists_each_open_owned_session_with_its_owner_root_creation_and_size() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    service
+        .send(
+            "o1",
+            "c1",
+            open_body("k1", size(400.0, 200.0, 2.0), cat_params()),
+        )
+        .await;
+    let kept = service.reply("c1").await["session"].clone();
+    service
+        .send(
+            "o2",
+            "c2",
+            open_body("k2", size(400.0, 200.0, 2.0), cat_params()),
+        )
+        .await;
+    let ended = service.reply("c2").await["session"].clone();
+    service
+        .send("o2", "c3", json!({"operation": "end", "session": ended}))
+        .await;
+    assert_eq!(service.reply("c3").await["ended"], true);
+    assert_eq!(
+        service.sessions("r1").await,
+        json!({"operation": "sessions", "request": "r1", "ok": true, "sessions": [
+            {"session": kept, "surface": "o1", "root": "/project", "creation": "k1", "size": size(400.0, 200.0, 2.0)}
+        ]})
+    );
+}
+
+#[tokio::test]
+async fn sessions_refuses_a_request_without_an_identifier() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    service
+        .to_serve
+        .write_all(b"{\"operation\":\"sessions\"}\n")
+        .await
+        .expect("the sessions line was not written");
+    let line = tokio::time::timeout(REPLY_TIMEOUT, service.lines.next_line())
+        .await
+        .expect("no answer to the sessions line")
+        .expect("read a line of the service")
+        .expect("the service closed its output");
+    let value: Value = serde_json::from_str(&line).expect("the service writes JSON lines");
+    assert_eq!(
+        value,
+        json!({"error": "invalidParams", "reason": "the owner request has no request id"})
+    );
+}
+
+#[tokio::test]
+async fn two_service_processes_name_their_first_sessions_differently() {
+    // Each registry is the state of one service process, so a session of a later process never takes the identifier of a
+    // session of an earlier one that a stored layout may still name.
+    let mut first = start_service(PersistentRegistry::new(), "o1");
+    let mut second = start_service(PersistentRegistry::new(), "o1");
+    first
+        .send(
+            "o1",
+            "c1",
+            open_body("k1", size(400.0, 200.0, 2.0), cat_params()),
+        )
+        .await;
+    second
+        .send(
+            "o1",
+            "c1",
+            open_body("k1", size(400.0, 200.0, 2.0), cat_params()),
+        )
+        .await;
+    let a = first.reply("c1").await["session"].clone();
+    let b = second.reply("c1").await["session"].clone();
+    assert!(
+        a.is_string() && b.is_string(),
+        "an open named no session: {a} {b}"
+    );
+    assert_ne!(a, b, "two service processes named the same session");
+}

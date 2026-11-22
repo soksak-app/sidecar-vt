@@ -6524,6 +6524,30 @@ where
                 }
                 continue;
             }
+            if value.get("operation").and_then(Value::as_str) == Some("sessions") {
+                let Some(request) = value.get("request").and_then(Value::as_str) else {
+                    let reply = json!({"error": "invalidParams", "reason": "the owner request has no request id"});
+                    if reply_tx.reply(reply).await.is_err() {
+                        break;
+                    }
+                    continue;
+                };
+                // The owned sessions that the service holds, which a restarted application adopts
+                // (core docs/spec/persistent-services.md#owned-sessions).
+                let reply = match registry.as_ref() {
+                    Some(registry) => {
+                        let listed = registry.owned.lock().await.list(&log).await;
+                        json!({"operation": "sessions", "request": request, "ok": true, "sessions": listed})
+                    }
+                    None => {
+                        json!({"operation": "sessions", "request": request, "ok": false, "error": "owned sessions require the persistent service"})
+                    }
+                };
+                if reply_tx.reply(reply).await.is_err() {
+                    break;
+                }
+                continue;
+            }
             if value.get("operation").and_then(Value::as_str) == Some("shutdown") {
                 let Some(request) = value.get("request").and_then(Value::as_str) else {
                     let reply = json!({"error": "invalidParams", "reason": "the owner request has no request id"});
@@ -6568,6 +6592,7 @@ where
                                 &registry.owned,
                                 &crate::owned_sessions::Request {
                                     owner: &surface_id,
+                                    root: env.root.as_deref(),
                                     cids: &cids,
                                     output: &output_tx,
                                 },
