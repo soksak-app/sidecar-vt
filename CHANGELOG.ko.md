@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S262: 버전이 0.0.45이므로 release run이 저장소의 main을 v0.0.45로 낸다. S261의 detach 뒤 configure가 만드는 image mode가 들어 있다.
 - S261-1: detach 뒤의 configure가 만드는 image mode를 real engine, real PTY, real shell에서 판정한다. `vt-alacritty/tests/image_reattach_test.rs`가 image를 detach하고 generation 2를 configure한 뒤 shell이 지연 후 한 줄을 출력하게 하고, 그 출력 뒤에 generation 2의 frame을 요구한다. 검증: S261의 `headless = false` 두 줄을 뺀 상태에서 `an_image_configured_after_a_detach_draws_later_shell_output`의 Red(`the shell output after the configure of generation 2 drew no frame: []`), 그 다음 Green.
 - S261: detach 뒤에 설정된 image가 surface를 image mode로 되돌리므로 page가 reload된 terminal view가 이후 program 출력을 그린다. 이전에는 두 configure 경로가 `image.detach` 뒤의 surface를 headless로 두어 기록이 `mode="headless" cause="configure"`였고 view는 configure 때만 frame을 보였다. 검증: `an_image_configured_after_a_detach_presents_later_program_output`의 Red(program 출력 뒤 `timeout waiting for an image frame`), 그 다음 Green(`serve_contract` 162개 중 162개, vt-core library test 110개 중 110개).
 - S260: 버전이 0.0.44이므로 release run이 저장소의 main을 v0.0.44로 낸다. S259의 owned session 끝의 오류 정리가 들어 있다.
