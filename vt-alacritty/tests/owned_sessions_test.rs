@@ -564,3 +564,113 @@ async fn the_end_of_the_shell_sends_the_session_ended_event_to_the_owner() {
     assert_eq!(event["body"]["session"], session.as_str());
     assert_eq!(event["body"]["reason"], "ended");
 }
+
+impl Service {
+    /// Reads the screen of an owned session of `owner` and returns the reply body.
+    async fn read_session(&mut self, owner: &str, cid: &str, session: &str) -> Value {
+        self.send(owner, cid, json!({"operation": "read", "session": session}))
+            .await;
+        self.reply(cid).await
+    }
+
+    /// Reads the owned session until its rows contain `text`, and returns the last reply body.
+    async fn read_until(&mut self, owner: &str, session: &str, text: &str) -> Value {
+        let mut body = Value::Null;
+        for attempt in 0..50 {
+            let cid = format!("read{attempt}");
+            body = self.read_session(owner, &cid, session).await;
+            let shown = body["rows"].as_array().is_some_and(|rows| {
+                rows.iter()
+                    .any(|row| row.as_str().is_some_and(|row| row.contains(text)))
+            });
+            if shown {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        body
+    }
+}
+
+#[tokio::test]
+async fn read_answers_the_rows_and_the_cursor_of_the_session() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service
+        .open_session("o1", "c1", shell_params("printf READY; exec cat"))
+        .await;
+    let body = service.read_until("o1", &session, "READY").await;
+    let rows = body["rows"].as_array().expect("the reply has rows");
+    assert_eq!(rows[0], "READY", "the first row is not the output: {body}");
+    assert_eq!(body["cursor"], json!({"row": 0, "column": 5}));
+}
+
+#[tokio::test]
+async fn read_refuses_a_session_of_another_owner() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service.open_session("o1", "c1", cat_params()).await;
+    let body = service.read_session("o2", "r1", &session).await;
+    assert_eq!(
+        body["error"],
+        format!("surface o2 does not own session {session}")
+    );
+}
+
+#[tokio::test]
+async fn input_writes_the_text_to_the_session_of_its_owner() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service.open_session("o1", "c1", cat_params()).await;
+    service
+        .send(
+            "o1",
+            "i1",
+            json!({"operation": "input", "session": session, "text": "typed-owned"}),
+        )
+        .await;
+    assert_eq!(service.reply("i1").await, json!({"session": session}));
+    let body = service.read_until("o1", &session, "typed-owned").await;
+    assert!(
+        body["rows"].as_array().is_some_and(|rows| rows
+            .iter()
+            .any(|row| row.as_str().is_some_and(|row| row.contains("typed-owned")))),
+        "the input did not reach the session: {body}"
+    );
+}
+
+#[tokio::test]
+async fn input_judges_the_line_as_the_input_of_a_surface() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service.open_session("o1", "c1", cat_params()).await;
+    service
+        .send(
+            "o1",
+            "i1",
+            json!({"operation": "input", "session": session, "text": "rm -rf /\r"}),
+        )
+        .await;
+    let body = service.reply("i1").await;
+    assert_eq!(
+        body["error"], "guardRefused",
+        "the destructive line was not refused: {body}"
+    );
+}
+
+#[tokio::test]
+async fn paste_writes_the_text_to_the_session_of_its_owner() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service.open_session("o1", "c1", cat_params()).await;
+    service
+        .send(
+            "o1",
+            "p1",
+            json!({"operation": "paste", "session": session, "text": "pasted-owned"}),
+        )
+        .await;
+    assert_eq!(service.reply("p1").await, json!({"session": session}));
+    let body = service.read_until("o1", &session, "pasted-owned").await;
+    assert!(
+        body["rows"].as_array().is_some_and(|rows| rows
+            .iter()
+            .any(|row| row.as_str().is_some_and(|row| row.contains("pasted-owned")))),
+        "the paste did not reach the session: {body}"
+    );
+}

@@ -2,11 +2,13 @@
 // docs/spec/vt-core.md#owned-session-operations). An owned session is a PTY session of its owner surface. Its output feeds an
 // engine of its own and a buffer of the latest output, so a tab that attaches replays the screen the session held. While a
 // tab shows the session, the surface of the tab draws it and its configure sets the grid.
+use crate::encoding;
 use crate::events::Events;
+use crate::guard::{self, LineInput};
 use crate::platform::{Metrics, default_font, metrics_for};
 use crate::protocol::{
     DEFAULT_FONT_SIZE, DaemonEvent, Dispatch, Engine, OutputSink, SessionPort, ShellRequest,
-    open_launch, session_resize,
+    open_launch, screen_text, session_resize,
 };
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
@@ -67,10 +69,24 @@ pub fn default_cell_metrics(scale: f64) -> Result<Metrics, String> {
     metrics_for(&default_font(), DEFAULT_FONT_SIZE, scale as f32)
 }
 
+/// The connection of the owner of a session that its events go to, shared by the entry and the task of the session. Each
+/// request of the owner replaces it, so an owner that connects again receives the events on its new connection.
+type SinkCell = Arc<tokio::sync::Mutex<Option<OutputSink>>>;
+
 /// The commands that the task of a session receives from the service.
 enum Control {
     /// The grid of the engine of the session, while no surface shows it.
     Resize(u16, u16),
+    /// The text of an `input` (`paste` false) or a `paste` of the owner. The task judges it with the line guard and the modes of
+    /// the engine, and answers the bytes to write, or the error body of a refusal.
+    Write {
+        text: String,
+        paste: bool,
+        cids: Vec<String>,
+        reply: oneshot::Sender<Result<Vec<u8>, Value>>,
+    },
+    /// The visible rows of the screen as text and the cursor of the screen.
+    Read { reply: oneshot::Sender<Value> },
     /// The attachment of a surface: the engine takes the grid, the buffer replays into `forward`, and later output goes to
     /// `forward` until the surface ends.
     Attach {
@@ -94,8 +110,8 @@ struct Entry {
     ended: bool,
     /// The surface that shows the session and its command channel, while that surface is attached.
     shown_by: Option<(String, mpsc::Sender<Dispatch>)>,
-    /// The connection of the owner that sent the last request of the session: the event of its end goes there.
-    sink: Option<OutputSink>,
+    /// The connection of the owner that sent the last request of the session: the events of the session go there.
+    sink: SinkCell,
 }
 
 /// The owned sessions of one persistent service. Its entries outlive each connection, so a restored owner reattaches.
@@ -116,25 +132,39 @@ pub(crate) struct Attached {
     pub events: mpsc::Receiver<DaemonEvent>,
 }
 
-/// Whether a request body is an owned-session request: an `open` with an object `session`, or a `resize` or `end`.
+/// Whether a request body is an owned-session request: an `open` with an object `session`, a `resize` or `end` with a
+/// `session`, or an `input`, `paste` or `read` with a text `session`.
 pub fn is_request(body: &Value) -> bool {
     match body.get("operation").and_then(Value::as_str) {
         Some("open") => body.get("session").is_some_and(Value::is_object),
         Some("resize" | "end") => body.get("session").is_some(),
+        Some("input" | "paste" | "read") => body.get("session").is_some_and(Value::is_string),
         _ => false,
     }
 }
 
-/// Answers an owned-session request of `owner` and returns the reply body.
+/// The sender of an owned-session request: the owner surface, the correlation identifiers of the request, and the connection
+/// that its events go to.
+pub(crate) struct Request<'a> {
+    pub owner: &'a str,
+    pub cids: &'a [String],
+    pub output: &'a OutputSink,
+}
+
+/// Answers an owned-session request and returns the reply body.
 pub(crate) async fn answer(
     sessions: &Arc<tokio::sync::Mutex<OwnedSessions>>,
-    owner: &str,
+    request: &Request<'_>,
     body: &Value,
     engine_factory: &EngineFactory,
     session_port_factory: &SessionPortFactory,
     log: &Events,
-    output: &OutputSink,
 ) -> Value {
+    let Request {
+        owner,
+        cids,
+        output,
+    } = *request;
     let result = match body.get("operation").and_then(Value::as_str) {
         Some("open") => {
             open(
@@ -150,6 +180,9 @@ pub(crate) async fn answer(
         }
         Some("resize") => resize(sessions, owner, body, log, output).await,
         Some("end") => end(sessions, owner, body, log, output).await,
+        Some("input") => write_text(sessions, owner, cids, body, false, log, output).await,
+        Some("paste") => write_text(sessions, owner, cids, body, true, log, output).await,
+        Some("read") => read(sessions, owner, body, log).await,
         _ => Err("owned session request has no known operation".to_string()),
     };
     match result {
@@ -252,7 +285,7 @@ async fn open(
         .cloned()
     {
         if let Some(entry) = table.entries.get_mut(&session) {
-            entry.sink = Some(output.clone());
+            *entry.sink.lock().await = Some(output.clone());
         }
         return Ok(json!({"session": session, "creation": creation}));
     }
@@ -273,6 +306,7 @@ async fn open(
     let (control_tx, control_rx) = mpsc::unbounded_channel();
     let exited = Arc::new(AtomicBool::new(false));
     let session = format!("owned-{}", table.next + 1);
+    let sink: SinkCell = Arc::new(tokio::sync::Mutex::new(Some(output.clone())));
     tokio::spawn(feed_engine(
         events,
         engine,
@@ -280,7 +314,10 @@ async fn open(
         control_rx,
         exited.clone(),
         log.clone(),
-        (shared, session.clone()),
+        FeedContext {
+            table: shared,
+            session: session.clone(),
+        },
     ));
     table.next += 1;
     table.entries.insert(
@@ -294,7 +331,7 @@ async fn open(
             exited,
             ended: false,
             shown_by: None,
-            sink: Some(output.clone()),
+            sink,
         },
     );
     table
@@ -321,7 +358,7 @@ async fn resize(
     if entry.owner != owner {
         return Err(format!("surface {owner} does not own session {session}"));
     }
-    entry.sink = Some(output.clone());
+    *entry.sink.lock().await = Some(output.clone());
     entry.size = size;
     if let Some((_, shown)) = entry.shown_by.clone() {
         // The attached surface holds the grid: it recomputes the grid from the size with its own metrics.
@@ -369,7 +406,7 @@ async fn end(
     if entry.owner != owner {
         return Err(format!("surface {owner} does not own session {session}"));
     }
-    entry.sink = Some(output.clone());
+    *entry.sink.lock().await = Some(output.clone());
     settle(entry, log).await;
     if entry.ended {
         return Ok(json!({"session": session, "ended": true}));
@@ -387,6 +424,102 @@ async fn end(
     // Dropping the sender ends the task of the session.
     entry.control = None;
     Ok(json!({"session": session, "ended": true}))
+}
+
+/// Answers an `input` (`paste` false) or a `paste` of the owner: the task judges the text as the input of a surface does
+/// (guard.rs), the bytes are written to the PTY, and the reply is sent when the write completes. A refusal of the guard
+/// writes nothing and answers its error body.
+async fn write_text(
+    sessions: &Arc<tokio::sync::Mutex<OwnedSessions>>,
+    owner: &str,
+    cids: &[String],
+    body: &Value,
+    paste: bool,
+    log: &Events,
+    output: &OutputSink,
+) -> Result<Value, String> {
+    let operation = if paste { "paste" } else { "input" };
+    let session = session_member(body)?;
+    let text = body
+        .get("text")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{operation} requires text string"))?;
+    let (control, port, pty) = {
+        let mut table = sessions.lock().await;
+        let entry = open_entry(&mut table, &session, log).await?;
+        if entry.owner != owner {
+            return Err(format!("surface {owner} does not own session {session}"));
+        }
+        *entry.sink.lock().await = Some(output.clone());
+        let control = entry
+            .control
+            .clone()
+            .ok_or_else(|| format!("session {session} is not open"))?;
+        let port = entry
+            .port
+            .clone()
+            .ok_or_else(|| format!("session {session} is not open"))?;
+        (control, port, entry.pty.clone())
+    };
+    let (reply, judged) = oneshot::channel();
+    control
+        .send(Control::Write {
+            text: text.to_string(),
+            paste,
+            cids: cids.to_vec(),
+            reply,
+        })
+        .map_err(|_| format!("session {session} is not open"))?;
+    let bytes = match judged
+        .await
+        .map_err(|_| format!("session {session} is not open"))?
+    {
+        Ok(bytes) => bytes,
+        Err(refusal) => return Ok(refusal),
+    };
+    if bytes.is_empty() {
+        return Ok(json!({"session": session}));
+    }
+    let completion = port
+        .write(&pty, crate::pty::WriteOrigin::Person, Arc::from(bytes))
+        .await
+        .map_err(|error| format!("{operation} failed: {error}"))?;
+    completion
+        .await
+        .map_err(|_| WRITE_LOST.to_string())?
+        .map_err(|error| format!("{operation} failed: {error}"))?;
+    Ok(json!({"session": session}))
+}
+
+/// The result of a write whose session ended before the write completed.
+const WRITE_LOST: &str = "the session ended before the write completed";
+
+/// Answers a `read` of the owner: the visible rows of the screen as text and the cursor, zero-based, as `{row, column}`.
+async fn read(
+    sessions: &Arc<tokio::sync::Mutex<OwnedSessions>>,
+    owner: &str,
+    body: &Value,
+    log: &Events,
+) -> Result<Value, String> {
+    let session = session_member(body)?;
+    let control = {
+        let mut table = sessions.lock().await;
+        let entry = open_entry(&mut table, &session, log).await?;
+        if entry.owner != owner {
+            return Err(format!("surface {owner} does not own session {session}"));
+        }
+        entry
+            .control
+            .clone()
+            .ok_or_else(|| format!("session {session} is not open"))?
+    };
+    let (reply, answer) = oneshot::channel();
+    control
+        .send(Control::Read { reply })
+        .map_err(|_| format!("session {session} is not open"))?;
+    answer
+        .await
+        .map_err(|_| format!("session {session} is not open"))
 }
 
 /// Attaches a surface to an open session. The surface takes the output, the grid of the default font and the input of the
@@ -451,11 +584,12 @@ async fn feed_engine(
     mut control: mpsc::UnboundedReceiver<Control>,
     exited: Arc<AtomicBool>,
     log: Events,
-    owner_of: (Arc<tokio::sync::Mutex<OwnedSessions>>, String),
+    context: FeedContext,
 ) {
-    let (table, session) = owner_of;
+    let table = Arc::clone(&context.table);
     let mut replay: VecDeque<u8> = VecDeque::new();
     let mut forward: Option<mpsc::Sender<DaemonEvent>> = None;
+    let mut line_guard = guard::LineGuard::default();
     loop {
         tokio::select! {
             event = events.recv() => match event {
@@ -476,7 +610,7 @@ async fn feed_engine(
                 }
                 Some(DaemonEvent::Exit { session_id }) if session_id == pty => {
                     exited.store(true, Ordering::Release);
-                    tokio::spawn(notify_ended(table.clone(), session.clone(), log.clone()));
+                    tokio::spawn(notify_ended(table.clone(), context.session.clone(), log.clone()));
                     if let Some(sender) = &forward {
                         let _ = sender.send(DaemonEvent::Exit { session_id }).await;
                     }
@@ -496,12 +630,24 @@ async fn feed_engine(
                 Some(_) => {}
                 None => {
                     exited.store(true, Ordering::Release);
-                    tokio::spawn(notify_ended(table.clone(), session.clone(), log.clone()));
+                    tokio::spawn(notify_ended(table.clone(), context.session.clone(), log.clone()));
                     break;
                 }
             },
             command = control.recv() => match command {
                 Some(Control::Resize(columns, rows)) => engine.resize(columns, rows),
+                Some(Control::Write { text, paste, cids, reply }) => {
+                    let judged = judge_input(&mut engine, &mut line_guard, &pty, &cids, &text, paste, &log);
+                    let _ = reply.send(judged);
+                }
+                Some(Control::Read { reply }) => {
+                    let screen = engine.screen();
+                    let body = json!({
+                        "rows": screen_text(&screen),
+                        "cursor": {"row": screen.cursor.row, "column": screen.cursor.col},
+                    });
+                    let _ = reply.send(body);
+                }
                 Some(Control::Attach { columns, rows, forward: sender, reply }) => {
                     engine.resize(columns, rows);
                     let snapshot = DaemonEvent::Output {
@@ -531,7 +677,7 @@ async fn notify_ended(table: Arc<tokio::sync::Mutex<OwnedSessions>>, session: St
         table
             .entries
             .get(&session)
-            .map(|entry| (entry.owner.clone(), entry.sink.clone()))
+            .map(|entry| (entry.owner.clone(), Arc::clone(&entry.sink)))
     };
     let Some((owner, sink)) = target else {
         log.record_error(
@@ -540,6 +686,7 @@ async fn notify_ended(table: Arc<tokio::sync::Mutex<OwnedSessions>>, session: St
         );
         return;
     };
+    let sink = sink.lock().await.clone();
     let Some(sink) = sink else {
         log.record_error(
             "owned session",
@@ -554,6 +701,78 @@ async fn notify_ended(table: Arc<tokio::sync::Mutex<OwnedSessions>>, session: St
             format!("session {session}: the session.ended event was not delivered"),
         );
     }
+}
+
+/// What the task of an owned session needs of its entry: the table for the end, the identifiers of the session and its owner,
+/// and the connection of the owner for the events.
+struct FeedContext {
+    table: Arc<tokio::sync::Mutex<OwnedSessions>>,
+    session: String,
+}
+
+/// Judges the text of an `input` or a `paste` as the input of a surface judges its own (guard.rs): on a shell line the guard
+/// follows the line and refuses a submission it does not allow, and the refusal writes nothing. A paste is encoded with the
+/// bracketed-paste mode of the engine; an input is written as given. Returns the bytes to write, or the error body.
+fn judge_input(
+    engine: &mut Box<dyn Engine>,
+    line: &mut guard::LineGuard,
+    session: &str,
+    cids: &[String],
+    text: &str,
+    paste: bool,
+    log: &Events,
+) -> Result<Vec<u8>, Value> {
+    // An alternate screen or an application keypad belongs to the program that reads the keys, so the guard does not judge them.
+    let shell_line = {
+        let modes = engine.modes();
+        !modes.alt_screen && !modes.app_keypad
+    };
+    if !shell_line {
+        *line = guard::LineGuard::default();
+    } else {
+        let inputs = if paste {
+            vec![LineInput::Text(text)]
+        } else {
+            line_inputs_of_text(text)
+        };
+        if let Some((rule, reason)) = guard::judge_transaction(log, line, session, cids, &inputs) {
+            return Err(json!({"error": "guardRefused", "rule": rule, "reason": reason}));
+        }
+    }
+    if paste {
+        encoding::encode_paste(text, &engine.modes())
+            .map_err(|reason| json!({"error": "invalidParams", "reason": reason}))
+    } else {
+        Ok(text.as_bytes().to_vec())
+    }
+}
+
+/// The keys that a text written as input gives the command line: a carriage return or line feed submits, a delete control
+/// deletes, Ctrl-C and Ctrl-U discard, another control character moves or recalls the line (`Other`), and each run of other
+/// characters is text.
+fn line_inputs_of_text(text: &str) -> Vec<LineInput<'_>> {
+    let mut inputs = Vec::new();
+    let mut run_start: Option<usize> = None;
+    for (index, ch) in text.char_indices() {
+        let key = match ch {
+            '\r' | '\n' => LineInput::Enter,
+            '\u{7f}' | '\u{8}' => LineInput::Backspace,
+            '\u{3}' | '\u{15}' => LineInput::Discard,
+            ch if ch.is_control() => LineInput::Other,
+            _ => {
+                run_start.get_or_insert(index);
+                continue;
+            }
+        };
+        if let Some(start) = run_start.take() {
+            inputs.push(LineInput::Text(&text[start..index]));
+        }
+        inputs.push(key);
+    }
+    if let Some(start) = run_start {
+        inputs.push(LineInput::Text(&text[start..]));
+    }
+    inputs
 }
 
 #[cfg(test)]

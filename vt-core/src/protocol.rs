@@ -2748,7 +2748,7 @@ struct ScrollRead {
 }
 
 /// The plain text of each row of `screen`: the characters of the cells of a width other than 0, without the spaces at its end.
-fn screen_text(screen: &Screen) -> Vec<String> {
+pub(crate) fn screen_text(screen: &Screen) -> Vec<String> {
     screen
         .lines
         .iter()
@@ -6547,12 +6547,15 @@ where
                         Some(registry) => {
                             crate::owned_sessions::answer(
                                 &registry.owned,
-                                &surface_id,
+                                &crate::owned_sessions::Request {
+                                    owner: &surface_id,
+                                    cids: &cids,
+                                    output: &output_tx,
+                                },
                                 body,
                                 &engine_factory,
                                 &session_port_factory,
                                 &log,
-                                &output_tx,
                             )
                             .await
                         }

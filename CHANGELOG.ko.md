@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S244-1: sidecar가 owned session의 `input`, `paste`, `read`에 응답한다. `input`과 `paste`는 text를 표면 입력의 guard로 판단한 뒤 program에 쓰고, `read`는 `{rows, cursor}`로 응답한다. 검증: `owned_sessions_test`의 새 사례 Red(5개 실패), 이어서 Green(25개 중 25개 통과).
 - S243: owned session 코드가 `sok-check events` 검사를 통과한다. 사양이 정한 이유를 `params`의 기본값에 적고, `size` 에코는 기본값 대신 명시적 오류를 낸다. 0.0.33 release가 이 검사에서 실패해 tag가 만들어지지 않았다. 검증: `make test` 종료 코드 0, `owned_sessions_test` 20/20 통과.
 - S242: 버전이 0.0.33이므로 release run이 저장소의 main을 v0.0.33으로 낸다. S241의 owned session 동작, attach 요청, session.ended 이벤트를 담는다.
 - S241-4: owned session의 shell 또는 program이 끝나면 sidecar가 owner의 연결로 owner surface에 `session.ended` 이벤트(reason `ended`)를 보낸다. 검증: `the_end_of_the_shell_sends_the_session_ended_event_to_the_owner`의 Red(시간 초과), 이어서 Green(20/20; crate 전체 suite 761개 중 760개 통과, 실패는 병렬에서만 나는 `engine_flood_test` case로 86587c4에서도 실패한다).

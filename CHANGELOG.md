@@ -1,5 +1,6 @@
 # Changelog
 
+- S244-1: The sidecar answers `input`, `paste` and `read` of an owned session: `input` and `paste` judge their text with the guard of the surface input and write it to the program, and `read` answers `{rows, cursor}`. Verification: Red of the new cases of `owned_sessions_test` (5 failed), then Green (25 of 25).
 - S243: The owned-session code passes `sok-check events`: the default of an absent `params` carries the reason that the spec states, and the `size` echo is an explicit error rather than a default. The release of 0.0.33 failed at this check, so no tag was made. Verification: `make test` exits 0 and `owned_sessions_test` passes 20 of 20.
 - S242: The version is 0.0.33, so the release run publishes the main of the repository as v0.0.33; it holds the owned-session operations, the attach request and the session.ended event of S241.
 - S241-4: When the shell or program of an owned session exits, the sidecar sends the event `session.ended` with reason `ended` to the owner surface on the owner's connection. Verification: Red of `the_end_of_the_shell_sends_the_session_ended_event_to_the_owner` (timed out), then Green (20 of 20; full crate suites 760 of 761, the failure is the parallel-only `engine_flood_test` case that also fails on 86587c4).
