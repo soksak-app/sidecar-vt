@@ -1,9 +1,9 @@
 # 기능
 
-- [~] S244 — P1, core docs/spec/persistent-services.md#owned-sessions에 연결: owned session이 core 계약의 `input`, `paste`, `read` 동작에 응답하고, 그 program 상태를 `session.program`으로 owner에게 보고한다. 완료: S244-1과 S244-2. 남은 것: S244-3.
+- [o] S244 — P1, core docs/spec/persistent-services.md#owned-sessions에 연결: owned session이 core 계약의 `input`, `paste`, `read` 동작에 응답하고, 그 program 상태를 `session.program`으로 owner에게 보고한다. 완료: S244-1부터 S244-3까지.
   - [o] S244-1 — P1: sidecar가 owned session의 `input`, `paste`, `read`에 응답한다. `input`과 `paste`의 text는 표면 입력의 guard로 판단한 뒤 program에 쓰고, `read`는 보이는 행과 커서를 응답한다. Red: `owned_sessions_test`의 새 input, paste, read 사례 5개가 실패했다(`Unknown operation: read`, `input must contain exactly operation, actions, preedit`, `paste`의 `Session not open`). Green: `owned_sessions_test`가 25개 중 25개 통과한다.
   - [o] S244-2 — P1: sidecar가 owned session의 상태가 바뀔 때마다 owner에게 `session.program`을 보낸다. 상태 추적은 tab session과 같다(core docs/spec/program-state.md). Red: `the_program_state_of_an_owned_session_goes_to_its_owner`가 구현 전 `session.program` 이벤트 없이 5초 뒤 시간 초과했다. Green: `owned_sessions_test`가 26개 중 26개 통과한다. 이때 fixture의 쌍 구분자는 프로토콜의 구분자인 `:`로 고쳤다(Green 실행 전).
-  - [~] S244-3 — P1: 버전은 0.0.34다. crate, Cargo.lock, 패키지가 0.0.34를 선언한다(S242가 0.0.33을 선언한 것과 같다). 기다리는 것: main의 push와 tag v0.0.34를 사용자가 하는 것이며, 이 작업은 둘 다 하지 않는다.
+  - [o] S244-3 — P1: 버전은 0.0.34다. crate, Cargo.lock, 패키지가 0.0.34를 선언한다(S242가 0.0.33을 선언한 것과 같다). release v0.0.34가 공개되어 있다.
 - [o] S243 — P0, S242에 이어짐: owned session 코드가 `sok-check events` 검사를 통과한다. 사양이 정한 이유를 `params`의 기본값에 적고, `size` 에코는 기본값 대신 명시적 오류를 낸다. 입력: 0.0.33 release가 이 검사에서 실패해 tag가 만들어지지 않았다. 검증: `make test` 종료 코드 0, `owned_sessions_test` 20/20 통과.
 - [o] S242 — P0, core F1062-5에 연결: 저장소의 main을 0.0.33으로 release한다(core 0.0.46 옆). 입력: 패키지는 0.0.32를 선언하고 그 tag v0.0.32가 있으므로, release gate는 그 뒤의 commit을 release한다. 변경: crate, Cargo.lock, 패키지가 0.0.33을 선언한다. release는 S241의 owned session 동작, attach, session.ended 이벤트(S241-4)를 담는다.
 - [o] S241 — P1, core F1062-4에 연결: sidecar가 core의 owned session 동작에 응답한다(`docs/spec/vt-core.ko.md#owned-session-동작`): 크기를 받는 `open`, `resize`, `end`, 그리고 tab에 열린 session의 출력, 입력, resize를 넘기는 `attach`. 완료: S241-1부터 S241-3까지.
