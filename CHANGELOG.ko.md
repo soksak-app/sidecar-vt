@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S252-1: 같은 owned session을 이미 보이는 surface의 attach가 `{session, attached: true}`로 응답하고 아무것도 바꾸지 않는다. 그래서 service가 남긴 surface에서 view가 다시 시작하거나 session 시작을 두 번 실행한 tab이 session을 보인다. 이전에는 sidecar가 `surface already holds a session`으로 거부해 tab이 빈 채로 남았다. 다른 session의 attach는 계속 거부한다. 검증: `a_repeated_attach_of_the_shown_session_answers_it_as_attached`의 Red, 이어서 Green(`owned_sessions_test` 43개 중 43개).
 - S251-2: 버전이 0.0.40이므로 release run이 저장소의 main을 v0.0.40으로 낸다. S251-1의 `sessions` 항목별 program state가 들어 있다.
 - S251-1: `sessions` 응답의 각 항목은 session의 마지막 `session.program` 이벤트의 상태인 `idle`, `working`, `blocked` 또는 보낸 이벤트가 없으면 `null`인 `program`을 적는다. 그래서 다시 시작한 application이 idle session을 그 상태와 함께 adopt한다. 이전에는 변화만 보고하는 program 때문에 adopt한 session에 상태가 없었다. 검증: `sessions_lists_the_last_program_state_of_an_owned_session`과 `sessions` 나열 사례의 Red, 그 뒤 Green(`owned_sessions_test` 41개 중 41개, clippy와 fmt).
 - S249-2: 버전이 0.0.39이므로 release run이 저장소의 main을 v0.0.39로 낸다. S249-1의 attach 때 owned session 화면과 S250-1의 read 첫 행 line이 들어 있다.

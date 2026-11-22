@@ -524,6 +524,40 @@ async fn a_second_attach_is_refused_while_a_view_shows_the_session() {
 }
 
 #[tokio::test]
+async fn a_repeated_attach_of_the_shown_session_answers_it_as_attached() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service.open_session("o1", "c1", cat_params()).await;
+    assert_eq!(service.attach("t1", "a1", &session).await["attached"], true);
+    assert_eq!(
+        service.attach("t1", "a2", &session).await,
+        json!({"session": session, "attached": true})
+    );
+}
+
+#[tokio::test]
+async fn an_attach_of_another_session_is_refused_while_the_surface_shows_one() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let first = service.open_session("o1", "c1", cat_params()).await;
+    service
+        .send(
+            "o1",
+            "c2",
+            open_body("k-other", size(400.0, 200.0, 2.0), cat_params()),
+        )
+        .await;
+    let second = service.reply("c2").await["session"]
+        .as_str()
+        .expect("the second open names a session")
+        .to_string();
+    assert_ne!(first, second);
+    assert_eq!(service.attach("t1", "a1", &first).await["attached"], true);
+    assert_eq!(
+        service.attach("t1", "a2", &second).await["error"],
+        "surface already holds a session"
+    );
+}
+
+#[tokio::test]
 async fn the_end_of_the_shell_ends_the_session() {
     let mut service = start_service(PersistentRegistry::new(), "o1");
     let session = service

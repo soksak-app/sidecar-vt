@@ -4350,6 +4350,8 @@ async fn surface_task(
     let mut daemon_events_rx = session_port.get_events().await;
     // Whether this surface shows an owned session that it attached. Such a session is closed by its owner, not by the surface.
     let mut attached = false;
+    // The name of the owned session that this surface attached, which a repeated attach of the same session answers again.
+    let mut attached_session: Option<String> = None;
     let mut image_state: Option<ImageState> = None;
     // The terminal state and the program status of the session of this surface.
     let mut status = SessionStatus::default();
@@ -5722,6 +5724,13 @@ async fn surface_task(
                         break;
                     }
                     SurfaceCommand::Attach { session, registry, own } => {
+                        // A repeated attach of the session that this surface shows, such as the attach of a view that starts
+                        // again on a surface that the service kept, answers it as attached and changes nothing.
+                        if attached && attached_session.as_deref() == Some(session.as_str()) {
+                            let response = json!({"surface": surface_id, "body": {"session": session, "attached": true}});
+                            if output_tx.reply(response).await.is_err() { return; }
+                            continue;
+                        }
                         if session_id.is_some() {
                             let response = json!({"surface": surface_id, "body": {"error": "surface already holds a session"}});
                             if output_tx.reply(response).await.is_err() { return; }
@@ -5736,6 +5745,7 @@ async fn surface_task(
                                 session_id = Some(attachment.pty);
                                 starts_shell = attachment.starts_shell;
                                 attached = true;
+                                attached_session = Some(session.clone());
                                 daemon_events_rx = attachment.events;
                                 let response = json!({"surface": surface_id, "body": {"session": session, "attached": true}});
                                 if output_tx.reply(response).await.is_err() { return; }
