@@ -1,5 +1,6 @@
 # Features
 
+- [ ] S255 — P1: `a_scroll_read_in_less_shows_the_later_lines_and_restores_the_screen` of `vt-alacritty/tests/scroll_read_test.rs` passes under the load of `make test`. Input: the full `make test` run. Behavior: in one of three runs, the second read at the same offset settled by quiet before less redrew and answered the unscrolled screen (`line 0001` instead of `line 0051`); `make repeat` of the test alone passed 30 of 30. Expected: the read settles on the redraw of the scroll at any load.
 - [ ] S254 — P0, follow-up of S252: The version is 0.0.41: the crates, Cargo.lock and the package declare 0.0.41. The release v0.0.41 is published with its darwin-arm64 asset.
 - [o] S253 — P0: Each discarded send result and each discarded conversion error of vt-core states its reason. Input: `sok-check events` over the sources. Behavior: the check failed with 8 findings, seven discarded sends of the task of an owned session in `vt-core/src/owned_sessions.rs` and one discarded conversion error of the process query in `vt-core/src/protocol.rs`. Expected: each discard states why no event records it, and the check passes. Complete: S253-1.
   - [o] S253-1 — P0: A `default:` comment above each discard states its reason. Red: `sok-check events` reported 8 findings. Green: `sok-check events` passes 45 sources.

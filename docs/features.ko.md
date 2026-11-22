@@ -1,5 +1,6 @@
 # 기능
 
+- [ ] S255 — P1: `vt-alacritty/tests/scroll_read_test.rs`의 `a_scroll_read_in_less_shows_the_later_lines_and_restores_the_screen`가 `make test`의 부하에서 통과한다. 입력: 전체 `make test` 실행. 동작: 세 번 중 한 번, 같은 offset의 두 번째 read가 less가 다시 그리기 전에 quiet로 settle해 scroll 전 화면(`line 0051` 대신 `line 0001`)을 답했다. 테스트만 돌린 `make repeat`는 30번 중 30번 통과했다. 기대: read가 어떤 부하에서도 scroll의 다시 그리기에서 settle한다.
 - [ ] S254 — P0, S252의 후속: 버전은 0.0.41이다. crate, Cargo.lock, 패키지가 0.0.41을 선언한다. release v0.0.41이 darwin-arm64 asset과 함께 게시된다.
 - [o] S253 — P0: vt-core가 버리는 각 send 결과와 conversion error가 그 이유를 적는다. 입력: source에 대한 `sok-check events`. 동작: check가 8개 finding으로 실패했다. `vt-core/src/owned_sessions.rs`의 owned session task가 버리는 send 7개와 `vt-core/src/protocol.rs`의 process query가 버리는 conversion error 1개다. 기대: 각 버림이 event가 기록하지 않는 이유를 적고 check가 통과한다. 완료: S253-1.
   - [o] S253-1 — P0: 각 버림 위의 `default:` comment가 이유를 적는다. Red: `sok-check events`가 8개 finding을 보고했다. Green: `sok-check events`가 45개 source에서 통과한다.
