@@ -98,7 +98,7 @@ impl Service {
 }
 
 fn open_body(creation: &str, size: Value, params: Value) -> Value {
-    json!({"operation": "open", "session": {"creation": creation}, "size": size, "params": params})
+    json!({"operation": "open", "session": {"creation": creation}, "size": size, "params": params, "plugin": "terminal"})
 }
 
 /// A program that waits on its terminal input, so a session stays open until its `end` or the end of the service.
@@ -885,7 +885,7 @@ impl Service {
 }
 
 #[tokio::test]
-async fn sessions_lists_each_open_owned_session_with_its_owner_root_creation_and_size() {
+async fn sessions_lists_each_open_owned_session_with_its_owner_root_creation_size_and_plugin() {
     let mut service = start_service(PersistentRegistry::new(), "o1");
     service
         .send(
@@ -910,7 +910,7 @@ async fn sessions_lists_each_open_owned_session_with_its_owner_root_creation_and
     assert_eq!(
         service.sessions("r1").await,
         json!({"operation": "sessions", "request": "r1", "ok": true, "sessions": [
-            {"session": kept, "surface": "o1", "root": "/project", "creation": "k1", "size": size(400.0, 200.0, 2.0)}
+            {"session": kept, "surface": "o1", "root": "/project", "creation": "k1", "size": size(400.0, 200.0, 2.0), "plugin": "terminal"}
         ]})
     );
 }
@@ -962,6 +962,33 @@ async fn two_service_processes_name_their_first_sessions_differently() {
         "an open named no session: {a} {b}"
     );
     assert_ne!(a, b, "two service processes named the same session");
+}
+
+#[tokio::test]
+async fn open_refuses_a_body_without_a_plugin() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    for (cid, plugin) in [
+        ("c1", None),
+        ("c2", Some(json!(""))),
+        ("c3", Some(json!(7))),
+    ] {
+        let mut body = open_body("k1", size(400.0, 200.0, 2.0), cat_params());
+        match plugin {
+            Some(plugin) => body["plugin"] = plugin,
+            None => {
+                body.as_object_mut()
+                    .expect("the open body is an object")
+                    .remove("plugin");
+            }
+        }
+        service.send("o1", cid, body).await;
+        assert_eq!(
+            service.reply(cid).await,
+            json!({"error": "open session requires a non-empty plugin"}),
+            "the open {cid} was not refused"
+        );
+    }
+    assert_eq!(service.sessions("r1").await["sessions"], json!([]));
 }
 
 /// A program that prints the numbered lines 1 to 80 and then waits on its terminal input.

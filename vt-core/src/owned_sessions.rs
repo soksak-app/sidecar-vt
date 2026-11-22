@@ -112,6 +112,8 @@ struct Entry {
     root: String,
     /// The creation identifier of the open.
     creation: String,
+    /// The plugin whose surface opened the session, from the open, which the `sessions` answer names.
+    plugin: String,
     pty: String,
     /// The last size that the owner or the attached view set, which the grid of a new attachment uses.
     size: Size,
@@ -136,7 +138,7 @@ pub struct OwnedSessions {
 }
 
 impl OwnedSessions {
-    /// The open sessions as the entries of the `sessions` answer, `{session, surface, root, creation, size}`, ordered by
+    /// The open sessions as the entries of the `sessions` answer, `{session, surface, root, creation, size, plugin}`, ordered by
     /// session (core docs/spec/persistent-services.md#owned-sessions). A session whose shell or program ended is not listed.
     pub(crate) async fn list(&mut self, log: &Events) -> Vec<Value> {
         let mut listed = Vec::new();
@@ -151,6 +153,7 @@ impl OwnedSessions {
                 "root": entry.root,
                 "creation": entry.creation,
                 "size": {"width": entry.size.width, "height": entry.size.height, "scale": entry.size.scale},
+                "plugin": entry.plugin,
             }));
         }
         listed.sort_by(|a, b| a["session"].as_str().cmp(&b["session"].as_str()));
@@ -318,6 +321,12 @@ async fn open(
         .filter(|creation| !creation.is_empty())
         .ok_or_else(|| "open session requires a non-empty creation".to_string())?
         .to_string();
+    let plugin = body
+        .get("plugin")
+        .and_then(Value::as_str)
+        .filter(|plugin| !plugin.is_empty())
+        .ok_or_else(|| "open session requires a non-empty plugin".to_string())?
+        .to_string();
     let root = root
         .filter(|root| !root.is_empty())
         .ok_or_else(|| "open session requires a non-empty root".to_string())?
@@ -380,6 +389,7 @@ async fn open(
             owner: owner.to_string(),
             root,
             creation: creation.clone(),
+            plugin,
             pty,
             size,
             port: Some(port),
