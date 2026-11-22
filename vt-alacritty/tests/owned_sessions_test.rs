@@ -1175,3 +1175,33 @@ async fn an_attached_surface_shows_the_screen_of_the_session_before_new_output()
         "the attached surface shows no rows of the session: {screen:?}"
     );
 }
+
+/// A read without a range answers `from`, the absolute line number of its first row, so a ranged read from `from` answers
+/// the same rows.
+#[tokio::test]
+async fn read_without_a_range_answers_the_absolute_line_of_its_first_row() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service.open_session("o1", "c1", numbered_params()).await;
+    let body = service.read_until("o1", &session, "line80").await;
+    let from = body["from"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("the read names no from: {body}"));
+    let rows = body["rows"].as_array().expect("the reply has rows").clone();
+    assert!(
+        from > 0,
+        "the first row of the screen is not below the history: {body}"
+    );
+    service
+        .send(
+            "o1",
+            "r1",
+            json!({"operation": "read", "session": session, "from": from, "count": 3}),
+        )
+        .await;
+    let ranged = service.reply("r1").await;
+    assert_eq!(
+        ranged["rows"],
+        json!(rows[..3]),
+        "the rows at from differ: {ranged}"
+    );
+}

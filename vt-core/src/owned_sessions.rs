@@ -85,7 +85,7 @@ enum Control {
         cids: Vec<String>,
         reply: oneshot::Sender<Result<Vec<u8>, Value>>,
     },
-    /// The visible rows of the screen as text and the cursor of the screen, or with `range` the retained rows `(from, count)`
+    /// The absolute line number of the first visible row, the visible rows of the screen as text and the cursor, or with `range` the retained rows `(from, count)`
     /// of the primary screen as text; a range outside the retained rows answers the error of the engine.
     Read {
         range: Option<(u64, u32)>,
@@ -580,7 +580,8 @@ fn read_range(body: &Value) -> Result<Option<(u64, u32)>, String> {
     }
 }
 
-/// Answers a `read` of the owner: the visible rows of the screen as text and the cursor, zero-based, as `{row, column}`, or
+/// Answers a `read` of the owner: the absolute line number `from` of the first visible row, the visible rows of the screen
+/// as text and the cursor, zero-based, as `{row, column}`, or
 /// with `from` and `count` the retained rows `{from, count, rows}` of the primary screen as text.
 async fn read(
     sessions: &Arc<tokio::sync::Mutex<OwnedSessions>>,
@@ -934,7 +935,16 @@ async fn feed_engine(
                 }
                 Some(Control::Read { range: None, reply }) => {
                     let screen = engine.screen();
+                    // The absolute number of the first visible row in the numbering of the rows of its screen: the kept
+                    // rows of the alternate screen while it is active, else the retained rows of the primary screen.
+                    let from = if screen.alternate.active {
+                        screen.alternate.dropped + screen.alternate.history as u64
+                    } else {
+                        screen.scrollback.dropped + u64::from(screen.scrollback.history)
+                            - u64::from(screen.scrollback.offset)
+                    };
                     let body = json!({
+                        "from": from,
                         "rows": screen_text(&screen),
                         "cursor": {"row": screen.cursor.row, "column": screen.cursor.col},
                     });

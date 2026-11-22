@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S250-1: 범위 없는 owned session의 `read`는 `{from, rows, cursor}`로 응답한다. `from`은 범위 read의 번호로 센 첫 행의 absolute line number이므로, owner는 찾은 행 아래의 행이 화면을 떠난 뒤 읽는다. 검증: `read_without_a_range_answers_the_absolute_line_of_its_first_row`의 Red(`from` 없음), 그 뒤 Green(`owned_sessions_test` 40개 중 40개).
 - S249-1: owned session에 연결하는 tab은 마지막 1 MiB 출력 버퍼의 재생 대신 session engine의 화면, 즉 retained primary rows, active alternate screen, cursor, mode를 그리는 byte를 받는다. 그래서 이후 출력 전에 `read`가 답하는 행을 보인다. 이전에는 화면을 그린 뒤 window title처럼 1 MiB보다 많이 쓴 session이 앞부분이 버려진 버퍼를 재생했고, tab은 이후 출력까지 빈 화면이나 잘린 sequence의 텍스트를 보였다. 검증: `an_attached_surface_shows_the_screen_of_the_session_before_new_output`의 Red, 그 뒤 Green(`owned_sessions_test` 39개 중 39개).
 - S248-5: 맞지 않는 read `count`의 변환은 뒤따르는 오류가 이를 거부한다고 밝히므로, S248-1의 read 범위가 `sok-check events`를 통과한다. 0.0.38의 release run은 이 검사에서 실패했고 tag를 만들지 않았다. 검증: `sok-check events`가 통과하고 `owned_sessions_test`가 38개 중 38개 통과한다.
 - S248-4: 버전이 0.0.38이므로 release run이 저장소의 main을 v0.0.38로 낸다. S248-1부터 S248-3까지의 owned session read 범위, 격자, plugin이 들어 있다.
