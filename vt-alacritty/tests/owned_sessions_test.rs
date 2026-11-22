@@ -1257,3 +1257,52 @@ async fn read_without_a_range_answers_the_absolute_line_of_its_first_row() {
         "the rows at from differ: {ranged}"
     );
 }
+
+#[tokio::test]
+async fn a_request_of_a_surface_whose_session_ended_is_refused_and_the_connection_stays() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let ended = service.open_session("o1", "c1", cat_params()).await;
+    service
+        .send(
+            "o1",
+            "c2",
+            open_body("k-other", size(400.0, 200.0, 2.0), cat_params()),
+        )
+        .await;
+    let other = service.reply("c2").await["session"]
+        .as_str()
+        .expect("the second open names a session")
+        .to_string();
+    assert_eq!(service.attach("t1", "a1", &ended).await["attached"], true);
+    assert_eq!(service.attach("t2", "a2", &other).await["attached"], true);
+    service
+        .send("o1", "e1", json!({"operation": "end", "session": ended}))
+        .await;
+    assert_eq!(service.reply("e1").await["ended"], true);
+    // The actor of t1 ends after the session; until then a read of t1 still answers its screen.
+    let mut refusal = Value::Null;
+    for attempt in 0..50 {
+        let cid = format!("r{attempt}");
+        service
+            .send("t1", &cid, json!({"operation": "screen.read"}))
+            .await;
+        let line = service
+            .line_where("an answer of t1", |value| {
+                value["surface"] == "t1"
+                    && (value["body"]["event"] == "screen" || value["body"].get("error").is_some())
+            })
+            .await;
+        if line["body"].get("error").is_some() {
+            refusal = line["body"].clone();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let reason = refusal["error"].as_str().unwrap_or_default();
+    assert!(
+        reason.starts_with("surface t1 has no live session: "),
+        "the read of t1 was not refused: {refusal}"
+    );
+    let screen = service.screen_text("t2").await;
+    assert!(screen.lines().count() > 0, "t2 answered no screen");
+}

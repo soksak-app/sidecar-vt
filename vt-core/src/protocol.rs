@@ -222,18 +222,33 @@ impl Dispatch {
 struct RequestSender {
     tx: mpsc::Sender<Dispatch>,
     request: Arc<Request>,
+    surface: String,
+    reply: OutputSink,
 }
 
 impl RequestSender {
-    async fn send(
-        &self,
-        command: SurfaceCommand,
-    ) -> Result<(), Box<mpsc::error::SendError<Dispatch>>> {
+    /// Hands the command to the surface actor. An actor that has ended, such as the actor of a surface whose owned
+    /// session ended, refuses only this request: the error reply goes to its surface and the connection stays, so the
+    /// other surfaces of the connection keep their sidecar. `Err` means only that the output of the connection has
+    /// closed.
+    async fn send(&self, command: SurfaceCommand) -> Result<(), ()> {
         self.request.enter(RequestStage::SurfaceQueue);
-        self.tx
+        if self
+            .tx
             .send(Dispatch::of(command, &self.request))
             .await
-            .map_err(Box::new)?;
+            .is_err()
+        {
+            let error = format!(
+                "surface {} has no live session: its surface actor has ended",
+                self.surface
+            );
+            self.request.log.record_error("surface request", &error);
+            return self
+                .reply
+                .reply(json!({"surface": self.surface, "body": {"error": error}}))
+                .await;
+        }
         self.request.enter(RequestStage::ActorQueue);
         Ok(())
     }
@@ -6820,6 +6835,8 @@ where
                     let tx = RequestSender {
                         tx,
                         request: Arc::clone(&request),
+                        surface: surface_id.clone(),
+                        reply: reply_tx.clone(),
                     };
 
                     // Checks the operation field first (it is a request).
