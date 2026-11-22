@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S258: 버전이 0.0.43이므로 release run이 저장소의 main을 v0.0.43으로 낸다. S257-1의 끝난 surface actor 요청 거부가 들어 있다.
 - S257-1: surface actor가 끝난 surface의 요청, 예를 들어 `end` 뒤 owned session에 attach한 tab의 요청은 그 surface에 `surface <id> has no live session: its surface actor has ended`로 답하고 연결은 유지된다. 이전에는 input loop가 연결 전체를 끝내서 그 연결의 다른 모든 surface가 sidecar를 잃었다. input loop가 surface actor로 보내는 모든 send는 이를 적용하는 `RequestSender::send`를 거친다. 검증: `a_request_of_a_surface_whose_session_ended_is_refused_and_the_connection_stays`의 Red(`the service closed its output`), 이어 Green(`owned_sessions_test` 44개 중 44개, clippy, fmt, `sok-check events`).
 - S256: 버전이 0.0.42이므로 release run이 저장소의 main을 v0.0.42로 낸다. S255-1의 scroll read 테스트가 들어 있다.
 - S255-1: less의 scroll read 테스트가 각 step의 tick을 program이 그 step에서 그린 뒤에만 보낸다. window가 display frame마다 보내는 것과 같아서, read가 `make test`의 부하에서도 less의 다시 그리기에서 settle한다. 이전에는 테스트가 각 frame request에 즉시 답해서, 세 번 중 한 번 6개 quiet tick이 less가 그리기 전에 step을 끝냈고 read가 `line 0051` 대신 `line 0001`을 답했다. 검증: tick을 즉시 보낸 `a_scroll_read_paced_by_the_draws_reads_a_program_that_draws_late`의 Red(`drawn` 대신 `ready`), 그 뒤 Green(그 테스트와 less 테스트 각각 10번 중 10번).

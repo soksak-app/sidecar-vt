@@ -1,5 +1,6 @@
 # 기능
 
+- [~] S258 — P0, S257의 후속: 버전은 0.0.43이다. crate, Cargo.lock, 패키지가 0.0.43을 선언한다. release v0.0.43이 darwin-arm64 asset과 함께 게시된다. 남은 일: release run과 그 asset.
 - [o] S257 — P0, core F1100과 연결: surface actor가 끝난 surface의 요청은 그 surface에만 거부되고 연결은 유지된다. 입력: owned session에 attach한 member tab. owner가 `end`를 보내면 tab의 actor가 끝나고, tab이 다음 요청(예: `screen.read`)을 보낸다. 동작: actor로의 send가 실패하면 input loop가 연결 전체를 끝내서, 그 연결의 다른 모든 surface가 sidecar를 잃었다(`connection lost; restarted`). 기대: `{surface, body: {error: "surface <id> has no live session: its surface actor has ended"}}` 응답이 오고 다른 surface는 계속 응답한다(`docs/spec/vt-core.md#owned-session-operations`). 완료: S257-1.
   - [o] S257-1 — P0: input loop에서 surface actor로 보내는 모든 send의 유일한 경로인 `RequestSender::send`가 실패한 send에 그 surface의 오류 응답으로 답하고 기록한다. 닫힌 출력만 연결을 끝낸다. Red: `vt-alacritty/tests/owned_sessions_test.rs`의 `a_request_of_a_surface_whose_session_ended_is_refused_and_the_connection_stays`가 `the service closed its output`로 실패했다. Green: 파일이 44개 중 44개 통과한다.
 - [o] S256 — P0, S255의 후속: 버전은 0.0.42이다. crate, Cargo.lock, 패키지가 0.0.42를 선언한다. release v0.0.42가 darwin-arm64 asset과 함께 게시되었다.
