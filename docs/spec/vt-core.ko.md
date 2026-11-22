@@ -235,7 +235,7 @@ session의 image surface는 `Frame::new_strip`이 만든 frame으로 그린다. 
 
 ### Owned session 동작
 
-core는 owned session 메시지를 [persistent services](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.md#owned-session-messages)에 따라 owner surface를 `surface`로 하여 service에 보낸다. `operation`이 `open`이고 `session` 멤버가 객체인 body는 owned session open이다. 터미널 page의 surface `open`에는 `session` 멤버가 없으므로 두 body가 섞이지 않는다. owned session은 자체 surface가 없고, `screen`이나 `state` 메시지를 내지 않으며, 그려지지도 않는다. owned session을 보이는 tab은 이 명세가 아직 정의하지 않은 요청으로 그 session에 연결한다.
+core는 owned session 메시지를 [persistent services](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.md#owned-session-messages)에 따라 owner surface를 `surface`로 하여 service에 보낸다. `operation`이 `open`이고 `session` 멤버가 객체인 body는 owned session open이다. 터미널 page의 surface `open`에는 `session` 멤버가 없으므로 두 body가 섞이지 않는다. owned session은 자체 surface가 없고, `screen`이나 `state` 메시지를 내지 않으며, 그려지지도 않는다. owned session을 보이는 tab은 `attach`로 그 session에 연결한다(아래 참고).
 
 - `{session: {creation}, size: {width, height, scale}, params}`를 가진 `open`은 owner의 terminal session을 만든다. `creation`은 core가 요청마다 고른 식별자이고, `size`는 card의 point 크기와 window의 backing scale이다. sidecar는 격자를 `floor(width × scale / cellWidth)` 열과 `floor(height × scale / cellHeight)` 행으로 계산한다. 여기서 `cellWidth`와 `cellHeight`는 기본 크기(13 point)의 기본 font가 device pixel로 내는 metrics다. 열이나 행이 없는 격자는 `size is smaller than one cell`로, 터미널의 `u16` 범위를 넘는 격자는 `size is larger than the terminal grid`로 거부한다. `params`는 terminal `open`의 실행 필드(`shell`, `program`, `args`, `directory`)를 받으며 같은 규칙과 오류로 검증한다. `params`가 없으면 `{}`로 보고 login shell을 시작한다. sidecar는 빈 문자열이 아닌 새 `session` 식별자를 할당하고, `{session, creation}`에 요청의 `creation`을 담아 응답한다. 같은 owner와 `creation`으로 다시 open하면 같은 응답을 하고 process를 시작하지 않는다.
 - `{session, size}`를 가진 `resize`는 같은 owner의 열린 session의 격자를 `open`과 같은 규칙으로 바꾸고, 요청의 size를 담아 `{session, size}`로 응답한다.
@@ -243,7 +243,12 @@ core는 owned session 메시지를 [persistent services](https://github.com/soks
 
 거부는 오류 응답 `{error: <text>}`다. 알 수 없는 식별자에 대한 `resize`와 `end`는 `session <id> is not open`으로, 다른 owner의 session에 대한 요청은 `surface <id> does not own session <id>`로 거부한다. PTY 시작 실패는 `open failed: <reason>`으로, `width`, `height`, `scale` 중 양수가 아닌 값이 있는 `size`는 `size width, height and scale must be positive numbers`로 거부한다.
 
-이 버전에서 shell이 끝나도 owned session은 끝나지 않는다. session은 `end`가 올 때까지 열려 있다. sidecar는 session의 출력을 자체 engine에 넣으므로 연결을 위해 화면을 보존하며, 그려지는 surface가 없으므로 session의 engine 이벤트는 버린다.
+owned session의 shell 또는 program이 끝나면 session은 끝난다. sidecar는 PTY를 닫고, 그 뒤의 `resize`, `end`, `attach`에는 `session <id> is not open`으로 응답한다. sidecar는 session의 출력을 1 MiB 버퍼에 보관하며, 가득 차면 가장 오래된 byte부터 버리고 버린 기록을 service log에 쓴다. 연결하는 tab은 그 버퍼를 재생한다.
+
+tab은 tab의 surface에서 `{operation: "attach", session}` 요청으로 owned session에 연결한다. attach에는 font가 필요 없다. view는 설정을 configure로 보내고, configure가 session의 격자를 다시 정한다. 응답은 `{session, attached: true}`다. session에는 연결된 surface가 하나만 있다. 다른 살아 있는 surface가 보이는 session에 대한 attach는 `session <id> is shown by surface <surface>`로 거부한다. 연결된 surface는 자체 session처럼 session의 출력을 받고 입력은 session으로 간다. 그 surface의 end나 close(`closed`)는 연결을 끊지만 session은 열린 채로 남는다. 연결된 session의 `resize`는 연결된 surface의 격자도 바꾼다. attach는 session의 버퍼를 재생하므로 surface는 attach 전에 session이 가진 화면을 보인다.
+
+attach 시점의 cell metrics는 surface가 설정을 configure하기 전까지 기본 font를 쓴다.
+
 
 ### 터미널 검증
 

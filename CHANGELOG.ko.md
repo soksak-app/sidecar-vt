@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S241-3: sidecar가 `{operation: "attach", session}`으로 surface를 열린 owned session에 연결한다. session 버퍼가 surface에 재생되고, 입력은 session으로 가며, owner의 크기가 연결된 격자에 적용되고, view 종료는 연결을 끊으며, 두 번째 attach는 거부되고, shell 종료는 session을 열어 두는 대신 끝낸다. 검증: `vt-alacritty/tests/owned_sessions_test.rs`의 Red(19개 중 7개 실패), 이어서 Green(19/19와 crate test; `engine_flood_test`는 할당을 세므로 병렬 thread에서 단독으로 실패한다, 검증 기록 참고).
 - S241-2: sidecar가 owned session의 `open`(크기 포함), `resize`, `end`에 응답한다. session은 owner의 PTY이며, 자체 engine이 그 출력을 받고, `open`과 `end`는 멱등이며, 격자는 기본 font의 device metrics에서 나온다. 검증: `vt-alacritty/tests/owned_sessions_test.rs`의 Red(12개 중 8개 실패), 이어서 Green(12/12, unit test 5개, `serve_contract` 161/161, clippy와 fmt).
 - S241-1: sidecar의 owned session 동작을 명세에 적었다(`docs/spec/vt-core.ko.md`): owned session `open`을 고르는 body, cell 크기 변환, 응답 body, 거부, `open`과 `end`의 멱등성. 검증: 문서 검토만 했다.
 - S240: 버전이 0.0.32이므로 release run이 저장소의 main을 v0.0.32로 낸다. v0.0.31와 같은 source를 담는다.

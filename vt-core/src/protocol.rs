@@ -149,7 +149,7 @@ impl Request {
 
 /// A command for a surface task with the request that caused it; the commands that the service
 /// sends on its own carry none.
-struct Dispatch {
+pub(crate) struct Dispatch {
     command: SurfaceCommand,
     request: Option<Arc<Request>>,
 }
@@ -195,6 +195,11 @@ impl ImageDetachRequestLedger {
         *latest = Some((surface.to_string(), detach.clone()));
         ImageDetachRequestCheck::New
     }
+}
+
+/// The command that resizes the surface that shows an owned session to the size that its owner set.
+pub(crate) fn session_resize(size: crate::owned_sessions::Size) -> Dispatch {
+    Dispatch::internal(SurfaceCommand::SessionResize { size })
 }
 
 impl Dispatch {
@@ -577,6 +582,12 @@ struct PersistentEntry {
     actor: tokio::task::JoinHandle<()>,
     epoch: u64,
     owner: String,
+}
+
+impl std::fmt::Debug for PersistentRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PersistentRegistry")
+    }
 }
 
 pub struct PersistentRegistry {
@@ -1418,6 +1429,16 @@ struct Envelope {
 /// Commands sent to the surface action
 #[derive(Debug)]
 enum SurfaceCommand {
+    /// Attaches the surface to an open owned session (owned_sessions.rs). `own` is the command channel of this surface.
+    Attach {
+        session: String,
+        registry: Arc<PersistentRegistry>,
+        own: mpsc::Sender<Dispatch>,
+    },
+    /// The size of an owned session that this surface shows, from its owner (core docs/spec/persistent-services.md#owned-sessions).
+    SessionResize {
+        size: crate::owned_sessions::Size,
+    },
     /// Reads the terminal state of the session (core docs/spec/terminal-state.md#state-read).
     ShellStateRead,
     ProgramStatusRead,
@@ -4280,7 +4301,7 @@ async fn surface_task(
     surface_id: String,
     log: Events,
     engine_factory: Arc<dyn Fn() -> Box<dyn Engine> + Send + Sync>,
-    session_port: Arc<dyn SessionPort>,
+    mut session_port: Arc<dyn SessionPort>,
     mut cmd_rx: mpsc::Receiver<Dispatch>,
     output_tx: OutputSink,
     claims: Arc<messaging::FolderClaims>,
@@ -4311,6 +4332,8 @@ async fn surface_task(
         }
     };
     let mut daemon_events_rx = session_port.get_events().await;
+    // Whether this surface shows an owned session that it attached. Such a session is closed by its owner, not by the surface.
+    let mut attached = false;
     let mut image_state: Option<ImageState> = None;
     // The terminal state and the program status of the session of this surface.
     let mut status = SessionStatus::default();
@@ -5662,7 +5685,7 @@ async fn surface_task(
                         if let Some(state) = image_state.take() {
                             release_image_state(&surface_id, state);
                         }
-                        let closed = match session_id.as_deref() {
+                        let closed = match session_id.as_deref().filter(|_| !attached) {
                             Some(sid) => session_port
                                 .close(sid)
                                 .await
@@ -5678,8 +5701,72 @@ async fn surface_task(
                         }
                         break;
                     }
+                    SurfaceCommand::Attach { session, registry, own } => {
+                        if session_id.is_some() {
+                            let response = json!({"surface": surface_id, "body": {"error": "surface already holds a session"}});
+                            if output_tx.reply(response).await.is_err() { return; }
+                            continue;
+                        }
+                        match crate::owned_sessions::attach(&registry.owned, &session, &surface_id, own, &log).await {
+                            Ok(attachment) => {
+                                engine.resize(attachment.columns, attachment.rows);
+                                inputs.resized(Some(&attachment.pty), attachment.rows, attachment.columns);
+                                inputs.opened(&attachment.pty);
+                                session_port = attachment.port;
+                                session_id = Some(attachment.pty);
+                                attached = true;
+                                daemon_events_rx = attachment.events;
+                                let response = json!({"surface": surface_id, "body": {"session": session, "attached": true}});
+                                if output_tx.reply(response).await.is_err() { return; }
+                            }
+                            Err(error) => {
+                                let response = json!({"surface": surface_id, "body": {"error": error}});
+                                if output_tx.reply(response).await.is_err() { return; }
+                            }
+                        }
+                    }
+                    SurfaceCommand::SessionResize { size } => {
+                        if !attached {
+                            log.record_error("owned session", format!("surface {surface_id}: a size of an owned session arrived while the surface shows none"));
+                            continue;
+                        }
+                        let (cell_width, cell_height) = match image_state.as_ref() {
+                            Some(state) => (state.metrics.cell_width, state.metrics.cell_height),
+                            None => match crate::owned_sessions::default_cell_metrics(size.scale) {
+                                Ok(metrics) => (metrics.cell_width, metrics.cell_height),
+                                Err(reason) => {
+                                    log.record_error("owned session", &reason);
+                                    continue;
+                                }
+                            },
+                        };
+                        let (cols, rows) = match crate::owned_sessions::grid(size, cell_width, cell_height) {
+                            Ok(grid) => grid,
+                            Err(reason) => {
+                                let response = json!({"surface": surface_id, "body": {"error": reason}});
+                                if output_tx.reply(response).await.is_err() { return; }
+                                continue;
+                            }
+                        };
+                        engine.resize(cols, rows);
+                        inputs.resized(session_id.as_deref(), rows, cols);
+                        if let Some(sid) = session_id.as_ref()
+                            && let Err(error) = session_port.resize(sid, cols, rows).await {
+                                let response = json!({"surface": surface_id, "body": {"error": format!("Resize failed: {error}")}});
+                                if output_tx.reply(response).await.is_err() { return; }
+                                continue;
+                            }
+                        if let Some(state) = image_state.as_mut() {
+                            if state.pending_draw {
+                                state.dirty = true;
+                            } else {
+                                let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
+                                if !present_screen(&surface_id, screen, state, &output_tx, "owned-resize", &log, inputs.sequence).await { return; }
+                            }
+                        }
+                    }
                     SurfaceCommand::ConnectionEnded => {
-                        if let Some(ref sid) = session_id
+                        if let Some(sid) = session_id.as_deref().filter(|_| !attached)
                             && let Err(error) = session_port.close(sid).await {
                                 let response = json!({
                                     "surface": surface_id,
@@ -6718,6 +6805,37 @@ where
                                 };
                                 if tx
                                     .send(SurfaceCommand::Open { image, request })
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            "attach" => {
+                                let Some(session) = body
+                                    .get("session")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string)
+                                else {
+                                    let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "attach requires a session"}});
+                                    if reply_tx.reply(response).await.is_err() {
+                                        break;
+                                    }
+                                    continue;
+                                };
+                                let Some(registry) = registry.as_ref() else {
+                                    let response = json!({"surface": surface_id, "body": {"error": "owned sessions require the persistent service"}});
+                                    if reply_tx.reply(response).await.is_err() {
+                                        break;
+                                    }
+                                    continue;
+                                };
+                                if tx
+                                    .send(SurfaceCommand::Attach {
+                                        session,
+                                        registry: Arc::clone(registry),
+                                        own: tx.tx.clone(),
+                                    })
                                     .await
                                     .is_err()
                                 {

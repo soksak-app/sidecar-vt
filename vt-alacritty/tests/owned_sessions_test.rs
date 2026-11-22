@@ -338,3 +338,213 @@ async fn open_refuses_a_program_that_is_not_found() {
         "unexpected refusal: {error}"
     );
 }
+
+impl Service {
+    /// Reads lines until one answers `keep`, and returns it; a line that is not answered within the timeout fails the test.
+    async fn line_where(&mut self, what: &str, keep: impl Fn(&Value) -> bool) -> Value {
+        loop {
+            let line = tokio::time::timeout(REPLY_TIMEOUT, self.lines.next_line())
+                .await
+                .unwrap_or_else(|_| panic!("no {what} within {REPLY_TIMEOUT:?}"))
+                .expect("read a line of the service")
+                .expect("the service closed its output");
+            let value: Value = serde_json::from_str(&line).expect("the service writes JSON lines");
+            if keep(&value) {
+                return value;
+            }
+        }
+    }
+
+    /// Reads the visible rows of the tab surface as text.
+    async fn screen_text(&mut self, surface: &str) -> String {
+        self.send(surface, "screen", json!({"operation": "screen.read"}))
+            .await;
+        let line = self
+            .line_where("the screen of the surface", |value| {
+                value["surface"] == surface
+                    && value["body"]["event"] == "screen"
+                    && value["body"]["base"] == true
+            })
+            .await;
+        let cols = line["body"]["cols"].as_u64().expect("the screen has cols") as usize;
+        let cells = line["body"]["cells"]
+            .as_array()
+            .expect("the full form has cells");
+        cells
+            .chunks(cols.max(1))
+            .map(|row| {
+                row.iter()
+                    .filter(|cell| cell["width"].as_u64() != Some(0))
+                    .map(|cell| {
+                        cell["grapheme"]
+                            .as_str()
+                            .filter(|text| !text.is_empty())
+                            .unwrap_or(" ")
+                            .to_string()
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Ends the view of a surface: the close envelope of core.
+    async fn close_surface(&mut self, surface: &str) {
+        let line = json!({"surface": surface, "closed": true});
+        self.to_serve
+            .write_all(format!("{line}\n").as_bytes())
+            .await
+            .expect("the close line was not written");
+    }
+
+    /// Opens an owned session of `owner` running `params` and returns its session id.
+    async fn open_session(&mut self, owner: &str, cid: &str, params: Value) -> String {
+        self.send(
+            owner,
+            cid,
+            open_body("k-attach", size(400.0, 200.0, 2.0), params),
+        )
+        .await;
+        let body = self.reply(cid).await;
+        body["session"]
+            .as_str()
+            .expect("the open names a session")
+            .to_string()
+    }
+
+    /// Attaches `surface` to `session`.
+    async fn attach(&mut self, surface: &str, cid: &str, session: &str) -> Value {
+        self.send(
+            surface,
+            cid,
+            json!({"operation": "attach", "session": session}),
+        )
+        .await;
+        self.reply(cid).await
+    }
+}
+
+fn shell_params(script: &str) -> Value {
+    json!({"program": "/bin/sh", "args": ["-c", script]})
+}
+
+#[tokio::test]
+async fn attach_answers_the_session_as_attached() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service.open_session("o1", "c1", cat_params()).await;
+    let body = service.attach("t1", "a1", &session).await;
+    assert_eq!(body, json!({"session": session, "attached": true}));
+}
+
+#[tokio::test]
+async fn attach_refuses_an_unknown_session() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let body = service.attach("t1", "a1", "missing").await;
+    assert_eq!(body["error"], "session missing is not open");
+}
+
+#[tokio::test]
+async fn attach_shows_the_output_the_session_had_before_the_attach() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service
+        .open_session("o1", "c1", shell_params("printf READY; exec cat"))
+        .await;
+    assert_eq!(service.attach("t1", "a1", &session).await["attached"], true);
+    let mut screen = String::new();
+    for _ in 0..50 {
+        screen = service.screen_text("t1").await;
+        if screen.contains("READY") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        screen.contains("READY"),
+        "the attached surface shows no output: {screen:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_attached_surface_sends_its_input_to_the_session() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service.open_session("o1", "c1", cat_params()).await;
+    assert_eq!(service.attach("t1", "a1", &session).await["attached"], true);
+    service
+        .send(
+            "t1",
+            "p1",
+            json!({"operation": "paste", "text": "hello-owned"}),
+        )
+        .await;
+    let paste = service.reply("p1").await;
+    assert!(
+        paste.get("error").is_none(),
+        "the paste was refused: {paste}"
+    );
+    let mut screen = String::new();
+    for _ in 0..50 {
+        screen = service.screen_text("t1").await;
+        if screen.contains("hello-owned") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        screen.contains("hello-owned"),
+        "the input did not reach the session: {screen:?}"
+    );
+}
+
+#[tokio::test]
+async fn ending_the_view_detaches_and_keeps_the_session_open() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service.open_session("o1", "c1", cat_params()).await;
+    assert_eq!(service.attach("t1", "a1", &session).await["attached"], true);
+    service.close_surface("t1").await;
+    service
+        .send(
+            "o1",
+            "c2",
+            json!({"operation": "resize", "session": session, "size": size(600.0, 300.0, 2.0)}),
+        )
+        .await;
+    assert_eq!(service.reply("c2").await["session"], session.as_str());
+    assert_eq!(service.attach("t2", "a2", &session).await["attached"], true);
+}
+
+#[tokio::test]
+async fn a_second_attach_is_refused_while_a_view_shows_the_session() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service.open_session("o1", "c1", cat_params()).await;
+    assert_eq!(service.attach("t1", "a1", &session).await["attached"], true);
+    assert_eq!(
+        service.attach("t2", "a2", &session).await["error"],
+        format!("session {session} is shown by surface t1")
+    );
+}
+
+#[tokio::test]
+async fn the_end_of_the_shell_ends_the_session() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let session = service
+        .open_session("o1", "c1", shell_params("printf DONE"))
+        .await;
+    let mut refusal = String::new();
+    for attempt in 0..50 {
+        let cid = format!("r{attempt}");
+        service
+            .send(
+                "o1",
+                &cid,
+                json!({"operation": "resize", "session": session, "size": size(600.0, 300.0, 2.0)}),
+            )
+            .await;
+        let body = service.reply(&cid).await;
+        if let Some(error) = body["error"].as_str() {
+            refusal = error.to_string();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(refusal, format!("session {session} is not open"));
+}

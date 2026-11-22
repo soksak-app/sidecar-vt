@@ -1,20 +1,27 @@
 // The owned sessions of the persistent service (core docs/spec/persistent-services.md#owned-sessions, sidecar
-// docs/spec/vt-core.md#owned-session-operations). An owned session is a PTY session of its owner surface that no surface
-// draws. Its engine is fed with the output of the PTY, so a later attachment starts from the screen that the session holds.
+// docs/spec/vt-core.md#owned-session-operations). An owned session is a PTY session of its owner surface. Its output feeds an
+// engine of its own and a buffer of the latest output, so a tab that attaches replays the screen the session held. While a
+// tab shows the session, the surface of the tab draws it and its configure sets the grid.
 use crate::events::Events;
-use crate::platform::{default_font, metrics_for};
+use crate::platform::{Metrics, default_font, metrics_for};
 use crate::protocol::{
-    DEFAULT_FONT_SIZE, DaemonEvent, Engine, SessionPort, ShellRequest, open_launch,
+    DEFAULT_FONT_SIZE, DaemonEvent, Dispatch, Engine, SessionPort, ShellRequest, open_launch,
+    session_resize,
 };
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::{mpsc, oneshot};
 
 /// The factory of the engine of an owned session.
 pub type EngineFactory = Arc<dyn Fn() -> Box<dyn Engine> + Send + Sync>;
 /// The factory of the session port of an owned session.
 pub type SessionPortFactory = Arc<dyn Fn() -> Arc<dyn SessionPort> + Send + Sync>;
+
+/// The bytes of the latest output that an owned session keeps for a replay at an attach. When the buffer is full, the oldest
+/// bytes are dropped and the drop is written to the service log.
+pub const REPLAY_LIMIT: usize = 1024 * 1024;
 
 /// The size of the card of an owned session: its width and height in points and the backing scale of the window.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -55,24 +62,38 @@ pub fn grid(size: Size, cell_width: f32, cell_height: f32) -> Result<(u16, u16),
     Ok((columns, rows))
 }
 
-/// The device pixel cell size of the default font at the backing scale of a size.
-fn cell_metrics(scale: f64) -> Result<crate::platform::Metrics, String> {
+/// The device pixel cell metrics of the default font at the backing scale of a size.
+pub fn default_cell_metrics(scale: f64) -> Result<Metrics, String> {
     metrics_for(&default_font(), DEFAULT_FONT_SIZE, scale as f32)
 }
 
 /// The commands that the task of a session receives from the service.
 enum Control {
+    /// The grid of the engine of the session, while no surface shows it.
     Resize(u16, u16),
+    /// The attachment of a surface: the engine takes the grid, the buffer replays into `forward`, and later output goes to
+    /// `forward` until the surface ends.
+    Attach {
+        columns: u16,
+        rows: u16,
+        forward: mpsc::Sender<DaemonEvent>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
 }
 
-/// One owned session. After its end, the port and the control channel are released and only the record stays, so a
-/// repeated request still gets its answer.
+/// One owned session.
 struct Entry {
     owner: String,
     pty: String,
+    /// The last size that the owner or the attached view set, which the grid of a new attachment uses.
+    size: Size,
     port: Option<Arc<dyn SessionPort>>,
     control: Option<mpsc::UnboundedSender<Control>>,
+    /// Set by the task of the session when the shell or program of the session exits.
+    exited: Arc<AtomicBool>,
     ended: bool,
+    /// The surface that shows the session and its command channel, while that surface is attached.
+    shown_by: Option<(String, mpsc::Sender<Dispatch>)>,
 }
 
 /// The owned sessions of one persistent service. Its entries outlive each connection, so a restored owner reattaches.
@@ -81,6 +102,16 @@ pub struct OwnedSessions {
     entries: HashMap<String, Entry>,
     by_creation: HashMap<(String, String), String>,
     next: u64,
+}
+
+/// The result of an attachment: the PTY session, its grid, and the events that the attached surface receives.
+pub(crate) struct Attached {
+    /// The port that opened the PTY session: the session port keeps the sessions of its own port only.
+    pub port: Arc<dyn SessionPort>,
+    pub pty: String,
+    pub columns: u16,
+    pub rows: u16,
+    pub events: mpsc::Receiver<DaemonEvent>,
 }
 
 /// Whether a request body is an owned-session request: an `open` with an object `session`, or a `resize` or `end`.
@@ -102,9 +133,19 @@ pub async fn answer(
     log: &Events,
 ) -> Value {
     let result = match body.get("operation").and_then(Value::as_str) {
-        Some("open") => open(sessions, owner, body, engine_factory, session_port_factory).await,
-        Some("resize") => resize(sessions, owner, body).await,
-        Some("end") => end(sessions, owner, body).await,
+        Some("open") => {
+            open(
+                sessions,
+                owner,
+                body,
+                engine_factory,
+                session_port_factory,
+                log,
+            )
+            .await
+        }
+        Some("resize") => resize(sessions, owner, body, log).await,
+        Some("end") => end(sessions, owner, body, log).await,
         _ => Err("owned session request has no known operation".to_string()),
     };
     match result {
@@ -143,12 +184,49 @@ fn launch_request(owner: &str, params: &Value) -> Result<ShellRequest, String> {
     })
 }
 
+/// Records the end of a session whose shell or program has exited: the session is ended, its port is released and no
+/// later request reaches it.
+async fn settle(entry: &mut Entry, log: &Events) {
+    if entry.ended || !entry.exited.load(Ordering::Acquire) {
+        return;
+    }
+    entry.ended = true;
+    entry.control = None;
+    entry.shown_by = None;
+    if let Some(port) = entry.port.take()
+        && let Err(error) = port.close(&entry.pty).await
+    {
+        log.record_error(
+            "owned session",
+            format!("session {}: close after exit failed: {error}", entry.pty),
+        );
+    }
+}
+
+/// Returns the entry of a session after its end is settled. A missing session and an ended one are both not open.
+async fn open_entry<'a>(
+    table: &'a mut OwnedSessions,
+    session: &str,
+    log: &Events,
+) -> Result<&'a mut Entry, String> {
+    let entry = table
+        .entries
+        .get_mut(session)
+        .ok_or_else(|| format!("session {session} is not open"))?;
+    settle(entry, log).await;
+    if entry.ended {
+        return Err(format!("session {session} is not open"));
+    }
+    Ok(entry)
+}
+
 async fn open(
     sessions: &tokio::sync::Mutex<OwnedSessions>,
     owner: &str,
     body: &Value,
     engine_factory: &EngineFactory,
     session_port_factory: &SessionPortFactory,
+    log: &Events,
 ) -> Result<Value, String> {
     let creation = body
         .get("session")
@@ -167,7 +245,7 @@ async fn open(
     {
         return Ok(json!({"session": session, "creation": creation}));
     }
-    let metrics = cell_metrics(size.scale)?;
+    let metrics = default_cell_metrics(size.scale)?;
     let (columns, rows) = grid(size, metrics.cell_width, metrics.cell_height)?;
     let mut engine = engine_factory();
     engine.resize(columns, rows);
@@ -182,7 +260,15 @@ async fn open(
         .await
         .map_err(|error| format!("open failed: {error}"))?;
     let (control_tx, control_rx) = mpsc::unbounded_channel();
-    tokio::spawn(feed_engine(events, engine, pty.clone(), control_rx));
+    let exited = Arc::new(AtomicBool::new(false));
+    tokio::spawn(feed_engine(
+        events,
+        engine,
+        pty.clone(),
+        control_rx,
+        exited.clone(),
+        log.clone(),
+    ));
     table.next += 1;
     let session = format!("owned-{}", table.next);
     table.entries.insert(
@@ -190,9 +276,12 @@ async fn open(
         Entry {
             owner: owner.to_string(),
             pty,
+            size,
             port: Some(port),
             control: Some(control_tx),
+            exited,
             ended: false,
+            shown_by: None,
         },
     );
     table
@@ -201,36 +290,34 @@ async fn open(
     Ok(json!({"session": session, "creation": creation}))
 }
 
-/// Checks that a request names a session that the owner holds and that is open. A session of another owner is refused.
-fn open_session<'a>(
-    table: &'a mut OwnedSessions,
-    owner: &str,
-    session: &str,
-) -> Result<&'a mut Entry, String> {
-    let entry = table
-        .entries
-        .get_mut(session)
-        .ok_or_else(|| format!("session {session} is not open"))?;
-    if entry.owner != owner {
-        return Err(format!("surface {owner} does not own session {session}"));
-    }
-    if entry.ended {
-        return Err(format!("session {session} is not open"));
-    }
-    Ok(entry)
-}
-
 async fn resize(
     sessions: &tokio::sync::Mutex<OwnedSessions>,
     owner: &str,
     body: &Value,
+    log: &Events,
 ) -> Result<Value, String> {
     let session = session_member(body)?;
     let size_value = body.get("size").cloned().unwrap_or(Value::Null);
     let size = parse_size(body.get("size"))?;
     let mut table = sessions.lock().await;
-    let entry = open_session(&mut table, owner, &session)?;
-    let metrics = cell_metrics(size.scale)?;
+    let entry = open_entry(&mut table, &session, log).await?;
+    if entry.owner != owner {
+        return Err(format!("surface {owner} does not own session {session}"));
+    }
+    entry.size = size;
+    if let Some((_, shown)) = entry.shown_by.clone() {
+        // The attached surface holds the grid: it recomputes the grid from the size with its own metrics.
+        drop(table);
+        let sent = shown.send(session_resize(size)).await;
+        if sent.is_err() {
+            let mut table = sessions.lock().await;
+            if let Some(entry) = table.entries.get_mut(&session) {
+                entry.shown_by = None;
+            }
+        }
+        return Ok(json!({"session": session, "size": size_value}));
+    }
+    let metrics = default_cell_metrics(size.scale)?;
     let (columns, rows) = grid(size, metrics.cell_width, metrics.cell_height)?;
     let port = entry
         .port
@@ -253,6 +340,7 @@ async fn end(
     sessions: &tokio::sync::Mutex<OwnedSessions>,
     owner: &str,
     body: &Value,
+    log: &Events,
 ) -> Result<Value, String> {
     let session = session_member(body)?;
     let mut table = sessions.lock().await;
@@ -262,6 +350,7 @@ async fn end(
     if entry.owner != owner {
         return Err(format!("surface {owner} does not own session {session}"));
     }
+    settle(entry, log).await;
     if entry.ended {
         return Ok(json!({"session": session, "ended": true}));
     }
@@ -274,31 +363,135 @@ async fn end(
         .map_err(|error| format!("end failed: {error}"))?;
     entry.ended = true;
     entry.port = None;
+    entry.shown_by = None;
     // Dropping the sender ends the task of the session.
     entry.control = None;
     Ok(json!({"session": session, "ended": true}))
 }
 
-/// Feeds the output of one PTY session to its engine until the session ends. The engine events of the session are
-/// discarded, because no surface draws the session; the owned-session specification states this.
+/// Attaches a surface to an open session. The surface takes the output, the grid of the default font and the input of the
+/// session; `surface` is the name of the surface and `commands` its command channel, which receives the sizes of the owner.
+pub(crate) async fn attach(
+    sessions: &tokio::sync::Mutex<OwnedSessions>,
+    session: &str,
+    surface: &str,
+    commands: mpsc::Sender<Dispatch>,
+    log: &Events,
+) -> Result<Attached, String> {
+    let mut table = sessions.lock().await;
+    let entry = open_entry(&mut table, session, log).await?;
+    if let Some((shown, channel)) = &entry.shown_by
+        && !channel.is_closed()
+    {
+        return Err(format!("session {session} is shown by surface {shown}"));
+    }
+    let metrics = default_cell_metrics(entry.size.scale)?;
+    let (columns, rows) = grid(entry.size, metrics.cell_width, metrics.cell_height)?;
+    let port = entry
+        .port
+        .clone()
+        .ok_or_else(|| format!("session {session} is not open"))?;
+    port.resize(&entry.pty, columns, rows)
+        .await
+        .map_err(|error| format!("attach failed: {error}"))?;
+    let control = entry
+        .control
+        .clone()
+        .ok_or_else(|| format!("session {session} is not open"))?;
+    let (forward, events) = crate::pty::output_channel();
+    let (reply, answer) = oneshot::channel();
+    control
+        .send(Control::Attach {
+            columns,
+            rows,
+            forward,
+            reply,
+        })
+        .map_err(|_| format!("session {session} is not open"))?;
+    answer
+        .await
+        .map_err(|_| format!("session {session} is not open"))??;
+    entry.shown_by = Some((surface.to_string(), commands));
+    Ok(Attached {
+        port,
+        pty: entry.pty.clone(),
+        columns,
+        rows,
+        events,
+    })
+}
+
+/// Feeds the output of one PTY session to its engine and to the replay buffer until the session ends, and forwards it to
+/// the attached surface while one is attached. The engine events of the session are discarded: the engine of the session
+/// is used only for the screen that a replay of the buffer restores in the surface.
 async fn feed_engine(
     mut events: mpsc::Receiver<DaemonEvent>,
     mut engine: Box<dyn Engine>,
     pty: String,
     mut control: mpsc::UnboundedReceiver<Control>,
+    exited: Arc<AtomicBool>,
+    log: Events,
 ) {
+    let mut replay: VecDeque<u8> = VecDeque::new();
+    let mut forward: Option<mpsc::Sender<DaemonEvent>> = None;
     loop {
         tokio::select! {
             event = events.recv() => match event {
                 Some(DaemonEvent::Output { session_id, data }) if session_id == pty => {
                     engine.feed(&data);
                     let _ = engine.drain_events();
+                    replay.extend(data.iter().copied());
+                    let excess = replay.len().saturating_sub(REPLAY_LIMIT);
+                    if excess > 0 {
+                        replay.drain(..excess);
+                        log.record_info("owned session", format!("session {pty}: the replay buffer dropped {excess} bytes"));
+                    }
+                    if let Some(sender) = &forward
+                        && sender.send(DaemonEvent::Output { session_id, data }).await.is_err()
+                    {
+                        forward = None;
+                    }
+                }
+                Some(DaemonEvent::Exit { session_id }) if session_id == pty => {
+                    exited.store(true, Ordering::Release);
+                    if let Some(sender) = &forward {
+                        let _ = sender.send(DaemonEvent::Exit { session_id }).await;
+                    }
+                    break;
+                }
+                Some(DaemonEvent::Error { session_id, error }) if session_id == pty => {
+                    log.record_error("owned session", format!("session {pty}: {error}"));
+                    if let Some(sender) = &forward {
+                        let _ = sender.send(DaemonEvent::Error { session_id, error }).await;
+                    }
+                }
+                Some(DaemonEvent::InputHeld { session_id, queued, held }) if session_id == pty => {
+                    if let Some(sender) = &forward {
+                        let _ = sender.send(DaemonEvent::InputHeld { session_id, queued, held }).await;
+                    }
                 }
                 Some(_) => {}
-                None => break,
+                None => {
+                    exited.store(true, Ordering::Release);
+                    break;
+                }
             },
             command = control.recv() => match command {
                 Some(Control::Resize(columns, rows)) => engine.resize(columns, rows),
+                Some(Control::Attach { columns, rows, forward: sender, reply }) => {
+                    engine.resize(columns, rows);
+                    let snapshot = DaemonEvent::Output {
+                        session_id: pty.clone(),
+                        data: replay.iter().copied().collect(),
+                    };
+                    let result = if sender.send(snapshot).await.is_ok() {
+                        forward = Some(sender);
+                        Ok(())
+                    } else {
+                        Err("the attached surface ended before the replay".to_string())
+                    };
+                    let _ = reply.send(result);
+                }
                 None => break,
             },
         }
@@ -347,9 +540,9 @@ mod tests {
     }
 
     #[test]
-    fn cell_metrics_of_the_default_font_fit_the_grid_bounds() {
+    fn default_cell_metrics_fit_the_grid_bounds() {
         // The grid uses the real device metrics: the cells fit the device size, and one more cell would not.
-        let metrics = cell_metrics(2.0).expect("the default font has cell metrics");
+        let metrics = default_cell_metrics(2.0).expect("the default font has cell metrics");
         let (columns, rows) = grid(
             size(400.0, 200.0, 2.0),
             metrics.cell_width,
