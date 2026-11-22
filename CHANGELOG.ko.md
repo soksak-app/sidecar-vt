@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S245-2: 버전이 0.0.35이므로 release run이 저장소의 main을 v0.0.35로 낸다. S245-1의 guard shell 줄 판단을 담는다.
 - S245-1: guard는 shell 줄의 입력만 판단한다. session이 shell을 시작했고, 그 OSC 133 terminal state가 `running`이 아니며, 대체 화면과 application keypad mode가 설정되지 않은 경우다(`guard::follows_shell_line`). owned session과 표면에 모두 적용된다. main screen에서 질문하는 agent CLI처럼 session이 시작한 program은 이제 `untracked` 거부 없이 화살표 key와 return을 받는다. 검증: 새 `owned_sessions_test` 사례 3개의 Red(`untracked`로 거부), 이어서 Green(29개 중 29개, `serve_contract` 161개 중 161개, `guard_test` 33개 중 33개).
 - S244-3: 버전이 0.0.34이므로 release run이 저장소의 main을 v0.0.34로 낸다. S244의 owned session input, paste, read와 session.program을 담는다. tag와 push는 이 변경이 하지 않는다.
 - S244-2: sidecar가 owned session의 records 상태가 바뀔 때마다 owner에게 `session.program`(`idle`, `working`, `blocked`)을 보낸다. 상태는 program의 OSC 7501 record와 notification에서 tab session과 같은 방식으로 얻고, 그런 상태를 주지 않는 session은 이벤트를 보내지 않는다. 검증: `the_program_state_of_an_owned_session_goes_to_its_owner`의 Red(5초 안에 이벤트 없음), 이어서 Green(26개 중 26개 통과).
