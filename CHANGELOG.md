@@ -1,5 +1,6 @@
 # Changelog
 
+- S270: The version is 0.0.48, so the release run publishes S269.
 - S269: The line guard reads a control character of inserted text as its key (core F1135).
 - S268: The version is 0.0.47, so the release run publishes S267.
 - S267: The `sessions` answer lists the `params` of each owned session, and an open whose params name no program or shell starts the login shell.

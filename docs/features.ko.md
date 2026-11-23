@@ -1,5 +1,6 @@
 # 기능
 
+- [o] S270 — P0: S269를 0.0.48로 release한다. package는 0.0.48를 선언하고 release run이 S269를 게시한다.
 - [o] S269 — P0, core F1135: line guard는 삽입 텍스트의 control character를 해당 키로 읽는다. 입력: untracked 줄에 `terminal.input {bytes: "\u0003"}`, DEL이나 ESC sequence를 담은 삽입 텍스트. 동작: untracked 줄에서 삽입된 ETX를 무시해, 셸은 줄을 버렸지만 이후 제출이 모두 거부됐고, DEL과 ESC sequence는 텍스트로 따라갔다. 기대: ETX와 NAK는 줄을 버리고 다시 추적하며, DEL과 BS는 한 글자를 지우고, 다른 control character는 줄을 untracked로 만든다. Red: `an_inserted_ctrl_c_or_ctrl_u_discards_an_untracked_line`, `an_inserted_delete_removes_the_character_before_the_cursor`, `an_inserted_escape_sequence_makes_the_line_untracked`가 실패했다. Green: guard test 36개가 통과한다.
 - [o] S268 — P0: S267을 0.0.47로 릴리즈한다. package는 0.0.47을 선언하고, release run은 S267을 담은 tag v0.0.46 이후의 commit을 게시한다.
 - [o] S267 — P0, core F1131을 위해: `sessions` 응답은 각 owned session의 `params`를 나열하며, open은 그것을 그대로 저장한다. Input: `{"program":"/bin/cat","role":"manager-lead"}`로 연 owned session과 `null`로 연 session. Behavior: 항목에 `params`가 없었고, `null`이나 `program`과 `shell`이 모두 없는 params로 연 open은 spec이 login shell을 시작한다고 하는데도 `open requires a shell`로 거부됐다. Expected: 각 항목이 저장된 `params`를 나열하고, 그런 open은 login shell을 시작한다. Red: `sessions_lists_the_params_of_each_open_owned_session`이 실패했다. Green: `owned_sessions_test`의 51개 test가 통과한다.
