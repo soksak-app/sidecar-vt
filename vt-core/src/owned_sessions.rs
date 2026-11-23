@@ -115,6 +115,8 @@ struct Entry {
     creation: String,
     /// The plugin whose surface opened the session, from the open, which the `sessions` answer names.
     plugin: String,
+    /// The `params` of the open, stored unchanged: an object, or `null` when the open sent `null`.
+    params: Value,
     pty: String,
     /// The last size that the owner or the attached view set, which the grid of a new attachment uses.
     size: Size,
@@ -141,8 +143,8 @@ pub struct OwnedSessions {
 }
 
 impl OwnedSessions {
-    /// The open sessions as the entries of the `sessions` answer, `{session, surface, root, creation, size, plugin, program}`, ordered by
-    /// session (core docs/spec/persistent-services.md#owned-sessions). A session whose shell or program ended is not listed.
+    /// The open sessions as the entries of the `sessions` answer, `{session, surface, root, creation, size, plugin, program, params}`,
+    /// ordered by session (core docs/spec/persistent-services.md#owned-sessions). A session whose shell or program ended is not listed.
     pub(crate) async fn list(&mut self, log: &Events) -> Vec<Value> {
         let mut listed = Vec::new();
         for (session, entry) in &mut self.entries {
@@ -163,6 +165,7 @@ impl OwnedSessions {
                     // default: the state is one value that each holder replaces whole, so a panic of another holder
                     // leaves it consistent.
                     .unwrap_or_else(|error| error.into_inner()),
+                "params": entry.params,
             }));
         }
         listed.sort_by(|a, b| a["session"].as_str().cmp(&b["session"].as_str()));
@@ -341,9 +344,18 @@ async fn open(
         .ok_or_else(|| "open session requires a non-empty root".to_string())?
         .to_string();
     let size = parse_size(body.get("size"))?;
-    // default: an absent params member is {} and starts the login shell, as the spec states.
+    // default: an absent params member is {} and a null params is {} too; both start the login shell, as the spec states. The
+    // stored params keep the value that the open sent (null stays null), and only the launch takes the default shell.
     let params = body.get("params").cloned().unwrap_or_else(|| json!({}));
-    let request = launch_request(owner, &params)?;
+    let mut launch = if params.is_null() {
+        json!({})
+    } else {
+        params.clone()
+    };
+    if launch.is_object() && launch.get("program").is_none() && launch.get("shell").is_none() {
+        launch["shell"] = json!("login");
+    }
+    let request = launch_request(owner, &launch)?;
     let shared = Arc::clone(sessions);
     let mut table = sessions.lock().await;
     if let Some(session) = table
@@ -401,6 +413,7 @@ async fn open(
             root,
             creation: creation.clone(),
             plugin,
+            params,
             pty,
             size,
             port: Some(port),

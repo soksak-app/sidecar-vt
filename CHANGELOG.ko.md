@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S267: `sessions` 응답은 각 owned session의 `params`를 나열하고, program이나 shell을 지정하지 않은 open은 login shell을 시작한다.
 - S266: 버전이 0.0.46이므로 release run이 tag v0.0.45 뒤의 커밋을 v0.0.46으로 내며, S264, S265를 담는다.
 - S265: 바로 보내는 mouse 결과가 앞선 input의 대기 중인 write를 기다리므로 mouse 결과가 input 순서를 지킨다. 검증: move 결과가 down 결과보다 먼저인 S265 test의 Red 후 `serve_contract.rs` mouse test Green.
 - S264-1: 한 번도 보지 못한 surface의 drawing 상태가 답 없이 그 surface를 만든다는 것을 명세에 적었고, `a_drawing_state_of_a_surface_that_was_never_seen_creates_the_surface_without_a_reply`가 그 동작을 고정한다. 검증: 테스트 통과.

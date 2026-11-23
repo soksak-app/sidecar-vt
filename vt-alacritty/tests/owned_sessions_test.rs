@@ -989,9 +989,43 @@ async fn sessions_lists_each_open_owned_session_with_its_owner_root_creation_siz
     assert_eq!(
         service.sessions("r1").await,
         json!({"operation": "sessions", "request": "r1", "ok": true, "sessions": [
-            {"session": kept, "surface": "o1", "root": "/project", "creation": "k1", "size": size(400.0, 200.0, 2.0), "plugin": "terminal", "program": null}
+            {"session": kept, "surface": "o1", "root": "/project", "creation": "k1", "size": size(400.0, 200.0, 2.0), "plugin": "terminal", "program": null, "params": {"program": "/bin/cat"}}
         ]})
     );
+}
+
+#[tokio::test]
+async fn sessions_lists_the_params_of_each_open_owned_session() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let object = json!({"program": "/bin/cat", "role": "manager-lead"});
+    service
+        .send(
+            "o1",
+            "c1",
+            open_body("k1", size(400.0, 200.0, 2.0), object.clone()),
+        )
+        .await;
+    let with_object = service.reply("c1").await["session"].clone();
+    service
+        .send(
+            "o1",
+            "c2",
+            open_body("k2", size(400.0, 200.0, 2.0), Value::Null),
+        )
+        .await;
+    let with_null = service.reply("c2").await["session"].clone();
+    let answer = service.sessions("r1").await;
+    let listed = answer["sessions"]
+        .as_array()
+        .expect("the sessions answer lists an array");
+    let params_of = |session: &Value| {
+        listed
+            .iter()
+            .find(|entry| entry["session"] == *session)
+            .map(|entry| entry["params"].clone())
+    };
+    assert_eq!(params_of(&with_object), Some(object));
+    assert_eq!(params_of(&with_null), Some(Value::Null));
 }
 
 #[tokio::test]
