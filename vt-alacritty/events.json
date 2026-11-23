@@ -53,6 +53,36 @@
       },
       "description": "A client authenticated; owner is the name it gave."
     },
+    "sidecar.vt.drawing.ended": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "debug",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "number"
+          },
+          "drawing": {
+            "type": "boolean"
+          },
+          "hidden": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "generation",
+          "drawing",
+          "hidden"
+        ]
+      },
+      "description": "A drawing state of the image name reached a surface whose actor ended after its session; the drawing state of a tab is a fact of the tab that the host sets after the session ended, so the sidecar changes nothing and answers nothing. The line names the surface."
+    },
     "sidecar.vt.input_routed": {
       "layer": "sidecar",
       "class": "input",

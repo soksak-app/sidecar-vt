@@ -255,6 +255,45 @@ impl RequestSender {
         self.request.enter(RequestStage::ActorQueue);
         Ok(())
     }
+
+    /// Hands a drawing state to the surface actor. The drawing state of a surface is a fact of its tab, which the host sets
+    /// after the session of the tab ended as well (core docs/spec/native-surfaces.md), so a drawing state for an actor that
+    /// ended after its session changes nothing and answers nothing; the sidecar records it as `sidecar.vt.drawing.ended`.
+    /// Every other request of an ended actor is refused as `send` refuses it. `Err` means only that the output of the
+    /// connection has closed.
+    async fn send_drawing(
+        &self,
+        name: String,
+        generation: u64,
+        drawing: bool,
+        hidden: bool,
+    ) -> Result<(), ()> {
+        self.request.enter(RequestStage::SurfaceQueue);
+        let fields =
+            json!({"name": name, "generation": generation, "drawing": drawing, "hidden": hidden});
+        let command = SurfaceCommand::Drawing {
+            name,
+            generation,
+            drawing,
+            hidden,
+        };
+        if self
+            .tx
+            .send(Dispatch::of(command, &self.request))
+            .await
+            .is_err()
+        {
+            self.request.log.emit_for(
+                Level::Debug,
+                "sidecar.vt.drawing.ended",
+                Subject::surface(&self.surface),
+                &fields,
+            );
+            return Ok(());
+        }
+        self.request.enter(RequestStage::ActorQueue);
+        Ok(())
+    }
 }
 
 /// Watches the requests of one connection in the order they arrived, and records each request that
@@ -7592,19 +7631,23 @@ where
                             image.get("drawing").and_then(|v| v.as_object())
                         {
                             let parsed = (|| {
-                                Some(SurfaceCommand::Drawing {
-                                    name: drawing.get("name")?.as_str()?.to_string(),
-                                    generation: drawing.get("generation")?.as_u64()?,
-                                    drawing: drawing.get("drawing")?.as_bool()?,
+                                Some((
+                                    drawing.get("name")?.as_str()?.to_string(),
+                                    drawing.get("generation")?.as_u64()?,
+                                    drawing.get("drawing")?.as_bool()?,
                                     // A host that does not report hiding sends no such field.
-                                    hidden: match drawing.get("hidden") {
+                                    match drawing.get("hidden") {
                                         Some(value) => value.as_bool()?,
                                         None => false,
                                     },
-                                })
+                                ))
                             })();
-                            if let Some(command) = parsed {
-                                if tx.send(command).await.is_err() {
+                            if let Some((name, generation, drawing, hidden)) = parsed {
+                                if tx
+                                    .send_drawing(name, generation, drawing, hidden)
+                                    .await
+                                    .is_err()
+                                {
                                     break;
                                 }
                             } else {

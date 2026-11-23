@@ -1505,3 +1505,131 @@ async fn the_attach_and_each_input_of_a_surface_record_the_session_that_they_rea
         json!({"kind": "input", "owned": session})
     );
 }
+
+// The host sets the drawing state of a tab after the session of the tab ended, because the layout and the drawing of a tab are
+// facts of the tab (S264): a drawing state for a surface whose actor ended with its session is answered with no reply and no
+// effect, and recorded as sidecar.vt.drawing.ended, while every other request of that surface is still refused.
+#[tokio::test]
+async fn a_drawing_state_of_a_surface_whose_session_exited_is_accepted_without_an_error() {
+    let folder = tempfile::tempdir().expect("create the folder of the events");
+    let policy = folder.path().join("log-policy.json");
+    std::fs::write(
+        &policy,
+        json!({"schema": 1, "classes": {"lifecycle": "debug", "input": "error", "call": "error", "io": "error", "frame": "error"}}).to_string(),
+    )
+    .expect("write the policy file");
+    let logs = folder.path().join("logs");
+    let (mut service, events) =
+        start_service_with(PersistentRegistry::new(), "o1", &logs, Some(policy));
+    let session = service
+        .open_session("o1", "c1", shell_params("read line; exit 0"))
+        .await;
+    service
+        .send(
+            "o1",
+            "c2",
+            open_body("k-other", size(400.0, 200.0, 2.0), cat_params()),
+        )
+        .await;
+    let other = service.reply("c2").await["session"]
+        .as_str()
+        .expect("the second open names a session")
+        .to_string();
+    assert_eq!(service.attach("t1", "a1", &session).await["attached"], true);
+    assert_eq!(service.attach("t2", "a2", &other).await["attached"], true);
+    // The program of the session reads one line and exits, so the session ends by itself.
+    service
+        .send(
+            "o1",
+            "i1",
+            json!({"operation": "input", "session": session, "text": "x\r"}),
+        )
+        .await;
+    service
+        .line_where("the session.ended event", |value| {
+            value["body"]["event"] == "session.ended"
+                && value["body"]["session"] == session.as_str()
+        })
+        .await;
+    // The actor of t1 ends after the session; a read of t1 is refused once it has ended.
+    let mut ended = false;
+    for attempt in 0..50 {
+        service
+            .send(
+                "t1",
+                &format!("r{attempt}"),
+                json!({"operation": "screen.read"}),
+            )
+            .await;
+        let line = service
+            .line_where("an answer of t1", |value| {
+                value["surface"] == "t1"
+                    && (value["body"]["event"] == "screen" || value["body"].get("error").is_some())
+            })
+            .await;
+        if line["body"].get("error").is_some() {
+            ended = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ended, "the actor of t1 did not end after its session");
+    let drawing = json!({"surface": "t1", "root": "/project", "body": {"image": {"drawing": {"name": "view", "generation": 3, "drawing": false, "hidden": true}}}});
+    service
+        .to_serve
+        .write_all(format!("{drawing}\n").as_bytes())
+        .await
+        .expect("the drawing line was not written");
+    // The requests of the connection are handled in order, so every answer of the drawing precedes the reply of a later repeated attach.
+    service
+        .send("t2", "s1", json!({"operation": "attach", "session": other}))
+        .await;
+    let mut answers = Vec::new();
+    loop {
+        let line = tokio::time::timeout(REPLY_TIMEOUT, service.lines.next_line())
+            .await
+            .expect("no reply of s1")
+            .expect("read a line of the service")
+            .expect("the service closed its output");
+        let value: Value = serde_json::from_str(&line).expect("the service writes JSON lines");
+        if value["cids"]
+            .as_array()
+            .is_some_and(|cids| cids.iter().any(|cid| cid == "s1"))
+        {
+            break;
+        }
+        if value["surface"] == "t1" {
+            answers.push(value);
+        }
+    }
+    assert_eq!(
+        answers,
+        Vec::<Value>::new(),
+        "the drawing state of the ended surface was answered"
+    );
+    events.flush(REPLY_TIMEOUT).expect("flush the events");
+    let recorded: Vec<Value> = std::fs::read_dir(&logs)
+        .expect("read the folder of the events")
+        .flatten()
+        .filter(|file| {
+            file.path()
+                .extension()
+                .is_some_and(|extension| extension == "jsonl")
+        })
+        .flat_map(|file| {
+            std::fs::read_to_string(file.path())
+                .expect("read a file of the events")
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).expect("an event line is JSON"))
+                .collect::<Vec<_>>()
+        })
+        .filter(|event| event["event"] == "sidecar.vt.drawing.ended")
+        .map(|event| json!({"surface": event["surface"], "fields": event["fields"]}))
+        .collect();
+    assert_eq!(
+        recorded,
+        vec![
+            json!({"surface": "t1", "fields": {"name": "view", "generation": 3, "drawing": false, "hidden": true}})
+        ]
+    );
+}
