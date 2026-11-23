@@ -1,5 +1,6 @@
 # 기능
 
+- [o] S268 — P0: S267을 0.0.47로 릴리즈한다. package는 0.0.47을 선언하고, release run은 S267을 담은 tag v0.0.46 이후의 commit을 게시한다.
 - [o] S267 — P0, core F1131을 위해: `sessions` 응답은 각 owned session의 `params`를 나열하며, open은 그것을 그대로 저장한다. Input: `{"program":"/bin/cat","role":"manager-lead"}`로 연 owned session과 `null`로 연 session. Behavior: 항목에 `params`가 없었고, `null`이나 `program`과 `shell`이 모두 없는 params로 연 open은 spec이 login shell을 시작한다고 하는데도 `open requires a shell`로 거부됐다. Expected: 각 항목이 저장된 `params`를 나열하고, 그런 open은 login shell을 시작한다. Red: `sessions_lists_the_params_of_each_open_owned_session`이 실패했다. Green: `owned_sessions_test`의 51개 test가 통과한다.
 - [o] S264-1 — S264의 후속: 연결이 한 번도 보지 못한 surface의 drawing 상태는 그 surface를 만들고 답하지 않는다. 숨겨진 탭은 configure보다 먼저 새 actor에 drawing 상태를 보내기 때문이다(`docs/spec/vt-core.md#owned-session-operations`). 테스트 `a_drawing_state_of_a_surface_that_was_never_seen_creates_the_surface_without_a_reply`가 지금의 동작을 고정한다. 새 surface에 아무 답도 가지 않고 다른 surface는 계속 attach된다. 테스트는 통과하며, 동작이 이미 있었으므로 Red는 없다.
 - [o] S266 — P0: S265를 0.0.46으로 출시한다. package가 0.0.46을 선언하고, release run이 S264, S265를 담은 tag v0.0.45 뒤의 커밋을 낸다.
