@@ -244,6 +244,61 @@ fn refuses_a_line_recalled_by_history_as_untracked() {
     ));
 }
 
+// Inserted text reaches the shell as the same bytes as a key, so an inserted control character changes the line as the key does:
+// ETX (Ctrl-C) and NAK (Ctrl-U) discard it, DEL and BS delete one character, and another control character, such as the ESC of a
+// cursor movement, makes the line untracked.
+#[test]
+fn an_inserted_ctrl_c_or_ctrl_u_discards_an_untracked_line() {
+    for discard in ["\u{3}", "\u{15}"] {
+        let mut line = LineGuard::default();
+        line.observe("s1", &[LineInput::Other]);
+        let verdicts = line.observe(
+            "s1",
+            &[
+                LineInput::Text(discard),
+                LineInput::Text("ls"),
+                LineInput::Enter,
+            ],
+        );
+        assert_eq!(verdicts, vec![Verdict::Allow], "discard {discard:?}");
+    }
+}
+
+#[test]
+fn an_inserted_delete_removes_the_character_before_the_cursor() {
+    for delete in ["\u{7f}", "\u{8}"] {
+        let mut line = LineGuard::default();
+        let text = format!("rm -rf ~x{delete}");
+        let verdicts = line.observe("s1", &[LineInput::Text(&text), LineInput::Enter]);
+        assert!(
+            matches!(
+                verdicts.last(),
+                Some(Verdict::Refuse {
+                    rule: "rm.recursive-force.root-or-home",
+                    ..
+                })
+            ),
+            "delete {delete:?}"
+        );
+    }
+}
+
+#[test]
+fn an_inserted_escape_sequence_makes_the_line_untracked() {
+    let mut line = LineGuard::default();
+    let verdicts = line.observe(
+        "s1",
+        &[LineInput::Text("ls ~\u{1b}[Drm -rf "), LineInput::Enter],
+    );
+    assert!(matches!(
+        verdicts.last(),
+        Some(Verdict::Refuse {
+            rule: "untracked",
+            ..
+        })
+    ));
+}
+
 #[test]
 fn judges_each_line_of_a_pasted_text_in_order() {
     let mut line = LineGuard::default();

@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S269: line guard는 삽입 텍스트의 control character를 해당 키로 읽는다(core F1135).
 - S268: 버전은 0.0.47이며, release run이 S267을 게시한다.
 - S267: `sessions` 응답은 각 owned session의 `params`를 나열하고, program이나 shell을 지정하지 않은 open은 login shell을 시작한다.
 - S266: 버전이 0.0.46이므로 release run이 tag v0.0.45 뒤의 커밋을 v0.0.46으로 내며, S264, S265를 담는다.

@@ -717,13 +717,31 @@ impl LineGuard {
         for input in inputs {
             match *input {
                 LineInput::Text(text) => {
+                    // Inserted text reaches the shell as the same bytes as a key, so a control character changes the line as its
+                    // key does: ETX and NAK discard the line, DEL and BS delete a character, and another one, such as the ESC of a
+                    // cursor movement, makes the line untracked.
                     for c in text.chars() {
-                        if c == '\n' || c == '\r' {
-                            if !submit(&mut line, &mut tracked, &mut verdicts) {
-                                return verdicts;
+                        match c {
+                            '\n' | '\r' => {
+                                if !submit(&mut line, &mut tracked, &mut verdicts) {
+                                    return verdicts;
+                                }
                             }
-                        } else if tracked {
-                            line.push(c);
+                            '\u{3}' | '\u{15}' => {
+                                line.clear();
+                                tracked = true;
+                            }
+                            '\u{7f}' | '\u{8}' => {
+                                if tracked {
+                                    line.pop();
+                                }
+                            }
+                            c if c.is_control() => tracked = false,
+                            c => {
+                                if tracked {
+                                    line.push(c);
+                                }
+                            }
                         }
                     }
                 }
