@@ -1,5 +1,6 @@
 # Changelog
 
+- S266: The version is 0.0.46, so the release run publishes the commits after the tag v0.0.45 as v0.0.46, which hold S264 and S265.
 - S265: An immediate mouse result waits for the queued writes of earlier inputs, so the mouse results keep the order of their inputs. Verification: Red of the S265 test with the move result before the down result, then Green of the mouse tests of `serve_contract.rs`.
 - S264-1: The specification states that a drawing state for a surface that was never seen creates the surface with no reply, and `a_drawing_state_of_a_surface_that_was_never_seen_creates_the_surface_without_a_reply` keeps that behavior. Verification: the test passes.
 - S264: A drawing state of a surface whose actor ended with its session changes nothing, is answered with no reply and is recorded as `sidecar.vt.drawing.ended`, because the host sets the drawing state of a tab after its session ended; every other request of the ended surface is still refused. Verification: Red of `a_drawing_state_of_a_surface_whose_session_exited_is_accepted_without_an_error` (the refusal reached the surface), then Green (49 of 49).
