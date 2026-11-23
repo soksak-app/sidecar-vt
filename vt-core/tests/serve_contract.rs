@@ -512,7 +512,11 @@ struct FakeSessionPort {
     deliver_echo_before_write_completes: bool,
     write_error: Option<String>,
     echo_input: std::sync::atomic::AtomicBool,
+    held_writes: Option<HeldWrites>,
 }
+
+/// The senders of the writes whose completion the test releases, in the order of the writes.
+type HeldWrites = Arc<Mutex<Vec<tokio::sync::oneshot::Sender<Result<(), String>>>>>;
 
 impl FakeSessionPort {
     fn new(session_id: String, calls: Arc<Mutex<Calls>>) -> Self {
@@ -526,11 +530,19 @@ impl FakeSessionPort {
             deliver_echo_before_write_completes: false,
             write_error: None,
             echo_input: std::sync::atomic::AtomicBool::new(false),
+            held_writes: None,
         }
     }
 
     fn with_ready_echo(mut self) -> Self {
         self.deliver_echo_before_write_completes = true;
+        self
+    }
+
+    /// Each write completes only when the test sends its result through the sender that it finds
+    /// in `held`.
+    fn with_held_writes(mut self, held: HeldWrites) -> Self {
+        self.held_writes = Some(held);
         self
     }
 
@@ -637,6 +649,11 @@ impl SessionPort for FakeSessionPort {
                 writes_completed,
                 echoes_enqueued,
             });
+        }
+        if let Some(held) = &self.held_writes {
+            let (sender, completion) = tokio::sync::oneshot::channel();
+            held.lock().unwrap().push(sender);
+            return Ok(completion);
         }
         let mut calls = self.calls.lock().unwrap();
         calls.writes_completed += 1;
@@ -6983,6 +7000,79 @@ async fn mouse_results_echo_the_requested_input_identity() {
         })
         .collect::<Vec<_>>();
     assert_eq!(ids, vec!["gesture-0", "gesture-1", "gesture-2"]);
+}
+
+// The down is reported, so its result waits for the write that carries it. The move stays in the
+// same cell, so it is not reported and its result is ready at once; the results must still come out
+// in the order of the inputs.
+#[tokio::test]
+async fn a_mouse_result_waits_for_the_write_of_the_earlier_input() {
+    let held: HeldWrites = Arc::new(Mutex::new(Vec::new()));
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(
+        FakeSessionPort::new("held-mouse".to_string(), calls.clone())
+            .with_held_writes(held.clone()),
+    );
+    let session_port_factory = Arc::new(move || port.clone() as Arc<dyn SessionPort>);
+    let engine_factory = Arc::new(|| {
+        Box::new(MockEngine::with_modes(Modes {
+            mouse_motion: true,
+            sgr_mouse: true,
+            ..Modes::default()
+        })) as Box<dyn Engine>
+    });
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve_with_events(
+        engine_factory,
+        serve_in,
+        serve_out,
+        session_port_factory,
+        events_test::TestEvents::new().handle(),
+    ));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+    let open = r#"{"surface":"s1","body":{"operation":"open","shell":"/bin/sh"}}"#;
+    let configure = r#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}"#;
+    to_serve
+        .write_all(
+            format!(
+                "{open}\n{configure}\n{}{}",
+                mouse("down", 0.5, true, false),
+                mouse("move", 0.5, false, false)
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    // A result that is not ready is awaited for a bound of 500 ms. After the bound the held write
+    // completes, so both results arrive, and the order of the results is what the test judges.
+    let mut phases = Vec::new();
+    let mut released = false;
+    while phases.len() < 2 {
+        match tokio::time::timeout(std::time::Duration::from_millis(500), lines.next_line()).await {
+            Ok(line) => {
+                let line = line.unwrap().expect("the sidecar closed its output");
+                let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+                if value["body"]["event"] == "mouse" {
+                    phases.push(value["body"]["phase"].as_str().unwrap().to_string());
+                }
+            }
+            Err(_) if !released => {
+                for sender in held.lock().unwrap().drain(..) {
+                    assert!(sender.send(Ok(())).is_ok(), "the held write is awaited");
+                }
+                released = true;
+            }
+            Err(_) => panic!("no mouse result arrived after the held write completed: {phases:?}"),
+        }
+    }
+    assert_eq!(
+        phases,
+        vec!["down", "move"],
+        "a mouse result must not overtake the result of an earlier input"
+    );
+    drop(to_serve);
+    task.abort();
 }
 
 #[tokio::test]
