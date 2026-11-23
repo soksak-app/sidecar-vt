@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S264-1: 한 번도 보지 못한 surface의 drawing 상태가 답 없이 그 surface를 만든다는 것을 명세에 적었고, `a_drawing_state_of_a_surface_that_was_never_seen_creates_the_surface_without_a_reply`가 그 동작을 고정한다. 검증: 테스트 통과.
 - S264: session과 함께 actor가 끝난 surface의 drawing 상태는 아무것도 바꾸지 않고, 답하지 않으며, `sidecar.vt.drawing.ended`로 기록된다. host는 session이 끝난 뒤에도 탭의 drawing 상태를 정하기 때문이다. 끝난 surface의 다른 모든 요청은 계속 거부된다. 검증: `a_drawing_state_of_a_surface_whose_session_exited_is_accepted_without_an_error`의 Red(거부가 surface에 닿음), 이어 Green(49개 중 49개).
 - S263: surface의 각 input과 paste가 surface, terminal session, cids, owned session과 함께 `sidecar.vt.input_routed`를 쓰고, owned session의 각 attach가 `sidecar.vt.surface_attached`를 쓰므로, view의 input이 들어간 session을 log에서 읽는다. Verification: `the_attach_and_each_input_of_a_surface_record_the_session_that_they_reach`의 Red(`the attach was not recorded`) 뒤 Green.
 - S261-2: S261-1의 image reattach 테스트의 각 wait가 screen read 200번 대신 sidecar의 그려진 frame에서 끝난다. CI machine에서는 shell이 그리기 전에 그 200번이 끝났다(`no row of the screen matched within 200 reads`). 검증: S261의 수정을 뺀 Red(`TIMEOUT [60.010s]`), 그 다음 Green(10번 중 10번, load에서 5번 중 5번).

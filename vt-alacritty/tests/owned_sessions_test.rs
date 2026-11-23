@@ -1633,3 +1633,50 @@ async fn a_drawing_state_of_a_surface_whose_session_exited_is_accepted_without_a
         ]
     );
 }
+
+// A surface is created by its first message, and a hidden tab sends its drawing state to a new actor before any configure
+// (S264-1): a drawing state for a surface that the connection has never seen creates the surface, is answered with no
+// reply, and leaves the other surfaces of the connection unchanged.
+#[tokio::test]
+async fn a_drawing_state_of_a_surface_that_was_never_seen_creates_the_surface_without_a_reply() {
+    let mut service = start_service(PersistentRegistry::new(), "o1");
+    let other = service.open_session("o1", "c1", cat_params()).await;
+    assert_eq!(service.attach("t2", "a1", &other).await["attached"], true);
+    let drawing = json!({"surface": "t9", "root": "/project", "body": {"image": {"drawing": {"name": "view", "generation": 1, "drawing": false, "hidden": true}}}});
+    service
+        .to_serve
+        .write_all(format!("{drawing}\n").as_bytes())
+        .await
+        .expect("the drawing line was not written");
+    // The requests of the connection are handled in order, so every answer of the drawing precedes the reply of a later repeated attach.
+    service
+        .send("t2", "a2", json!({"operation": "attach", "session": other}))
+        .await;
+    let mut answers = Vec::new();
+    let reply = loop {
+        let line = tokio::time::timeout(REPLY_TIMEOUT, service.lines.next_line())
+            .await
+            .expect("no reply of a2")
+            .expect("read a line of the service")
+            .expect("the service closed its output");
+        let value: Value = serde_json::from_str(&line).expect("the service writes JSON lines");
+        if value["cids"]
+            .as_array()
+            .is_some_and(|cids| cids.iter().any(|cid| cid == "a2"))
+        {
+            break value;
+        }
+        if value["surface"] == "t9" {
+            answers.push(value);
+        }
+    };
+    assert_eq!(
+        answers,
+        Vec::<Value>::new(),
+        "the drawing state of the new surface was answered"
+    );
+    assert_eq!(
+        reply["body"]["attached"], true,
+        "the other surface changed: {reply}"
+    );
+}
