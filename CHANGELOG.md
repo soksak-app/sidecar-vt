@@ -1,5 +1,6 @@
 # Changelog
 
+- S274: The version is 0.0.50, so the release run publishes S273.
 - S273: A drawing state of a lower generation and a configuration that is neither newer nor equal to the current one are answered `staleGeneration` and change nothing, so the page shows the refusal instead of a region that stays blank (core F1173).
 - S272: The version is 0.0.49, so the release run publishes S271.
 - S271: A reconnect releases the requested image of the earlier client with its image state and leaves the surface headless, so the background session of a hidden tab opens the surface after an application restart instead of being refused with `imageAttached` (core F1161).

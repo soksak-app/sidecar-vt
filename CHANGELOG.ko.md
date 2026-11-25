@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S274: version은 0.0.50이며 release run이 S273을 게시한다.
 - S273: 더 낮은 generation의 drawing state와, 현재 것보다 새롭지도 같지도 않은 configuration은 `staleGeneration`으로 답을 받고 아무것도 바꾸지 않는다. 그래서 page는 빈 채로 남는 region 대신 그 거부를 보여 준다(core F1173).
 - S272: version은 0.0.49이며 release run이 S271를 게시한다.
 - S271: Reconnect가 이전 client의 image 상태와 함께 요청 image도 놓고 surface를 headless로 남긴다. 그래서 application 재시작 뒤 숨은 tab의 background session이 `imageAttached`로 거부되지 않고 surface를 연다(core F1161).
