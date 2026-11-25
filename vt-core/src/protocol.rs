@@ -4950,6 +4950,14 @@ async fn surface_task(
                     SurfaceCommand::Drawing { name, generation, drawing: next, hidden } => {
                         let current = image_state.as_ref().map_or(drawing_generation, |state| state.generation.max(drawing_generation));
                         if generation < current {
+                            // A drawing state of a lower generation changes nothing and is answered,
+                            // so the host and the page see the refusal (core F1173).
+                            let response = json!({"surface": surface_id, "body": {
+                                "error": "staleGeneration", "currentGeneration": current, "name": name, "generation": generation,
+                                "reason": format!("image {name} drawing generation {generation} is lower than the current generation {current}")}});
+                            if output_tx.reply(response).await.is_err() {
+                                return;
+                            }
                             continue;
                         }
                         drawing_generation = generation;
@@ -4996,6 +5004,19 @@ async fn surface_task(
                         }
                         if let Some(state) = image_state.as_ref() {
                             if !newer_configuration(&configuration, state) {
+                                // The current configuration again is a repeat that changes nothing. An
+                                // earlier one changes nothing and is answered, so the host and the page see
+                                // the refusal (core F1173).
+                                if (configuration.generation, configuration.raster) != (state.generation, state.raster) {
+                                    let response = json!({"surface": surface_id, "body": {
+                                        "error": "staleGeneration", "currentGeneration": state.generation, "currentRaster": state.raster,
+                                        "name": configuration.name, "generation": configuration.generation, "raster": configuration.raster,
+                                        "reason": format!("image {} configuration generation {} raster {} is not newer than the current generation {} raster {}",
+                                            configuration.name, configuration.generation, configuration.raster, state.generation, state.raster)}});
+                                    if output_tx.reply(response).await.is_err() {
+                                        return;
+                                    }
+                                }
                                 continue;
                             }
                             if state.pending_draw {

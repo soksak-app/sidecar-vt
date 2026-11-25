@@ -38,6 +38,8 @@ Host는 terminal session을 닫지 않고 native image owner를 해제하기 위
 
 Acknowledgement는 render attachment, 대기 중 configuration, 요청 image가 분리되었음을 뜻한다. 이미 보낸 image transfer는 기존 수명 규칙에 따라 정확히 일치하는 `consumed` 또는 오류 응답을 받거나 연결이 끝날 때까지 불변으로 보존한다. Detach는 해당 lease를 해제하거나 옮기지 않는다. Image 응답은 name, generation, raster, sequence 전체가 일치해야 하므로 분리된 image의 늦은 응답이 새 generation의 pending draw를 해제할 수 없다. Acknowledgement 뒤 image 없는 `open`은 허용되며 기존 session을 재사용한다. 이후 image가 있는 `open`과 `configure`는 같은 session에 새 generation을 연결할 수 있다. `close`는 계속 PTY를 닫으며 image detach 용도로 쓰지 않는다. Message envelope는 protocol 1을 유지하고 저장 형식은 바꾸지 않는다.
 
+Surface의 generation보다 낮은 generation의 `drawing` state와, 현재 image 상태보다 generation과 raster가 낮은 `configure`는 아무것도 바꾸지 않고 `{"error":"staleGeneration","currentGeneration":…,"name":…,"generation":…,"reason":…}`로 답한다. `configure`에 대한 답은 `currentRaster`와 `raster`도 담는다. 현재와 같은 `configure`는 아무것도 바꾸지 않는 반복이며 답하지 않는다. Host는 window와 application 재시작을 넘어 증가하는 generation을 발급하므로([surface composition](https://github.com/soksak-app/core/blob/main/docs/spec/surface-composition.ko.md)) 이 답은 host의 결함을 보고하며, page는 이를 tab의 오류로 보여 준다.
+
 Rust interface `protocol::screen_line(surface, body)`는 소유한 정규화 screen body를 소비하고 compact JSON surface envelope를 반환한다. Raster 및 headless screen sender는 같은 encoder를 사용한다. Screen 검증과 정규화는 encoding 전에 수행하며 encoder는 모든 body 값을 보존하고 cell tree를 다시 만들지 않으며 직렬화 오류를 기존 screen-error 경로로 반환한다.
 
 

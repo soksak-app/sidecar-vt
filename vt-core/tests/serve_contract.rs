@@ -8284,9 +8284,10 @@ async fn a_region_that_draws_again_gets_one_raster_and_no_screen() {
 }
 
 #[tokio::test]
-async fn a_drawing_message_of_an_earlier_generation_is_ignored() {
-    // The region of generation 2 draws its configure, keeps drawing after a late state of
-    // generation 1, and draws the theme change after the host consumed the first raster.
+async fn a_drawing_message_of_an_earlier_generation_is_answered_with_stale_generation() {
+    // The region of generation 2 draws its configure. A drawing state of generation 1 changes nothing
+    // and is answered, so the host and the page see the refusal; the region keeps drawing and draws
+    // the theme change after the host consumed the first raster.
     let output = serve_requests(&format!(
         "{}\n{}\n{}\n{}\n",
         DRAWING_CONFIGURE.replace(r#""generation":1"#, r#""generation":2"#),
@@ -8300,6 +8301,58 @@ async fn a_drawing_message_of_an_earlier_generation_is_ignored() {
         2,
         "a drawing state of generation 1 stopped the region of generation 2: {output}"
     );
+    let refusal = stale_generation_answers(&output);
+    assert_eq!(
+        refusal,
+        vec![
+            serde_json::json!({"error": "staleGeneration", "currentGeneration": 2, "name": "view", "generation": 1,
+            "reason": "image view drawing generation 1 is lower than the current generation 2"})
+        ],
+        "{output}"
+    );
+}
+
+#[tokio::test]
+async fn a_configuration_that_is_not_newer_is_answered_unless_it_repeats_the_current_one() {
+    // Generation 2 raster 2 is configured. The same configuration again is a repeat with no answer;
+    // a lower raster of generation 2 and a configuration of generation 1 change nothing and are
+    // answered with the current generation and raster.
+    let current = DRAWING_CONFIGURE
+        .replace(r#""generation":1"#, r#""generation":2"#)
+        .replace(r#""raster":1"#, r#""raster":2"#);
+    let output = serve_requests(&format!(
+        "{}\n{}\n{}\n{}\n",
+        current,
+        current,
+        DRAWING_CONFIGURE.replace(r#""generation":1"#, r#""generation":2"#),
+        DRAWING_CONFIGURE,
+    ))
+    .await;
+    assert_eq!(
+        output.matches(r#""kind":"iosurface-global""#).count(),
+        1,
+        "a configuration that is not newer drew a raster: {output}"
+    );
+    assert_eq!(
+        stale_generation_answers(&output),
+        vec![
+            serde_json::json!({"error": "staleGeneration", "currentGeneration": 2, "currentRaster": 2, "name": "view", "generation": 2, "raster": 1,
+                "reason": "image view configuration generation 2 raster 1 is not newer than the current generation 2 raster 2"}),
+            serde_json::json!({"error": "staleGeneration", "currentGeneration": 2, "currentRaster": 2, "name": "view", "generation": 1, "raster": 1,
+                "reason": "image view configuration generation 1 raster 1 is not newer than the current generation 2 raster 2"}),
+        ],
+        "{output}"
+    );
+}
+
+/// The bodies of the `staleGeneration` answers in the output of `serve_requests`.
+fn stale_generation_answers(output: &str) -> Vec<serde_json::Value> {
+    output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|message| message["body"]["error"] == "staleGeneration")
+        .map(|message| message["body"].clone())
+        .collect()
 }
 
 #[tokio::test]
