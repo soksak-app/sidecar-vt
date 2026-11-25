@@ -7898,7 +7898,21 @@ impl<R: AsyncRead + Unpin> AsyncRead for PolledReader<R> {
 /// does not read it.
 const OUTPUT_BLOCKED: std::time::Duration = std::time::Duration::from_millis(10);
 
-async fn run_output_loop<W>(
+/// The end of the output of a connection whose client closed it while the service wrote a line: a lost connection, which
+/// the service records as the end of the session of that client and not as an error
+/// (core docs/spec/persistent-services.md#closing-and-recovery).
+#[derive(Debug)]
+pub(crate) struct OutputClosed(pub std::io::Error);
+
+impl std::fmt::Display for OutputClosed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "the client closed its connection: {}", self.0)
+    }
+}
+
+impl std::error::Error for OutputClosed {}
+
+pub(crate) async fn run_output_loop<W>(
     mut writer: W,
     mut output_rx: mpsc::Receiver<String>,
     log: Events,
@@ -7906,11 +7920,19 @@ async fn run_output_loop<W>(
 where
     W: AsyncWrite + Unpin,
 {
+    // A write that the closed connection of the client refuses ends the output with OutputClosed, and any other failure is an
+    // error of the output.
+    let closed = |error: std::io::Error| match error.kind() {
+        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset => {
+            std::io::Error::other(OutputClosed(error))
+        }
+        _ => error,
+    };
     while let Some(output) = output_rx.recv().await {
         let started = std::time::Instant::now();
-        writer.write_all(output.as_bytes()).await?;
-        writer.write_all(b"\n").await?;
-        writer.flush().await?;
+        writer.write_all(output.as_bytes()).await.map_err(closed)?;
+        writer.write_all(b"\n").await.map_err(closed)?;
+        writer.flush().await.map_err(closed)?;
         let elapsed = started.elapsed();
         // Output-blocked instrument: if the peer does not read, this write waits, and when the
         // output channel is full, the surface actions and the input loop stop.

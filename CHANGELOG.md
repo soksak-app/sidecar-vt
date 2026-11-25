@@ -1,5 +1,6 @@
 # Changelog
 
+- S275: A client that closes its connection while the service writes to it ends its session as a lost connection, recorded in `sidecar.vt.client_disconnect` with `end` and `cause`, and not as an error record (core F1175).
 - S274: The version is 0.0.50, so the release run publishes S273.
 - S273: A drawing state of a lower generation and a configuration that is neither newer nor equal to the current one are answered `staleGeneration` and change nothing, so the page shows the refusal instead of a region that stays blank (core F1173).
 - S272: The version is 0.0.49, so the release run publishes S271.

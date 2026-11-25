@@ -441,14 +441,7 @@ pub async fn serve_persistent(
                     },
                 )
                 .await;
-                let mut fields = serde_json::json!({"owner": disconnected, "ok": ended.is_ok()});
-                if let Err(error) = &ended {
-                    fields["error"] = serde_json::json!(error.to_string());
-                }
-                log.emit(Level::Info, "sidecar.vt.client_disconnect", &fields);
-                if let Err(error) = ended {
-                    log.record_error("client session", error);
-                }
+                record_client_session_end(&log, &disconnected, &ended);
             }
             }
                 });
@@ -485,6 +478,31 @@ pub fn record_end(log: &Events, served: &std::io::Result<()>) {
         fields["error"] = serde_json::json!(error.to_string());
     }
     log.emit(Level::Info, "sidecar.vt.session_end", &fields);
+}
+
+/// Records the end of the session of a client: the disconnect with its result, and an error record for a session that ended
+/// with an error.
+/// A client that closed its connection while the service wrote to it lost its connection: the disconnect states that end and
+/// no error record follows (core docs/spec/persistent-services.md#closing-and-recovery).
+pub(crate) fn record_client_session_end(log: &Events, owner: &str, ended: &std::io::Result<()>) {
+    let closed = ended.as_ref().err().and_then(|error| {
+        error
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<crate::protocol::OutputClosed>())
+    });
+    let mut fields = serde_json::json!({"owner": owner, "ok": ended.is_ok() || closed.is_some()});
+    match (ended, closed) {
+        (Err(_), Some(closed)) => {
+            fields["end"] = serde_json::json!("the client closed its connection");
+            fields["cause"] = serde_json::json!(closed.0.to_string());
+        }
+        (Err(error), None) => fields["error"] = serde_json::json!(error.to_string()),
+        (Ok(()), _) => {}
+    }
+    log.emit(Level::Info, "sidecar.vt.client_disconnect", &fields);
+    if let (Err(error), None) = (ended, closed) {
+        log.record_error("client session", error);
+    }
 }
 
 /// Records the end of a client task that did not return normally (a panic, or a task that was
@@ -544,6 +562,37 @@ mod tests {
         fs::write(directory.path().join("endpoint.json"), b"not-json").unwrap();
         let error = read_endpoint(directory.path()).unwrap_err();
         assert!(error.contains("decode"));
+    }
+
+    // A client that ends its connection while the service writes a line to it ends its session as a lost connection, not
+    // with an error (core docs/spec/persistent-services.md#closing-and-recovery).
+    #[tokio::test]
+    async fn a_client_that_closed_its_connection_during_a_write_ends_its_session_without_an_error()
+    {
+        let events = crate::events::test_support::TestEvents::new();
+        let (client, server) = UnixStream::pair().unwrap();
+        drop(client);
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        sender.send("line".to_string()).await.unwrap();
+        drop(sender);
+        let ended = crate::protocol::run_output_loop(server, receiver, events.handle()).await;
+        record_client_session_end(&events.handle(), "client", &ended);
+        let lines = events.lines();
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line["event"] == "sidecar.vt.record.error"),
+            "{lines:?}"
+        );
+        let disconnect = lines
+            .iter()
+            .find(|line| line["event"] == "sidecar.vt.client_disconnect")
+            .expect("the disconnect is recorded");
+        assert_eq!(disconnect["fields"]["ok"], true, "{disconnect}");
+        assert_eq!(
+            disconnect["fields"]["end"], "the client closed its connection",
+            "{disconnect}"
+        );
     }
 
     #[tokio::test]
