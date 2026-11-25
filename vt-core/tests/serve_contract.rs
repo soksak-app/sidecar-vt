@@ -8505,6 +8505,48 @@ async fn a_reconnect_reports_the_input_that_the_session_holds() {
     }
 }
 
+/// The image of a surface belongs to the client that asked for it. After the application starts again and
+/// its client reconnects to the persistent service, the background session of a hidden tab opens the
+/// surface without an image, and the service accepts that open instead of refusing it with
+/// `imageAttached` for the image of the client that ended (core F1161).
+#[tokio::test]
+async fn an_open_without_image_after_a_reconnect_is_accepted() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let port = Arc::new(FakeSessionPort::new("reconnected".to_string(), calls));
+    let port_for_factory = port.clone();
+    let factory = Arc::new(move || port_for_factory.clone() as Arc<dyn SessionPort>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(engine_factory, serve_in, serve_out, factory));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+    to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#).await.unwrap();
+    next_image(&mut lines).await;
+    // The surface answers the empty input after it handled the open, so its reply ends the replies of the open.
+    to_serve.write_all(br#"{"surface":"s1","body":{"operation":"reconnect"}}
+{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
+{"surface":"s1","body":{"operation":"input","actions":[],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+"#).await.unwrap();
+    let mut refusals = Vec::new();
+    loop {
+        let line = tokio::time::timeout(std::time::Duration::from_secs(10), lines.next_line())
+            .await
+            .expect("the reply of the empty input must arrive")
+            .unwrap()
+            .expect("the service must stay connected");
+        if line.contains("imageAttached") {
+            refusals.push(line.clone());
+        }
+        if line.contains(r#""ack":true"#) {
+            break;
+        }
+    }
+    assert_eq!(refusals, Vec::<String>::new());
+    task.abort();
+}
+
 #[tokio::test]
 async fn a_submitted_destructive_command_line_is_refused_and_writes_nothing() {
     let refused = r#"{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"rm -rf ~","replacementRange":null,"attributed":false},{"type":"key","key":"Enter","shift":false,"alt":false,"ctrl":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}

@@ -4726,13 +4726,17 @@ async fn surface_task(
                         screen_watched = false;
                         // The host sends the drawing state of the region again to a new connection.
                         hidden_image = None;
-                        // PTY and VT state belong to the persistent session, and the IOSurface
-                        // belongs to the application instance. Discarding only the previous native
-                        // image lets the client that reconnects provide a new Configure message.
+                        // PTY and VT state belong to the persistent session, and the IOSurface and
+                        // the image request belong to the application instance. Discarding the
+                        // previous native image and its request leaves the surface headless: the
+                        // client that reconnects provides a new open with its image and a new
+                        // Configure message, or, for a hidden tab, an open without image, which is
+                        // no second owner (core F1161).
                         if let Some(previous_state) = image_state.take() {
                             preserved_inline_images = release_image_state(&surface_id, previous_state);
                         }
                         pending_configuration = None;
+                        let image_released = requested_image.take().is_some();
                         // The reconnected client holds no screen of the surface, so its first screen is the full form.
                         screens.forget();
                         if !headless
@@ -4756,6 +4760,12 @@ async fn surface_task(
                                 }
                             }
                             }
+                        // The surface reports its session above as it was before the reconnect, and
+                        // draws nothing until the reconnected client asks for an image again.
+                        if image_released {
+                            headless = true;
+                            record_surface_mode(&log, &surface_id, headless, "reconnect");
+                        }
                     }
                     SurfaceCommand::ImageDetach { detach, request_check } => {
                         if let Some(read) = scroll_read.take() {
