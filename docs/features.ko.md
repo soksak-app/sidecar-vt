@@ -1,5 +1,6 @@
 # 기능
 
+- [o] S272 — P0: S271를 0.0.49로 release한다. package는 0.0.49를 선언하고 release run이 S271를 게시한다.
 - [o] S271 — P0: Reconnect 뒤 image 없는 open을 받아들인다(core F1161). Input: terminal tab이 image를 보이는 동안 application이 종료되고 다시 시작했으며, 이제 숨은 tab의 background session이 image 없이 surface를 열었다. Behavior: reconnect가 image 상태는 놓았지만 이전 client의 요청 image를 유지해서, service가 매 시작마다 `imageAttached: surface <tab> has the image view; an open without image is refused`로 open을 거부했다. Expected: reconnect가 요청 image도 놓고 surface를 headless로 남기며, reconnect의 session event는 유지된다. Red: `serve_contract.rs`의 `an_open_without_image_after_a_reconnect_is_accepted`가 거부를 받았다. Green: `serve_contract.rs`와 `serve_events.rs`의 다른 test와 함께 통과한다.
 - [o] S270 — P0: S269를 0.0.48로 release한다. package는 0.0.48를 선언하고 release run이 S269를 게시한다.
 - [o] S269 — P0, core F1135: line guard는 삽입 텍스트의 control character를 해당 키로 읽는다. 입력: untracked 줄에 `terminal.input {bytes: "\u0003"}`, DEL이나 ESC sequence를 담은 삽입 텍스트. 동작: untracked 줄에서 삽입된 ETX를 무시해, 셸은 줄을 버렸지만 이후 제출이 모두 거부됐고, DEL과 ESC sequence는 텍스트로 따라갔다. 기대: ETX와 NAK는 줄을 버리고 다시 추적하며, DEL과 BS는 한 글자를 지우고, 다른 control character는 줄을 untracked로 만든다. Red: `an_inserted_ctrl_c_or_ctrl_u_discards_an_untracked_line`, `an_inserted_delete_removes_the_character_before_the_cursor`, `an_inserted_escape_sequence_makes_the_line_untracked`가 실패했다. Green: guard test 36개가 통과한다.
