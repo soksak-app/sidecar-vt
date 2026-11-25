@@ -1,5 +1,6 @@
 # 변경 기록
 
+- S276: version은 0.0.51이며 release run이 S275를 게시한다.
 - S275: service가 쓰는 동안 연결을 닫은 client는 끊긴 연결로 session을 끝내며, 이는 오류 기록이 아니라 `end`와 `cause`를 가진 `sidecar.vt.client_disconnect`로 기록된다(core F1175).
 - S274: version은 0.0.50이며 release run이 S273을 게시한다.
 - S273: 더 낮은 generation의 drawing state와, 현재 것보다 새롭지도 같지도 않은 configuration은 `staleGeneration`으로 답을 받고 아무것도 바꾸지 않는다. 그래서 page는 빈 채로 남는 region 대신 그 거부를 보여 준다(core F1173).
